@@ -1,0 +1,9 @@
+# image สำหรับรันบน EC2: มีแค่ JRE + jar ที่ build มาจากเครื่องพัฒนาแล้ว (ไม่ compile บนเครื่อง RAM น้อย)
+# ใช้โดย deploy/deploy-docker.ps1 — สำหรับ dev ในเครื่องใช้ erp/Dockerfile (multi-stage) แทน
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+RUN useradd -r -u 1001 erp
+COPY app.jar /app/app.jar
+USER erp
+EXPOSE 8081
+ENTRYPOINT ["java", "-Duser.timezone=Asia/Bangkok", "-jar", "/app/app.jar"]

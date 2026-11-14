@@ -1,0 +1,11 @@
+# ไม่ส่งไฟล์ลับ/ไฟล์ build ในเครื่องเข้า Docker build context
+.env
+.env.*
+build/
+.gradle/
+bin/
+out/
+.idea/
+.vscode/
+*.iml
+HELP.md

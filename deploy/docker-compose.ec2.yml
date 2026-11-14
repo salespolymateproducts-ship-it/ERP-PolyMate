@@ -1,0 +1,21 @@
+# ERP API บน EC2 (UAT) — ใช้ PostgreSQL ที่ติดตั้งบนเครื่อง (127.0.0.1:5432) ไม่สร้าง DB ใน container
+# ตำแหน่งบนเครื่อง: /opt/polymate-erp/docker-compose.yml   ค่าลับ: /etc/polymate-erp.env (chmod 600)
+# image สร้างบนเครื่องนี้จาก jar (deploy/deploy-docker.ps1 → Dockerfile.runtime) ไม่ดึงจาก registry
+# อัปเดต/ย้อนรุ่น: ERP_IMAGE=polymate-erp-api:<git-sha> docker compose -f /opt/polymate-erp/docker-compose.yml up -d
+services:
+  api:
+    image: ${ERP_IMAGE:-polymate-erp-api:latest}
+    pull_policy: never
+    container_name: polymate-erp-api
+    restart: unless-stopped
+    # host network: ต่อ Postgres ที่ฟังแค่ localhost ได้ และ API ฟังเฉพาะ 127.0.0.1:8081 (กำหนดใน env file)
+    network_mode: host
+    env_file: /etc/polymate-erp.env
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xms128m -Xmx384m -XX:MaxMetaspaceSize=160m -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError"
+    mem_limit: 640m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
