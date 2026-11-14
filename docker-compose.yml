@@ -1,0 +1,29 @@
+# ใช้บน EC2 (หรือเครื่อง dev) : docker compose --env-file erp/.env up -d --build
+# รัน PostgreSQL + Spring Boot; ตั้ง DB_PASSWORD ใน erp/.env ก่อน
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: erp
+      POSTGRES_USER: erp_app
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?ตั้ง DB_PASSWORD ใน erp/.env}
+      TZ: Asia/Bangkok
+    volumes:
+      - erp_pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"   # ไม่เปิดสู่ภายนอก; ใช้ SSH tunnel ถ้าต้องต่อจากเครื่องอื่น
+  api:
+    build: ./erp
+    restart: unless-stopped
+    depends_on: [db]
+    environment:
+      DB_URL: jdbc:postgresql://db:5432/erp
+      DB_USERNAME: erp_app
+      DB_PASSWORD: ${DB_PASSWORD}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+    ports:
+      - "8080:8080"
+volumes:
+  erp_pgdata:

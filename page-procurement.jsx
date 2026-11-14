@@ -1,0 +1,546 @@
+/* global React, I, SUPPLIERS, PURCHASE_ORDERS, PO_STATUS, MATERIALS, WHT_RATES, ROLES, COMPANY, Store, useStore, PageHeader, Tabs, Drawer, baht, _fmt, whtAmount, runAction, notify, exportCSV, printDoc, ReasonModal */
+
+function PageProcurement() {
+  const [tab, setTab] = useState("PO");
+  const [openPO, setOpenPO] = useState(null);
+  const [openSup, setOpenSup] = useState(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  useStore();
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
+
+  const totalSpend = PURCHASE_ORDERS.reduce((s, p) => s + p.total, 0);
+  const pending = PURCHASE_ORDERS.filter((p) => p.status === "pending").length;
+  const received = PURCHASE_ORDERS.filter((p) => p.status === "received").length;
+
+  const role = Store.user() ? ROLES[Store.user().role] : null;
+  const canApprovePO = !!role && (role.approve === "*" || (role.canEdit || []).includes("procurement"));
+  const [cancelPO, setCancelPO] = useState(null);
+  const livePO = openPO ? PURCHASE_ORDERS.find((p) => p.id === openPO.id) || openPO : null;
+  const approvePO = (po) => runAction(() => Store.update("purchaseOrders", po.id, { status: "approved", approvedBy: Store.userName(), approvedAt: Store.now() }, "id", "อนุมัติใบสั่งซื้อ"), `อนุมัติ ${po.id} แล้ว`);
+  const mailPO = (po) => {
+    const sup = SUPPLIERS.find((s) => s.code === po.supplier || s.name === po.supplierName);
+    if (!sup || !sup.email) { notify("ไม่พบอีเมลของ Supplier ในทะเบียน", "error"); return; }
+    const body = [`เรียน ${sup.contact || sup.name}`, "", `ขอสั่งซื้อตามใบสั่งซื้อเลขที่ ${po.id} วันที่ ${po.date}`,
+      ...(po.lines || []).map((l, i) => `${i + 1}. ${l.name} จำนวน ${l.qty} ${l.unit} ราคา ${l.price}`),
+      "", `รวมทั้งสิ้น ${po.total} บาท`, `กำหนดรับของ ${po.expectedDate}`, "", COMPANY.nameTh].join("\n");
+    window.location.href = `mailto:${sup.email}?subject=${encodeURIComponent("ใบสั่งซื้อ " + po.id + " - " + COMPANY.name)}&body=${encodeURIComponent(body)}`;
+    Store.tx("mailPO", () => Store.log("SEND", "ใบสั่งซื้อ", po.id, "เปิดอีเมลส่งให้ " + sup.email));
+  };
+  const handleReceive = (po) => {
+    if (!po) return;
+    const r = runAction(() => Store.receivePO(po.id));
+    if (!r) return;
+    setOpenPO(null);
+    if (r.ok) showToast(r.received.length
+      ? `รับเข้า ${po.id} → เพิ่มสต๊อก ${r.received.length} รายการเรียบร้อย`
+      : `รับเข้า ${po.id} แล้ว (ไม่มีรายการเข้าคลัง)`);
+  };
+
+  return (
+    <>
+      <PageHeader
+        title="ฝ่ายจัดซื้อ"
+        subtitle="ใบสั่งซื้อ (PO) · ทะเบียน Supplier · รับเข้าวัตถุดิบ"
+        actions={
+          <>
+            <button className="btn btn-outline btn-sm" disabled={!PURCHASE_ORDERS.length} onClick={() => exportCSV(`ใบสั่งซื้อ-${Store.today()}.csv`, ["เลขที่", "วันที่", "Supplier", "รายการ", "ก่อน VAT", "VAT", "รวม", "กำหนดรับ", "สถานะ", "ผู้ออก"], PURCHASE_ORDERS.map((p) => [p.id, p.date, p.supplierName, p.items, p.subtotal, p.vat, p.total, p.expectedDate, (PO_STATUS[p.status] || {}).th, p.createdBy]))}><I.Download size={14}/> ส่งออก CSV</button>
+            <button className="btn btn-primary btn-sm" onClick={() => { setTab("PO"); setAddOpen(true); }}><I.Plus size={14}/> เปิด PO ใหม่</button>
+          </>
+        }
+      />
+
+      <div className="grid-4" style={{ marginBottom: 14 }}>
+        <Stat icon="FileText" tone="accent" label="PO ทั้งหมด" value={_fmt(PURCHASE_ORDERS.length)} unit="ใบ" foot="ทั้งหมด"/>
+        <Stat icon="Clock" tone="amber" label="รออนุมัติ" value={_fmt(pending)} unit="ใบ" foot="ต้องดำเนินการ"/>
+        <Stat icon="Check" tone="success" label="รับเข้าแล้ว" value={_fmt(received)} unit="ใบ" foot="ทั้งหมด"/>
+        <Stat icon="Wallet" tone="violet" label="ยอดจัดซื้อ" value={baht(totalSpend)} foot={`${SUPPLIERS.length} suppliers`}/>
+      </div>
+
+      <Tabs
+        items={[
+          { id: "PO", label: "ใบสั่งซื้อ (PO)", count: PURCHASE_ORDERS.length },
+          { id: "SUP", label: "Supplier", count: SUPPLIERS.length },
+          { id: "RECEIVE", label: "รับเข้าวัตถุดิบ" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+
+      {tab === "PO" && (
+        <div className="card">
+          <div style={{ overflow: "auto" }}>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>เลขที่ PO</th>
+                  <th>วันที่</th>
+                  <th>Supplier</th>
+                  <th>รายการ</th>
+                  <th>กำหนดรับ</th>
+                  <th className="num">หัก ณ ที่จ่าย</th>
+                  <th className="num">มูลค่า</th>
+                  <th>สถานะ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {PURCHASE_ORDERS.map((p) => {
+                  const meta = PO_STATUS[p.status];
+                  return (
+                    <tr key={p.id} style={{ cursor: "pointer" }} onClick={() => setOpenPO(p)}>
+                      <td className="mono"><b>{p.id}</b></td>
+                      <td className="num" style={{ fontSize: 12.5 }}>{p.date}</td>
+                      <td>
+                        <div style={{ fontSize: 13, fontWeight: 500 }}>{p.supplierName}</div>
+                        <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{p.supplier}</div>
+                      </td>
+                      <td style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+                        {p.lines.length === 1 ? p.lines[0].name : `${p.lines.length} รายการ`}
+                      </td>
+                      <td className="num" style={{ fontSize: 12.5 }}>{p.expectedDate}</td>
+                      <td className="num" style={{ color: p.whtRate ? "var(--amber)" : "var(--text-tertiary)" }}>{p.whtRate ? `(${_fmt(whtAmount(p.subtotal, p.whtRate))})` : "—"}</td>
+                      <td className="num" style={{ fontWeight: 600 }}>{baht(p.total)}</td>
+                      <td><span className={"badge badge-" + meta.color}><span className="b-dot"/>{meta.th}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === "SUP" && (
+        <div className="card">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>รหัส</th>
+                <th>ผู้ขาย</th>
+                <th>หมวด</th>
+                <th>ผู้ติดต่อ</th>
+                <th>เครดิต</th>
+                <th className="num">ยอดสั่งซื้อ YTD</th>
+                <th>คะแนน</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SUPPLIERS.map((s) => (
+                <tr key={s.id} style={{ cursor: "pointer" }} onClick={() => setOpenSup(s)}>
+                  <td className="mono"><b>{s.code}</b></td>
+                  <td>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>{s.name}</div>
+                    <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{s.taxId}</div>
+                  </td>
+                  <td><span className="badge badge-neutral">{s.category}</span></td>
+                  <td>
+                    <div style={{ fontSize: 12.5 }}>{s.contact}</div>
+                    <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{s.phone}</div>
+                  </td>
+                  <td>{s.credit} วัน</td>
+                  <td className="num" style={{ fontWeight: 500 }}>{baht(PURCHASE_ORDERS.filter((p) => p.status === "received" && (p.supplier === s.code || p.supplierName === s.name)).reduce((t, p) => t + p.total, 0))}</td>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span className="num" style={{ fontWeight: 600 }}>{s.rating}</span>
+                      <span style={{ color: "#F59E0B", fontSize: 14 }}>★</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab === "RECEIVE" && <ReceiveView onReceive={handleReceive}/>}
+
+      <Drawer open={!!livePO} onClose={() => setOpenPO(null)} title={livePO ? `ใบสั่งซื้อ · ${livePO.id}` : ""} width={720}
+        footer={livePO &&
+          <>
+            <button className="btn btn-outline btn-sm" onClick={() => printDoc(livePO.id)}><I.Printer size={13}/> พิมพ์ PO</button>
+            <button className="btn btn-outline btn-sm" onClick={() => mailPO(livePO)}><I.Mail size={13}/> อีเมลถึง Supplier</button>
+            {!["received", "cancelled"].includes(livePO.status) && <button className="btn btn-outline btn-sm" style={{ color: "var(--danger)" }} onClick={() => setCancelPO(livePO.id)}>ยกเลิก PO</button>}
+            <span className="spacer"/>
+            {livePO.status === "cancelled" ? <span className="badge badge-danger">ยกเลิกแล้ว</span>
+              : livePO.status === "received"
+              ? <span className="badge badge-success" style={{ padding: "6px 12px" }}><I.Check size={13}/> รับเข้าแล้ว</span>
+              : livePO.status !== "approved" ? <button className="btn btn-primary btn-sm" disabled={!canApprovePO} title={canApprovePO ? "" : "ไม่มีสิทธิ์อนุมัติ"} onClick={() => approvePO(livePO)}><I.Check size={13}/> อนุมัติใบสั่งซื้อ</button>
+              : <button className="btn btn-primary btn-sm" onClick={() => handleReceive(livePO)}><I.Upload size={13}/> ยืนยันรับเข้า + ตัดสต๊อก</button>}
+          </>
+        }
+      >
+        {livePO && <div className="print-area" style={{ background: "var(--bg-elevated)" }}><POPreview po={livePO}/></div>}
+      </Drawer>
+
+      {cancelPO && <ReasonModal title={"ยกเลิกใบสั่งซื้อ " + cancelPO} label="เหตุผลการยกเลิก" danger confirmLabel="ยกเลิก PO" onClose={() => setCancelPO(null)}
+        onConfirm={(r) => { if (runAction(() => Store.update("purchaseOrders", cancelPO, { status: "cancelled", cancel: { reason: r, by: Store.userName(), at: Store.now() } }, "id", "ยกเลิก: " + r), "ยกเลิกใบสั่งซื้อแล้ว")) setCancelPO(null); }}/>}
+
+      <Drawer open={!!openSup} onClose={() => setOpenSup(null)} title={openSup?.name} width={620}>
+        {openSup && <SupplierDetail s={openSup}/>}
+      </Drawer>
+
+      <Drawer open={addOpen} onClose={() => setAddOpen(false)} title="เปิดใบสั่งซื้อใหม่ (PO)" width={760}>
+        {addOpen && <AddPOForm
+          onCancel={() => setAddOpen(false)}
+          onSubmit={(rec) => { Store.add("purchaseOrders", rec, `${rec.supplierName} ${rec.total}`); setAddOpen(false); showToast(`สร้างใบสั่งซื้อ ${rec.id} เรียบร้อย`); }}
+        />}
+      </Drawer>
+
+      {toast && (
+        <div style={{
+          position: "fixed", bottom: 24, right: 24, zIndex: 100,
+          background: "var(--text-primary)", color: "white", padding: "12px 18px",
+          borderRadius: 10, boxShadow: "var(--shadow-lg)", fontSize: 13, fontWeight: 500,
+          display: "flex", alignItems: "center", gap: 10,
+        }}>
+          <I.Check size={16}/> {toast}
+        </div>
+      )}
+    </>
+  );
+}
+
+function AddPOForm({ onSubmit, onCancel }) {
+  const today = "2026-06-06";
+  const [supplier, setSupplier] = useState("");
+  const [date, setDate] = useState(today);
+  const [expectedDate, setExpectedDate] = useState("");
+  const [whtRate, setWhtRate] = useState(0);
+  const [status, setStatus] = useState("pending");
+  const [lines, setLines] = useState([{ item: "", name: "", qty: "", unit: "KG", price: "" }]);
+
+  const setLine = (i, k, v) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, [k]: v } : l));
+  const addLine = () => setLines((ls) => [...ls, { item: "", name: "", qty: "", unit: "KG", price: "" }]);
+  const delLine = (i) => setLines((ls) => ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls);
+  const pickMaterial = (i, val) => setLines((ls) => ls.map((l, idx) => {
+    if (idx !== i) return l;
+    if (val === "custom") return { ...l, item: "custom", name: "" };
+    if (!val) return { ...l, item: "", name: "" };
+    const m = MATERIALS.find((x) => x.id === val);
+    return m ? { ...l, item: val, name: m.name, unit: m.unit, price: String(m.cost) } : l;
+  }));
+
+  const computed = lines.map((l) => ({ ...l, amount: (parseFloat(l.qty) || 0) * (parseFloat(l.price) || 0) }));
+  const subtotal = computed.reduce((s, l) => s + l.amount, 0);
+  const vat = Math.round(subtotal * 0.07 * 100) / 100;
+  const total = subtotal + vat;
+  const wht = whtAmount(subtotal, whtRate);
+  const net = total - wht;
+
+  const sup = SUPPLIERS.find((s) => s.code === supplier);
+  const valid = supplier && computed.some((l) => l.name.trim() && l.amount > 0);
+
+  const nextPoId = () => Store.nextDocNo("PO").docNo;
+
+  const submit = (e) => {
+    e.preventDefault();
+    if (!valid) return;
+    const cleanLines = computed.filter((l) => l.name.trim() && l.amount > 0)
+      .map((l) => ({ item: l.item && l.item !== "custom" ? l.item : undefined, name: l.name.trim(), qty: parseFloat(l.qty) || 0, unit: l.unit, price: parseFloat(l.price) || 0, amount: l.amount }));
+    onSubmit({
+      id: nextPoId(), date,
+      supplier, supplierName: sup ? sup.name.replace(/ (Co\.|Public|PCL|Pte).*$/i, "").trim() : supplier,
+      items: cleanLines.length, subtotal, vat, whtRate: parseInt(whtRate, 10) || 0, total,
+      expectedDate: expectedDate || "—", status, createdBy: Store.userName(), lines: cleanLines,
+    });
+  };
+
+  return (
+    <form onSubmit={submit} style={{ padding: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label className="field-label">ผู้ขาย / Supplier *</label>
+          <select className="select" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
+            <option value="">— เลือก Supplier —</option>
+            {SUPPLIERS.map((s) => <option key={s.id} value={s.code}>{s.name} · {s.category}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="field-label">วันที่ออก PO</label>
+          <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)}/>
+        </div>
+        <div>
+          <label className="field-label">กำหนดรับสินค้า</label>
+          <input type="date" className="input" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)}/>
+        </div>
+      </div>
+
+      <label className="field-label">รายการสั่งซื้อ * <span style={{ fontWeight: 400, color: "var(--text-tertiary)" }}>· เลือกวัตถุดิบจากคลัง → รับเข้าแล้วตัดสต๊อกให้อัตโนมัติ</span></label>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", marginBottom: 10 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 78px 70px 90px 92px 30px", gap: 8, padding: "8px 10px", background: "var(--bg-subtle)", fontSize: 11, color: "var(--text-secondary)", fontWeight: 600 }}>
+          <div>วัตถุดิบ / รายการ</div><div style={{ textAlign: "right" }}>จำนวน</div><div>หน่วย</div><div style={{ textAlign: "right" }}>หน่วยละ</div><div style={{ textAlign: "right" }}>รวม</div><div></div>
+        </div>
+        {computed.map((l, i) => (
+          <div key={i} style={{ padding: "8px 10px", borderTop: "1px solid var(--border)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 78px 70px 90px 92px 30px", gap: 8, alignItems: "center" }}>
+              <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.item} onChange={(e) => pickMaterial(i, e.target.value)}>
+                <option value="">— เลือกวัตถุดิบ —</option>
+                {MATERIALS.map((m) => <option key={m.id} value={m.id}>{m.code} · {m.name}</option>)}
+                <option value="custom">อื่นๆ / บริการ (ไม่เข้าคลัง)</option>
+              </select>
+              <input type="number" min="0" step="0.01" className="input num" style={{ height: 34, textAlign: "right" }} placeholder="0" value={l.qty} onChange={(e) => setLine(i, "qty", e.target.value)}/>
+              <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.unit} onChange={(e) => setLine(i, "unit", e.target.value)}>
+                {["KG", "PCS", "งาน", "SET", "ROLL", "L"].map((u) => <option key={u} value={u}>{u}</option>)}
+              </select>
+              <input type="number" min="0" step="0.01" className="input num" style={{ height: 34, textAlign: "right" }} placeholder="0.00" value={l.price} onChange={(e) => setLine(i, "price", e.target.value)}/>
+              <div className="num" style={{ textAlign: "right", fontSize: 12.5, fontWeight: 500 }}>{_fmt(l.amount, 2)}</div>
+              <button type="button" className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => delLine(i)} title="ลบ"><I.X size={13}/></button>
+            </div>
+            {l.item === "custom" && (
+              <input className="input" style={{ height: 32, marginTop: 6 }} placeholder="ระบุชื่อรายการ / บริการ (เช่น ค่าซ่อมแม่พิมพ์)" value={l.name} onChange={(e) => setLine(i, "name", e.target.value)}/>
+            )}
+          </div>
+        ))}
+      </div>
+      <button type="button" className="btn btn-outline btn-sm" onClick={addLine} style={{ marginBottom: 16 }}><I.Plus size={13}/> เพิ่มรายการ</button>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
+        <div style={{ display: "grid", gap: 12 }}>
+          <div>
+            <label className="field-label">หัก ณ ที่จ่าย (ถ้ามี)</label>
+            <select className="select" value={whtRate} onChange={(e) => setWhtRate(e.target.value)}>
+              {Object.entries(WHT_RATES).map(([r, lbl]) => <option key={r} value={r}>{lbl}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="field-label">สถานะเอกสาร</label>
+            <select className="select" value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="draft">ร่าง</option>
+              <option value="pending">รออนุมัติ</option>
+            </select>
+          </div>
+        </div>
+        <div style={{ background: "var(--bg-subtle)", borderRadius: 10, padding: 14 }}>
+          <POTotalRow k="รวมเป็นเงิน" v={_fmt(subtotal, 2)}/>
+          <POTotalRow k="ภาษีมูลค่าเพิ่ม 7%" v={_fmt(vat, 2)}/>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "9px 0", marginTop: 4, borderTop: "1px solid var(--border)", fontWeight: 600 }}>
+            <span>รวมทั้งสิ้น</span><span className="num">{baht(total, 2)}</span>
+          </div>
+          {whtRate > 0 && (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12, color: "var(--amber)" }}>
+                <span>หัก ณ ที่จ่าย {whtRate}%</span><span className="num">({_fmt(wht, 2)})</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 0", fontWeight: 600, color: "var(--success)" }}>
+                <span>ยอดจ่ายสุทธิ</span><span className="num">{baht(net, 2)}</span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
+        <button type="button" className="btn btn-outline" onClick={onCancel}>ยกเลิก</button>
+        <button type="submit" className="btn btn-primary" disabled={!valid}><I.Check size={14}/> บันทึกใบ PO</button>
+      </div>
+    </form>
+  );
+}
+
+function POTotalRow({ k, v }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12.5 }}>
+      <span style={{ color: "var(--text-secondary)" }}>{k}</span><span className="num">{v}</span>
+    </div>
+  );
+}
+
+function ReceiveView({ onReceive }) {
+  const pending = PURCHASE_ORDERS.filter((p) => p.status === "approved");
+  return (
+    <div className="card">
+      <div className="card-head"><div className="card-title">รอรับเข้า ({pending.length} ใบ) <span style={{ fontWeight: 400, fontSize: 12, color: "var(--text-tertiary)" }}>เฉพาะใบสั่งซื้อที่อนุมัติแล้ว</span></div></div>
+      <table className="table">
+        <thead><tr><th>PO</th><th>Supplier</th><th>รายการ</th><th>วันที่นัด</th><th className="num">มูลค่า</th><th></th></tr></thead>
+        <tbody>
+          {pending.map((p) => (
+            <tr key={p.id}>
+              <td className="mono"><b>{p.id}</b></td>
+              <td>{p.supplierName}</td>
+              <td style={{ fontSize: 12.5 }}>{p.lines[0].name}{p.lines.length > 1 ? ` +${p.lines.length-1}` : ""}</td>
+              <td className="num">{p.expectedDate}</td>
+              <td className="num" style={{ fontWeight: 500 }}>{baht(p.total)}</td>
+              <td style={{ textAlign: "right" }}>
+                <button className="btn btn-outline btn-sm" onClick={() => onReceive(p)}><I.Upload size={13}/> รับเข้า + ตัดสต๊อก</button>
+              </td>
+            </tr>
+          ))}
+          {!pending.length && <tr><td colSpan={6} style={{ textAlign: "center", padding: 40, color: "var(--text-tertiary)" }}>ไม่มีรายการรอรับเข้า</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function POPreview({ po }) {
+  return (
+    <div style={{ padding: 20 }}>
+      <div style={{ background: "var(--bg-elevated)", padding: 24, border: "1px solid var(--border)", borderRadius: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, borderBottom: "2px solid var(--text-primary)", paddingBottom: 14 }}>
+          <img src="assets/polymate-logo.png" alt="PolyMate" style={{ width: 46, height: 46, objectFit: "contain" }}/>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>{window.COMPANY.nameTh}</div>
+            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{window.COMPANY.name}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em" }}>ใบสั่งซื้อ</div>
+            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>Purchase Order</div>
+            <div className="mono" style={{ marginTop: 6, fontWeight: 600 }}>{po.id}</div>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginTop: 16 }}>
+          <div>
+            <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>ผู้ขาย / Supplier</div>
+            <div style={{ fontWeight: 600 }}>{po.supplierName}</div>
+            <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginTop: 4 }}>รหัส {po.supplier}</div>
+          </div>
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "100px 1fr", rowGap: 5, fontSize: 12 }}>
+              <span style={{ color: "var(--text-secondary)" }}>วันที่ออก PO:</span><span>{po.date}</span>
+              <span style={{ color: "var(--text-secondary)" }}>นัดรับสินค้า:</span><span>{po.expectedDate}</span>
+              <span style={{ color: "var(--text-secondary)" }}>ผู้ออกเอกสาร:</span><span>{po.createdBy}</span>
+            </div>
+          </div>
+        </div>
+
+        <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 16, fontSize: 12 }}>
+          <thead>
+            <tr style={{ background: "var(--bg-subtle)" }}>
+              <th style={{ padding: "8px 10px", textAlign: "left", fontWeight: 600 }}>รายการ</th>
+              <th style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>จำนวน</th>
+              <th style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>หน่วยละ</th>
+              <th style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600 }}>รวม</th>
+            </tr>
+          </thead>
+          <tbody>
+            {po.lines.map((l, i) => (
+              <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                <td style={{ padding: 10 }}>{l.name}</td>
+                <td className="num" style={{ padding: 10, textAlign: "right" }}>{_fmt(l.qty)} {l.unit}</td>
+                <td className="num" style={{ padding: 10, textAlign: "right" }}>{_fmt(l.price, 2)}</td>
+                <td className="num" style={{ padding: 10, textAlign: "right", fontWeight: 500 }}>{_fmt(l.amount, 2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div style={{ display: "flex", marginTop: 14 }}>
+          <div className="spacer"/>
+          <div style={{ width: 260 }}>
+            <RowKV k="รวมเป็นเงิน" v={_fmt(po.subtotal, 2)}/>
+            <RowKV k="ภาษีมูลค่าเพิ่ม 7%" v={_fmt(po.vat, 2)}/>
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 8px", marginTop: 6, background: "var(--text-primary)", color: "var(--bg-elevated)", borderRadius: 6 }}>
+              <span style={{ fontWeight: 500 }}>{po.whtRate > 0 ? "รวมเงิน (รวม VAT)" : "รวมทั้งสิ้น"}</span>
+              <span className="num" style={{ fontWeight: 600 }}>{baht(po.total, 2)}</span>
+            </div>
+            {po.whtRate > 0 && (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "7px 8px", fontSize: 12, color: "var(--amber)" }}>
+                  <span>หัก ณ ที่จ่าย {po.whtRate}%</span>
+                  <span className="num">({_fmt(whtAmount(po.subtotal, po.whtRate), 2)})</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 8px", marginTop: 2, background: "var(--success-subtle)", border: "1px solid var(--success)", color: "var(--success)", borderRadius: 6 }}>
+                  <span style={{ fontWeight: 600 }}>ยอดจ่ายสุทธิ</span>
+                  <span className="num" style={{ fontWeight: 700 }}>{baht(po.total - whtAmount(po.subtotal, po.whtRate), 2)}</span>
+                </div>
+                <div style={{ fontSize: 10, color: "var(--text-tertiary)", marginTop: 6, lineHeight: 1.5 }}>
+                  * ออกหนังสือรับรองหักภาษี ณ ที่จ่าย (ภงด.53) ให้ Supplier
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RowKV({ k, v }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 8px", fontSize: 12 }}>
+      <span style={{ color: "var(--text-secondary)" }}>{k}</span>
+      <span className="num">{v}</span>
+    </div>
+  );
+}
+
+function SupplierDetail({ s }) {
+  const supPOs = PURCHASE_ORDERS.filter((p) => p.supplier === s.code);
+  return (
+    <div style={{ padding: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 14, padding: 14, background: "var(--bg-subtle)", borderRadius: 12, marginBottom: 16 }}>
+        <div style={{ width: 56, height: 56, borderRadius: 12, background: "var(--accent-subtle)", color: "var(--accent)", display: "grid", placeItems: "center", fontWeight: 700, fontFamily: "var(--font-sans)" }}>
+          {s.code.slice(0, 2)}
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 15 }}>{s.name}</div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{s.category} · {s.taxId}</div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#F59E0B" }}>★ {s.rating}</div>
+          <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>Supplier rating</div>
+        </div>
+      </div>
+
+      <div className="grid-2" style={{ marginBottom: 16 }}>
+        <KV k="ผู้ติดต่อ" v={s.contact}/>
+        <KV k="โทร" v={s.phone}/>
+        <KV k="อีเมล" v={s.email}/>
+        <KV k="เครดิตเทอม" v={s.credit + " วัน"}/>
+      </div>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 4 }}>ที่อยู่</div>
+        <div style={{ fontSize: 13 }}>{s.address}</div>
+      </div>
+
+      <div className="grid-3" style={{ marginBottom: 16 }}>
+        {(() => { const ps = PURCHASE_ORDERS.filter((p) => p.status !== "cancelled" && (p.supplier === s.code || p.supplierName === s.name)); const sum = ps.reduce((t, p) => t + p.total, 0); return (<>
+          <Mini k="ใบสั่งซื้อทั้งหมด" v={ps.length}/>
+          <Mini k="ยอดจัดซื้อ" v={baht(sum)}/>
+          <Mini k="เฉลี่ย/PO" v={baht(ps.length ? sum / ps.length : 0)}/>
+        </>); })()}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">ประวัติ PO</div></div>
+        <table className="table">
+          <thead><tr><th>เลขที่</th><th>วันที่</th><th className="num">มูลค่า</th><th>สถานะ</th></tr></thead>
+          <tbody>
+            {supPOs.map((p) => (
+              <tr key={p.id}>
+                <td className="mono"><b>{p.id}</b></td>
+                <td className="num" style={{ fontSize: 12 }}>{p.date}</td>
+                <td className="num" style={{ fontWeight: 500 }}>{baht(p.total)}</td>
+                <td><span className={"badge badge-" + PO_STATUS[p.status].color}>{PO_STATUS[p.status].th}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function KV({ k, v }) {
+  return <div><div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{k}</div><div style={{ fontSize: 13, fontWeight: 500, marginTop: 2 }}>{v}</div></div>;
+}
+function Mini({ k, v }) {
+  return <div style={{ background: "var(--bg-subtle)", borderRadius: 10, padding: 12 }}>
+    <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{k}</div>
+    <div className="num" style={{ fontSize: 16, fontWeight: 600, marginTop: 2 }}>{v}</div>
+  </div>;
+}
+function Stat({ icon, tone, label, value, unit, foot }) {
+  const Ico = I[icon] || I.Wallet;
+  const c = ({ accent: { c:"var(--accent)", b:"var(--accent-subtle)" }, amber: { c:"var(--amber)", b:"var(--amber-subtle)" }, success: { c:"var(--success)", b:"var(--success-subtle)" }, violet: { c:"var(--violet)", b:"var(--violet-subtle)" } })[tone];
+  return (
+    <div className="card" style={{ padding: 14 }}>
+      <div className="kpi-label"><span className="kpi-ico" style={{ background: c.b, color: c.c }}><Ico size={14}/></span>{label}</div>
+      <div className="kpi-value">{value}{unit && <span className="kpi-unit"> {unit}</span>}</div>
+      <div className="kpi-foot" style={{ marginTop: 6 }}>{foot}</div>
+    </div>
+  );
+}
+
+window.PageProcurement = PageProcurement;

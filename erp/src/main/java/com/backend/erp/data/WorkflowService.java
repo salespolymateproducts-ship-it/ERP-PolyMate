@@ -1,0 +1,260 @@
+package com.backend.erp.data;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import com.backend.erp.auth.AuthUser;
+import com.backend.erp.common.ApiException;
+import com.backend.erp.common.Json;
+
+/** ฟังก์ชันธุรกิจที่ Store เดิมทำฝั่ง client: receivePO / produceWO / adjustStock (all-or-nothing ด้วย DB transaction) */
+@Service
+public class WorkflowService {
+	private static final ZoneId BKK = ZoneId.of("Asia/Bangkok");
+	private final RecordRepository repo;
+	private final AuditService audit;
+	private final Json json;
+	private final JdbcTemplate jdbc;
+
+	public WorkflowService(RecordRepository repo, AuditService audit, Json json, JdbcTemplate jdbc) {
+		this.repo = repo;
+		this.audit = audit;
+		this.json = json;
+		this.jdbc = jdbc;
+	}
+
+	// ---------- helpers ----------
+	private static String nowStr() { return LocalDateTime.now(BKK).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")); }
+
+	private static void need(AuthUser u, String... roles) {
+		for (String r : roles) if (r.equals(u.role())) return;
+		throw ApiException.forbidden("บทบาท " + u.role() + " ไม่มีสิทธิ์ทำรายการนี้");
+	}
+
+	private Map<String, Object> lock(String coll, String id, String notFoundMsg) {
+		return json.map(repo.getForUpdate(coll, id).orElseThrow(() -> ApiException.unprocessable("NOT_FOUND", notFoundMsg)));
+	}
+
+	private void save(String coll, Map<String, Object> rec, AuthUser u) {
+		rec.remove("_version");
+		repo.update(coll, String.valueOf(rec.get("id")), json.str(rec), null, u.username());
+	}
+
+	private void logMove(AuthUser u, String type, String item, double qty, String unit, String ref, String note) {
+		Map<String, Object> mv = new LinkedHashMap<>();
+		mv.put("id", "MV-" + UUID.randomUUID().toString().substring(0, 12));
+		mv.put("date", nowStr().substring(0, 16));
+		mv.put("by", u.fullName());
+		mv.put("type", type);
+		mv.put("item", item);
+		mv.put("qty", qty);
+		mv.put("unit", unit);
+		mv.put("ref", ref);
+		mv.put("note", note);
+		repo.insert("stockMovements", String.valueOf(mv.get("id")), json.str(mv), u.username());
+	}
+
+	private static String norm(String s) { return s == null ? "" : s.toLowerCase().replaceAll("[^a-z0-9ก-๙]", ""); }
+
+	private Map<String, Object> matchMaterial(Map<String, Object> line) {
+		if (line.get("item") != null) {
+			return repo.getForUpdate("materials", String.valueOf(line.get("item"))).map(json::map).orElse(null);
+		}
+		String name = norm(Json.s(line.get("name")));
+		if (name.isEmpty()) return null;
+		List<Map<String, Object>> all = new ArrayList<>();
+		for (String s : repo.list("materials", null, 5000, 0)) all.add(json.map(s));
+		for (Map<String, Object> m : all) {
+			String c = norm(Json.s(m.get("code")));
+			if (c.length() >= 4 && name.contains(c)) return lock("materials", String.valueOf(m.get("id")), "ไม่พบวัตถุดิบ");
+		}
+		for (Map<String, Object> m : all) {
+			String nm = norm(Json.s(m.get("name")));
+			nm = nm.length() > 10 ? nm.substring(0, 10) : nm;
+			if (nm.length() >= 5 && name.contains(nm)) return lock("materials", String.valueOf(m.get("id")), "ไม่พบวัตถุดิบ");
+		}
+		return null;
+	}
+
+	// ---------- stock adjust ----------
+	@Transactional
+	public Map<String, Object> adjustStock(AuthUser u, String code, double delta, String ref, String note, boolean allowNegative) {
+		need(u, "admin", "procurement", "production", "accounting");
+		String coll = "finished";
+		List<String> found = jdbc.queryForList("select id from erp_records where collection='finished' and data->>'code' = ? for update", String.class, code);
+		if (found.isEmpty()) {
+			coll = "materials";
+			found = jdbc.queryForList("select id from erp_records where collection='materials' and data->>'code' = ? for update", String.class, code);
+		}
+		if (found.isEmpty()) throw ApiException.unprocessable("NOT_FOUND", "ไม่พบสินค้า/วัตถุดิบรหัส " + code);
+		Map<String, Object> rec = lock(coll, found.get(0), "ไม่พบรายการ");
+		double next = Json.r3(Json.num(rec.get("stock")) + delta);
+		if (next < 0 && !allowNegative) {
+			throw ApiException.unprocessable("INSUFFICIENT_STOCK", "สต๊อก " + code + " ไม่พอ (คงเหลือ " + rec.get("stock") + ", ต้องการ " + Math.abs(delta) + ")");
+		}
+		rec.put("stock", next);
+		save(coll, rec, u);
+		String unit = rec.get("unit") != null ? String.valueOf(rec.get("unit")) : "finished".equals(coll) ? "PCS" : "";
+		logMove(u, delta >= 0 ? "IN" : "OUT", code, Math.abs(delta), unit, ref, note);
+		audit.log(u, "ADJUST", "คลังสินค้า", code, (delta >= 0 ? "+" : "") + delta + (note == null ? "" : " · " + note));
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("code", code);
+		out.put("stock", next);
+		return out;
+	}
+
+	// ---------- receive PO ----------
+	@Transactional
+	public Map<String, Object> receivePO(AuthUser u, String poId) {
+		need(u, "admin", "procurement");
+		Map<String, Object> po = lock("purchaseOrders", poId, "ไม่พบใบสั่งซื้อ " + poId);
+		String st = Json.s(po.get("status"));
+		if ("received".equals(st)) throw ApiException.conflict("ALREADY_RECEIVED", poId + " รับของไปแล้ว");
+		if ("cancelled".equals(st)) throw ApiException.conflict("ALREADY_CANCELLED", poId + " ถูกยกเลิกแล้ว");
+		if (!"approved".equals(st)) throw ApiException.unprocessable("SOURCE_NOT_APPROVED", poId + " ต้องอนุมัติก่อนรับของเข้าคลัง");
+		List<Map<String, Object>> received = new ArrayList<>();
+		Object linesObj = po.get("lines");
+		List<?> lines = linesObj instanceof List<?> l ? l : List.of();
+		for (Object lo : lines) {
+			if (!(lo instanceof Map<?, ?> raw)) continue;
+			@SuppressWarnings("unchecked") Map<String, Object> line = (Map<String, Object>) raw;
+			double qty = Json.num(line.get("qty"));
+			Map<String, Object> m = qty > 0 ? matchMaterial(line) : null;
+			if (m == null) continue;
+			m.put("stock", Json.r3(Json.num(m.get("stock")) + qty));
+			save("materials", m, u);
+			logMove(u, "IN", Json.s(m.get("code")), qty, Json.s(m.get("unit")), poId, "รับเข้าจาก " + Json.s(po.get("supplierName")));
+			Map<String, Object> r = new LinkedHashMap<>();
+			r.put("code", m.get("code"));
+			r.put("qty", qty);
+			r.put("unit", m.get("unit"));
+			received.add(r);
+		}
+		po.put("status", "received");
+		po.put("receivedAt", nowStr());
+		po.put("receivedBy", u.fullName());
+		save("purchaseOrders", po, u);
+
+		String expId = "EXP-" + poId;
+		if (repo.get("expenses", expId).isEmpty()) {
+			Map<String, Object> exp = new LinkedHashMap<>();
+			exp.put("id", expId);
+			exp.put("date", LocalDate.now(BKK).toString());
+			exp.put("category", "วัตถุดิบ");
+			exp.put("vendor", po.get("supplierName"));
+			exp.put("desc", "รับของตาม " + poId + " (" + lines.size() + " รายการ)");
+			exp.put("amount", po.get("subtotal"));
+			exp.put("vat", po.get("vat"));
+			exp.put("whtRate", po.get("whtRate") == null ? 0 : po.get("whtRate"));
+			exp.put("status", "approved");
+			exp.put("ref", poId);
+			exp.put("due", LocalDate.now(BKK).plusDays(30).toString());
+			repo.insert("expenses", expId, json.str(exp), u.username());
+		}
+		audit.log(u, "RECEIVE", "ใบสั่งซื้อ", poId, "รับเข้าสต๊อก " + received.size() + " รายการ · ตั้งเจ้าหนี้ " + expId);
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("ok", true);
+		out.put("received", received);
+		out.put("expenseId", expId);
+		return out;
+	}
+
+	// ---------- produce WO ----------
+	@Transactional
+	public Map<String, Object> produceWO(AuthUser u, String woId, double produced, double ng) {
+		need(u, "admin", "production");
+		Map<String, Object> wo = lock("workOrders", woId, "ไม่พบใบสั่งผลิต " + woId);
+		if ("cancelled".equals(Json.s(wo.get("status")))) throw ApiException.conflict("ALREADY_CANCELLED", woId + " ถูกยกเลิกแล้ว");
+		if (!(produced > 0)) throw ApiException.badRequest("จำนวนผลิตต้องมากกว่า 0");
+		if (ng > produced) throw ApiException.badRequest("จำนวน NG มากกว่าจำนวนผลิต");
+		double good = produced - ng;
+		String productCode = Json.s(wo.get("productCode"));
+
+		Map<String, Object> bom = null;
+		for (String s : repo.list("boms", null, 5000, 0)) {
+			Map<String, Object> b = json.map(s);
+			if (productCode.equals(Json.s(b.get("productCode")))) { bom = b; break; }
+		}
+		List<Map<String, Object>> consumed = new ArrayList<>();
+		if (bom != null && bom.get("lines") instanceof List<?> bl) {
+			double waste = 1 + Json.num(bom.get("wasteRate")) / 100d;
+			for (Object lo : bl) {
+				if (!(lo instanceof Map<?, ?> l)) continue;
+				Object item = l.get("item");
+				if (item == null) continue;
+				java.util.Optional<String> ms = repo.getForUpdate("materials", String.valueOf(item));
+				if (ms.isEmpty()) continue;
+				Map<String, Object> m = json.map(ms.get());
+				double use = Json.r3(Json.num(l.get("qty")) * produced * waste);
+				m.put("stock", Json.r3(Json.num(m.get("stock")) - use));
+				save("materials", m, u);
+				logMove(u, "OUT", Json.s(m.get("code")), use, Json.s(m.get("unit")), woId, "ตัดสต๊อกผลิต " + Json.s(wo.get("product")));
+				Map<String, Object> c = new LinkedHashMap<>();
+				c.put("code", m.get("code"));
+				c.put("qty", use);
+				c.put("unit", m.get("unit"));
+				consumed.add(c);
+			}
+		}
+		List<String> fgIds = jdbc.queryForList("select id from erp_records where collection='finished' and data->>'code' = ? for update", String.class, productCode);
+		if (!fgIds.isEmpty() && good > 0) {
+			Map<String, Object> fg = lock("finished", fgIds.get(0), "ไม่พบสินค้า");
+			fg.put("stock", Json.num(fg.get("stock")) + good);
+			save("finished", fg, u);
+			logMove(u, "IN", Json.s(fg.get("code")), good, fg.get("unit") == null ? "PCS" : Json.s(fg.get("unit")), woId, "รับเข้าสินค้าสำเร็จรูปจากการผลิต");
+		}
+		if (wo.get("mold") != null) {
+			java.util.Optional<String> ms = repo.getForUpdate("molds", String.valueOf(wo.get("mold")));
+			if (ms.isPresent()) {
+				Map<String, Object> mold = json.map(ms.get());
+				double cav = Math.max(1, mold.get("cavities") != null ? Json.num(mold.get("cavities")) : Math.max(1, Json.num(wo.get("cavities"))));
+				mold.put("shots", (long) (Json.num(mold.get("shots")) + Math.ceil(produced / cav)));
+				save("molds", mold, u);
+			}
+		}
+		wo.put("produced", Json.num(wo.get("produced")) + produced);
+		wo.put("ng", Json.num(wo.get("ng")) + ng);
+		List<Object> logs = new ArrayList<>();
+		Map<String, Object> entry = new LinkedHashMap<>();
+		entry.put("at", nowStr());
+		entry.put("by", u.fullName());
+		entry.put("produced", produced);
+		entry.put("ng", ng);
+		logs.add(entry);
+		if (wo.get("logs") instanceof List<?> old) logs.addAll(old);
+		wo.put("logs", logs);
+		String st = Json.s(wo.get("status"));
+		if ("queued".equals(st) || "setup".equals(st)) wo.put("status", "running");
+		if (Json.num(wo.get("produced")) - Json.num(wo.get("ng")) >= Json.num(wo.get("quantity"))) wo.put("status", "done");
+		save("workOrders", wo, u);
+
+		if (wo.get("machine") != null) {
+			java.util.Optional<String> mcs = repo.getForUpdate("machines", String.valueOf(wo.get("machine")));
+			if (mcs.isPresent()) {
+				Map<String, Object> mc = json.map(mcs.get());
+				boolean done = "done".equals(Json.s(wo.get("status")));
+				mc.put("status", done ? "idle" : "running");
+				if (done) mc.remove("workOrder"); else mc.put("workOrder", woId);
+				save("machines", mc, u);
+			}
+		}
+		audit.log(u, "PRODUCE", "ใบสั่งผลิต", woId, "ผลิต " + (long) produced + " ชิ้น (NG " + (long) ng + ") · ตัดวัตถุดิบ " + consumed.size() + " รายการ");
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("ok", true);
+		out.put("consumed", consumed);
+		out.put("good", good);
+		out.put("hasBom", bom != null);
+		return out;
+	}
+}

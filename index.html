@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PolyMate ERP — ระบบจัดการโรงงานพลาสติก</title>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <meta name="description" content="PolyMate ERP — ระบบจัดการโรงงานพลาสติก" />
+  <link rel="icon" type="image/png" href="assets/polymate-logo.png" />
+
+  <link rel="stylesheet" href="styles.css" />
+
+  <template id="__bundler_thumbnail">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <rect width="200" height="200" fill="#0B1220"/>
+      <rect x="60" y="60" width="80" height="80" rx="16" fill="url(#g)"/>
+      <text x="100" y="118" text-anchor="middle" fill="white" font-family="system-ui" font-weight="700" font-size="48">P</text>
+      <defs>
+        <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0%" stop-color="#38BDF8"/>
+          <stop offset="60%" stop-color="#2D6CDF"/>
+          <stop offset="100%" stop-color="#7C3AED"/>
+        </linearGradient>
+      </defs>
+    </svg>
+  </template>
+
+  <style>
+    /* prevent flash before babel */
+    #root:empty::before {
+      content: "";
+      position: fixed; inset: 0;
+      background: var(--bg);
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"><div id="erp-boot" style="position:fixed;inset:0;display:grid;place-items:center;font-family:system-ui,sans-serif;color:#5B6478;background:#EEF2F6">กำลังโหลด PolyMate ERP…</div></div>
+  <noscript><div style="padding:24px;font-family:system-ui,sans-serif">PolyMate ERP ต้องเปิด JavaScript ในเบราว์เซอร์</div></noscript>
+
+  <!-- Boot guard: แจ้งเตือนเมื่อเปิดผ่าน file:// หรือโหลดไฟล์ไม่สำเร็จ (แทนหน้าจอว่าง) -->
+  <script>
+    (function () {
+      var errors = [];
+      function show(title, detail) {
+        var root = document.getElementById("root");
+        if (!root || window.__erpMounted) return;
+        root.innerHTML = "";
+        var box = document.createElement("div");
+        box.style.cssText = "max-width:640px;margin:10vh auto;padding:24px 28px;background:#fff;border:1px solid #F3C2C2;border-left:5px solid #DC2626;border-radius:12px;font-family:system-ui,sans-serif;color:#0F172A;line-height:1.6";
+        var h = document.createElement("div"); h.style.cssText = "font-weight:700;font-size:17px;margin-bottom:8px"; h.textContent = title;
+        var p = document.createElement("div"); p.style.cssText = "font-size:13.5px;white-space:pre-wrap"; p.textContent = detail;
+        var b = document.createElement("button"); b.textContent = "ลองโหลดใหม่"; b.style.cssText = "margin-top:14px;padding:7px 16px;border-radius:8px;border:1px solid #2D6CDF;background:#2D6CDF;color:#fff;cursor:pointer";
+        b.onclick = function () { location.reload(); };
+        box.appendChild(h); box.appendChild(p); box.appendChild(b); root.appendChild(box);
+      }
+      window.__erpBootError = show;
+      if (location.protocol === "file:") {
+        show("ต้องเปิดผ่าน Web Server", "ระบบโหลดไฟล์ .jsx ด้วย HTTP จึงเปิดโดยดับเบิลคลิกไฟล์ (file://) ไม่ได้\nทดสอบในเครื่อง: powershell -ExecutionPolicy Bypass -File serve.ps1 แล้วเปิด http://localhost:8765/\nใช้งานจริง: อัปโหลดทั้งโฟลเดอร์ขึ้น Web Hosting แล้วเปิด index.html");
+        window.__erpMounted = true; // หยุด watchdog
+        return;
+      }
+      // ระบบ Login ใช้ crypto.subtle (SHA-256) ซึ่งเบราว์เซอร์เปิดให้เฉพาะ HTTPS หรือ localhost
+      if (!window.isSecureContext || !(window.crypto && window.crypto.subtle)) {
+        show("ต้องเปิดผ่าน HTTPS", "เบราว์เซอร์ปิดการเข้ารหัสรหัสผ่าน (Web Crypto) บนการเชื่อมต่อ http:// ที่ไม่ใช่ localhost จึงเข้าสู่ระบบไม่ได้\nกรุณาเปิดผ่าน https:// (ติดตั้ง SSL Certificate บน Hosting)");
+        window.__erpMounted = true; window.__erpBlocked = true;
+        return;
+      }
+      // ไฟล์ CSS/JS/รูปที่โหลดไม่สำเร็จ (404 / เครือข่าย / CDN ล่ม)
+      window.addEventListener("error", function (e) {
+        var t = e.target;
+        if (t && t !== window && (t.src || t.href)) {
+          errors.push("โหลดไม่สำเร็จ: " + (t.src || t.href));
+          if (t.tagName === "SCRIPT") show("โหลดไฟล์ระบบไม่สำเร็จ", errors.join("\n") + "\n\nตรวจสอบการเชื่อมต่ออินเทอร์เน็ต (React/Babel โหลดจาก CDN) หรือว่าไฟล์ถูกอัปโหลดครบ");
+        } else if (e.message && !window.__erpMounted) {
+          errors.push(e.message);
+          if (/Could not load/i.test(e.message)) show("โหลดไฟล์ระบบไม่สำเร็จ", errors.join("\n") + "\n\nตรวจสอบว่าไฟล์ .jsx ถูกอัปโหลดครบและชื่อไฟล์ตรงกัน (Web Server บางตัวแยกตัวพิมพ์เล็ก-ใหญ่)");
+        }
+      }, true);
+      // ถ้าเกิน 25 วินาทียังไม่แสดงหน้าระบบ → แสดงสาเหตุที่พบ
+      setTimeout(function () {
+        if (!window.__erpMounted) show("ระบบเริ่มทำงานไม่สำเร็จ", (errors.length ? errors.join("\n") : "ไม่พบข้อผิดพลาดที่ระบุได้ — อาจโหลดช้าหรือไฟล์บางส่วนหายไป") + "\n\nเปิด Developer Console (F12) เพื่อดูรายละเอียด");
+      }, 25000);
+    })();
+  </script>
+
+
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <!-- Foundation -->
+  <script type="text/babel" data-presets="react" src="icons.jsx"></script>
+  <script type="text/babel" data-presets="react" src="data.jsx"></script>
+  <script type="text/babel" data-presets="react" src="data-shipping.jsx"></script>
+  <script type="text/babel" data-presets="react" src="data-extra.jsx"></script>
+  <script type="text/babel" data-presets="react" src="store.jsx"></script>
+  <script type="text/babel" data-presets="react" src="workflow.jsx"></script>
+  <script type="text/babel" data-presets="react" src="analytics.jsx"></script>
+  <script type="text/babel" data-presets="react" src="shell.jsx"></script>
+  <script type="text/babel" data-presets="react" src="ui-kit.jsx"></script>
+  <script type="text/babel" data-presets="react" src="tweaks-panel.jsx"></script>
+
+  <!-- Pages -->
+  <script type="text/babel" data-presets="react" src="page-login.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-dashboard.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-sales.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-customers.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-production.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-inventory.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-molds.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-shipping.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-procurement.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-qc.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-more.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-accounting.jsx"></script>
+  <script type="text/babel" data-presets="react" src="page-docs.jsx"></script>
+
+  <!-- App entry -->
+  <script type="text/babel" data-presets="react" src="app.jsx"></script>
+</body>
+</html>

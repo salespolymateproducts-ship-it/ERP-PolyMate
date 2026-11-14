@@ -1,0 +1,19 @@
+{
+  "name": "polymate-erp-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PolyMate ERP frontend dev server (serves the static React/Babel app and proxies /api to the Spring Boot backend)",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "backend": "node scripts/run-backend.mjs",
+    "backend:local": "node scripts/run-backend.mjs bootRunEmbedded",
+    "dev:all": "node scripts/dev-all.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "http-proxy-middleware": "^3.0.3"
+  }
+}
