@@ -4,6 +4,8 @@ function PageProcurement() {
   const [tab, setTab] = useState("PO");
   const [openPO, setOpenPO] = useState(null);
   const [openSup, setOpenSup] = useState(null);
+  const [supForm, setSupForm] = useState(null); // { mode: "add" | "edit", rec }
+  const [showInactiveSup, setShowInactiveSup] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [toast, setToast] = useState(null);
   useStore();
@@ -15,6 +17,18 @@ function PageProcurement() {
 
   const role = Store.user() ? ROLES[Store.user().role] : null;
   const canApprovePO = !!role && (role.approve === "*" || (role.canEdit || []).includes("procurement"));
+  // จัดการทะเบียน Supplier (เพิ่ม/แก้ไข/ปิดใช้งาน): Admin และฝ่ายจัดซื้อเท่านั้น (ตรงกับ backend)
+  const canManageSup = !!role && (role.canEdit === "*" || (role.canEdit || []).includes("procurement"));
+  const inactiveSupCount = SUPPLIERS.filter((s) => s.status === "inactive").length;
+  const visibleSuppliers = SUPPLIERS.filter((s) => showInactiveSup || s.status !== "inactive");
+  const liveSup = openSup ? SUPPLIERS.find((s) => s.id === openSup.id) || openSup : null;
+  // ไม่มีการลบ Supplier: ใช้ปิดใช้งาน/เปิดใช้งานเท่านั้น (PO เดิมยังแสดงข้อมูลเดิมครบ)
+  const toggleSupActive = (s) => {
+    const activate = s.status === "inactive";
+    if (!activate && !window.confirm(`ปิดใช้งาน ${s.code} · ${s.name} ?\n(PO เดิมยังแสดงข้อมูลตามปกติ แต่จะไม่แสดงให้เลือกใน PO ใหม่ — เปิดใช้งานกลับได้ภายหลัง)`)) return;
+    runAction(() => Store.update("suppliers", s.id, { status: activate ? "active" : "inactive" }, "id", activate ? "เปิดใช้งาน" : "ปิดใช้งาน"),
+      activate ? `เปิดใช้งาน ${s.code} แล้ว` : `ปิดใช้งาน ${s.code} แล้ว`);
+  };
   const [cancelPO, setCancelPO] = useState(null);
   const livePO = openPO ? PURCHASE_ORDERS.find((p) => p.id === openPO.id) || openPO : null;
   const approvePO = (po) => runAction(() => Store.update("purchaseOrders", po.id, { status: "approved", approvedBy: Store.userName(), approvedAt: Store.now() }, "id", "อนุมัติใบสั่งซื้อ"), `อนุมัติ ${po.id} แล้ว`);
@@ -112,6 +126,18 @@ function PageProcurement() {
 
       {tab === "SUP" && (
         <div className="card">
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
+            <label style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" checked={showInactiveSup} onChange={(e) => setShowInactiveSup(e.target.checked)}/> แสดงรายการที่ปิดใช้งาน ({inactiveSupCount})
+            </label>
+            <span className="spacer" style={{ flex: 1 }}/>
+            {canManageSup && <button className="btn btn-primary btn-sm" onClick={() => setSupForm({ mode: "add" })}><I.Plus size={14}/> เพิ่ม Supplier</button>}
+          </div>
+          {!visibleSuppliers.length && (
+            <div style={{ padding: 28, textAlign: "center", color: "var(--text-secondary)", fontSize: 13 }}>
+              ยังไม่มี Supplier ในทะเบียน{canManageSup ? " — กด \"เพิ่ม Supplier\" เพื่อเริ่มต้น" : " (ให้ Admin หรือฝ่ายจัดซื้อเพิ่ม)"}
+            </div>
+          )}
           <table className="table">
             <thead>
               <tr>
@@ -125,9 +151,9 @@ function PageProcurement() {
               </tr>
             </thead>
             <tbody>
-              {SUPPLIERS.map((s) => (
-                <tr key={s.id} style={{ cursor: "pointer" }} onClick={() => setOpenSup(s)}>
-                  <td className="mono"><b>{s.code}</b></td>
+              {visibleSuppliers.map((s) => (
+                <tr key={s.id} style={{ cursor: "pointer", opacity: s.status === "inactive" ? 0.6 : 1 }} onClick={() => setOpenSup(s)}>
+                  <td className="mono"><b>{s.code}</b>{s.status === "inactive" && <> <span className="badge badge-neutral">ปิดใช้งาน</span></>}</td>
                   <td>
                     <div style={{ fontSize: 13, fontWeight: 500 }}>{s.name}</div>
                     <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{s.taxId}</div>
@@ -141,8 +167,8 @@ function PageProcurement() {
                   <td className="num" style={{ fontWeight: 500 }}>{baht(PURCHASE_ORDERS.filter((p) => p.status === "received" && (p.supplier === s.code || p.supplierName === s.name)).reduce((t, p) => t + p.total, 0))}</td>
                   <td>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span className="num" style={{ fontWeight: 600 }}>{s.rating}</span>
-                      <span style={{ color: "#F59E0B", fontSize: 14 }}>★</span>
+                      <span className="num" style={{ fontWeight: 600 }}>{s.rating || "—"}</span>
+                      {!!s.rating && <span style={{ color: "#F59E0B", fontSize: 14 }}>★</span>}
                     </div>
                   </td>
                 </tr>
@@ -175,8 +201,21 @@ function PageProcurement() {
       {cancelPO && <ReasonModal title={"ยกเลิกใบสั่งซื้อ " + cancelPO} label="เหตุผลการยกเลิก" danger confirmLabel="ยกเลิก PO" onClose={() => setCancelPO(null)}
         onConfirm={(r) => { if (runAction(() => Store.update("purchaseOrders", cancelPO, { status: "cancelled", cancel: { reason: r, by: Store.userName(), at: Store.now() } }, "id", "ยกเลิก: " + r), "ยกเลิกใบสั่งซื้อแล้ว")) setCancelPO(null); }}/>}
 
-      <Drawer open={!!openSup} onClose={() => setOpenSup(null)} title={openSup?.name} width={620}>
-        {openSup && <SupplierDetail s={openSup}/>}
+      <Drawer open={!!liveSup} onClose={() => setOpenSup(null)} title={liveSup?.name} width={620}
+        footer={liveSup && canManageSup &&
+          <>
+            <button className="btn btn-outline btn-sm" onClick={() => { const s = liveSup; setOpenSup(null); setSupForm({ mode: "edit", rec: s }); }}>แก้ไข</button>
+            <button className="btn btn-outline btn-sm" onClick={() => toggleSupActive(liveSup)}>{liveSup.status === "inactive" ? "เปิดใช้งาน" : "ปิดใช้งาน"}</button>
+          </>
+        }
+      >
+        {liveSup && <SupplierDetail s={liveSup}/>}
+      </Drawer>
+
+      <Drawer open={!!supForm} onClose={() => setSupForm(null)} title={supForm && supForm.mode === "edit" ? "แก้ไข Supplier " + supForm.rec.code : "เพิ่ม Supplier"} width={620}>
+        {supForm && <SupplierForm key={supForm.mode + (supForm.rec ? supForm.rec.id : "")} mode={supForm.mode} rec={supForm.rec}
+          onCancel={() => setSupForm(null)}
+          onDone={(msg) => { setSupForm(null); setTab("SUP"); showToast(msg); }}/>}
       </Drawer>
 
       <Drawer open={addOpen} onClose={() => setAddOpen(false)} title="เปิดใบสั่งซื้อใหม่ (PO)" width={760}>
@@ -252,7 +291,7 @@ function AddPOForm({ onSubmit, onCancel }) {
           <label className="field-label">ผู้ขาย / Supplier *</label>
           <select className="select" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
             <option value="">— เลือก Supplier —</option>
-            {SUPPLIERS.map((s) => <option key={s.id} value={s.code}>{s.name} · {s.category}</option>)}
+            {SUPPLIERS.filter((s) => s.status !== "inactive").map((s) => <option key={s.id} value={s.code}>{s.name} · {s.category}</option>)}
           </select>
         </div>
         <div>
@@ -478,8 +517,9 @@ function SupplierDetail({ s }) {
           <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{s.category} · {s.taxId}</div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#F59E0B" }}>★ {s.rating}</div>
-          <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>Supplier rating</div>
+          {s.status === "inactive" && <div><span className="badge badge-neutral">ปิดใช้งาน</span></div>}
+          {!!s.rating && <><div style={{ fontSize: 18, fontWeight: 700, color: "#F59E0B" }}>★ {s.rating}</div>
+          <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>Supplier rating</div></>}
         </div>
       </div>
 
@@ -519,6 +559,135 @@ function SupplierDetail({ s }) {
         </table>
       </div>
     </div>
+  );
+}
+
+/* รหัส/เลขภาษีเทียบแบบไม่สนตัวพิมพ์เล็ก/ใหญ่และช่องว่าง (ตรงกับกติกาฝั่ง backend) */
+const supKey = (v) => String(v == null ? "" : v).replace(/\s+/g, "").toUpperCase();
+const SUP_CATEGORIES = ["เม็ดพลาสติก", "สีผสม", "แม่พิมพ์ / ซ่อม", "บรรจุภัณฑ์", "บริการเครื่องจักร", "เหล็ก", "อื่น ๆ"];
+
+function SupplierForm({ mode, rec, onCancel, onDone }) {
+  const editing = mode === "edit";
+  // PO ที่อ้างอิงรหัสนี้แล้ว → ล็อกรหัส (backend ล็อกด้วยเช่นกัน)
+  const poRefs = editing ? PURCHASE_ORDERS.filter((p) => supKey(p.supplier) === supKey(rec.code)).length : 0;
+  const locked = editing && poRefs > 0;
+  const [form, setForm] = useState(editing ? {
+    code: rec.code || "", name: rec.name || "", taxId: rec.taxId === "—" ? "" : (rec.taxId || ""), contact: rec.contact || "", phone: rec.phone || "",
+    email: rec.email || "", category: rec.category || SUP_CATEGORIES[0], credit: String(rec.credit == null ? 30 : rec.credit), address: rec.address || "",
+  } : { code: "", name: "", taxId: "", contact: "", phone: "", email: "", category: SUP_CATEGORIES[0], credit: "30", address: "" });
+  const [saving, setSaving] = useState(false);
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const code = form.code.trim().toUpperCase();
+  const credit = form.credit === "" ? 0 : Number(form.credit);
+  const codeChanged = editing && supKey(code) !== supKey(rec.code);
+  const codeConflictFor = (selfId) => {
+    const o = Store.state.suppliers.find((x) => x.id !== selfId && supKey(x.code) === supKey(code));
+    return o ? `รหัสนี้ซ้ำกับ Supplier ${o.code} · ${o.name}` : null;
+  };
+  const conflict = (!editing || codeChanged) && code ? codeConflictFor(editing ? rec.id : null) : null;
+  const taxKey = supKey(form.taxId);
+  const taxDup = taxKey.length > 0 ? Store.state.suppliers.find((x) => (!editing || x.id !== rec.id) && supKey(x.taxId) === taxKey) : null;
+  const errors = [];
+  if (!code) errors.push("กรุณาระบุรหัส Supplier");
+  else if (!/^[A-Z0-9][A-Z0-9._\-\/]*$/.test(code)) errors.push("รหัสใช้ได้เฉพาะ A-Z 0-9 . _ - / และห้ามมีช่องว่าง");
+  if (conflict) errors.push(conflict);
+  if (!form.name.trim()) errors.push("กรุณาระบุชื่อ Supplier");
+  if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) errors.push("รูปแบบอีเมลไม่ถูกต้อง");
+  if (!(Number.isInteger(credit) && credit >= 0)) errors.push("เครดิตต้องเป็นจำนวนวันเต็มที่ไม่ติดลบ");
+  const cats = SUP_CATEGORIES.includes(form.category) ? SUP_CATEGORIES : [form.category, ...SUP_CATEGORIES];
+  const showErr = errors.length > 0 && (form.code || form.name || form.email);
+
+  function submit(e) {
+    e.preventDefault();
+    if (saving || errors.length) return;
+    setSaving(true);
+    const ok = runAction(() => Store.tx(editing ? "editSupplier" : "createSupplier", () => {
+      const clean = {
+        name: form.name.trim(), taxId: form.taxId.trim() || "—", contact: form.contact.trim(), phone: form.phone.trim(),
+        email: form.email.trim(), category: form.category, credit, address: form.address.trim(),
+      };
+      if (!editing) {
+        const c = codeConflictFor(null); // ตรวจซ้ำอีกครั้งในธุรกรรม (ข้อมูลล่าสุด)
+        if (c) Store.fail(c);
+        const n = Store.state.suppliers.length + 1;
+        const s = { id: "SUP-" + String(n).padStart(3, "0") + "-" + Date.now().toString().slice(-4), code, ...clean, rating: 0, status: "active" };
+        Store.add("suppliers", s, `${code} · ${clean.name}`);
+        return s;
+      }
+      const s = Store.find("suppliers", rec.id);
+      if (!s) Store.fail("ไม่พบ Supplier");
+      const patch = { ...clean };
+      if (supKey(code) !== supKey(s.code)) {
+        const used = PURCHASE_ORDERS.filter((p) => supKey(p.supplier) === supKey(s.code)).length;
+        if (used > 0) Store.fail("รหัสนี้ถูกอ้างอิงในใบสั่งซื้อแล้ว ไม่สามารถเปลี่ยนได้");
+        const c = codeConflictFor(s.id);
+        if (c) Store.fail(c);
+        patch.code = code;
+      }
+      const diff = Object.keys(patch).filter((k) => JSON.stringify(s[k]) !== JSON.stringify(patch[k]))
+        .map((k) => `${k}: ${s[k] == null ? "—" : s[k]}→${patch[k]}`);
+      return Store.update("suppliers", s.id, patch, "id", diff.length ? "แก้ไข: " + diff.join(", ") : "ไม่มีการเปลี่ยนแปลง");
+    }), editing ? `แก้ไข ${code} แล้ว` : `เพิ่ม Supplier ${code} แล้ว`);
+    if (ok) onDone(editing ? `แก้ไข Supplier ${code} เรียบร้อย` : `เพิ่ม Supplier ${code} เรียบร้อย`);
+    else setSaving(false);
+  }
+
+  return (
+    <form onSubmit={submit} style={{ padding: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div>
+          <label className="field-label">รหัส Supplier *</label>
+          <input className="input" style={{ fontFamily: "var(--font-mono)" }} placeholder="เช่น HMC" value={form.code} disabled={locked}
+            onChange={(e) => set("code", e.target.value)}/>
+          {locked && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>ถูกอ้างอิงใน PO แล้ว ({poRefs} ใบ) — เปลี่ยนรหัสไม่ได้ (แก้ชื่อและข้อมูลติดต่อได้)</div>}
+        </div>
+        <div>
+          <label className="field-label">หมวดหมู่</label>
+          <select className="select" value={form.category} onChange={(e) => set("category", e.target.value)}>
+            {cats.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label className="field-label">ชื่อ Supplier *</label>
+          <input className="input" placeholder="เช่น บริษัท เอชเอ็มซี โพลิเมอร์ส จำกัด" value={form.name} onChange={(e) => set("name", e.target.value)}/>
+        </div>
+        <div>
+          <label className="field-label">เลขผู้เสียภาษี</label>
+          <input className="input" style={{ fontFamily: "var(--font-mono)" }} placeholder="13 หลัก" value={form.taxId} onChange={(e) => set("taxId", e.target.value)}/>
+          {taxDup && <div style={{ fontSize: 11.5, color: "#B45309", marginTop: 4 }}>⚠ เลขผู้เสียภาษีนี้ตรงกับ {taxDup.code} · {taxDup.name} (บันทึกได้ — อาจเป็นคนละสาขา)</div>}
+        </div>
+        <div>
+          <label className="field-label">เครดิต (วัน)</label>
+          <input type="number" min="0" step="1" className="input num" value={form.credit} onChange={(e) => set("credit", e.target.value)}/>
+        </div>
+        <div>
+          <label className="field-label">ผู้ติดต่อ</label>
+          <input className="input" value={form.contact} onChange={(e) => set("contact", e.target.value)}/>
+        </div>
+        <div>
+          <label className="field-label">เบอร์โทรศัพท์</label>
+          <input className="input" value={form.phone} onChange={(e) => set("phone", e.target.value)}/>
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label className="field-label">อีเมล</label>
+          <input className="input" placeholder="name@company.com" value={form.email} onChange={(e) => set("email", e.target.value)}/>
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label className="field-label">ที่อยู่</label>
+          <textarea className="input" rows={2} value={form.address} onChange={(e) => set("address", e.target.value)}/>
+        </div>
+      </div>
+      {showErr && (
+        <div style={{ marginTop: 14, padding: 10, borderRadius: 8, background: "var(--danger-subtle, #fdecea)", color: "var(--danger)", fontSize: 12.5 }}>
+          {errors.map((m, i) => <div key={i}>• {m}</div>)}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
+        <button type="button" className="btn btn-outline" onClick={onCancel}>ยกเลิก</button>
+        <button type="submit" className="btn btn-primary" disabled={saving || errors.length > 0}><I.Check size={14}/> {editing ? "บันทึกการแก้ไข" : "บันทึก Supplier"}</button>
+      </div>
+    </form>
   );
 }
 

@@ -26,6 +26,8 @@ public class RecordService {
 	private static final Set<String> MATERIAL_MASTER_ROLES = Set.of("admin", "procurement");
 	/** ล็อกต่อธุรกรรม กันสร้าง/แก้รหัสสินค้า-วัตถุดิบซ้ำพร้อมกัน */
 	private static final String STOCK_CODE_LOCK = "erp.stockcode";
+	/** ล็อกต่อธุรกรรม กันสร้าง/แก้รหัส Supplier ซ้ำพร้อมกัน */
+	private static final String SUPPLIER_CODE_LOCK = "erp.suppliercode";
 
 	private final RecordRepository repo;
 	private final AuditService audit;
@@ -124,6 +126,33 @@ public class RecordService {
 		}
 	}
 
+	private static boolean isSupplier(String coll) { return "suppliers".equals(coll); }
+
+	/** รหัส Supplier ต้องไม่ซ้ำกับ Supplier อื่น (ไม่สนตัวพิมพ์/ช่องว่าง) — เรียกภายในธุรกรรมเท่านั้น */
+	private void assertUniqueSupplierCode(String id, Map<String, Object> rec) {
+		String kc = normKey(rec.get("code"));
+		if (kc.isEmpty()) return;
+		jdbc.queryForObject("select pg_advisory_xact_lock(hashtext(?))::text", String.class, SUPPLIER_CODE_LOCK);
+		List<Map<String, Object>> rows = jdbc.queryForList(
+			"select id from erp_records where collection = 'suppliers' and id <> ? and upper(regexp_replace(coalesce(data->>'code', ''), '\\s', '', 'g')) = ?",
+			id, kc);
+		if (!rows.isEmpty()) {
+			throw ApiException.conflict("DUPLICATE_CODE", "รหัส Supplier " + String.valueOf(rec.get("code")).trim() + " ซ้ำกับ Supplier " + rows.get(0).get("id"));
+		}
+	}
+
+	/** รหัส Supplier ที่มี PO อ้างอิงแล้ว ห้ามเปลี่ยน */
+	private void assertSupplierCodeNotReferenced(Object oldCode) {
+		String k = normKey(oldCode);
+		if (k.isEmpty()) return;
+		Integer n = jdbc.queryForObject(
+			"select count(*)::int from erp_records where collection = 'purchaseOrders' and upper(regexp_replace(coalesce(data->>'supplier', ''), '\\s', '', 'g')) = ?",
+			Integer.class, k);
+		if (n != null && n > 0) {
+			throw ApiException.conflict("CODE_LOCKED", "รหัส Supplier ถูกอ้างอิงในใบสั่งซื้อแล้ว (" + n + " ใบ) ไม่สามารถเปลี่ยนรหัสได้");
+		}
+	}
+
 	@Transactional
 	public String create(AuthUser u, String coll, Map<String, Object> body) {
 		Collections.Def d = def(coll);
@@ -134,6 +163,7 @@ public class RecordService {
 		String id = idv == null || String.valueOf(idv).isBlank() ? UUID.randomUUID().toString().substring(0, 12) : String.valueOf(idv);
 		body.put("id", id);
 		if (isStockColl(coll)) assertUniqueStockCode(coll, id, body);
+		if (isSupplier(coll)) assertUniqueSupplierCode(id, body);
 		try {
 			repo.insert(coll, id, json.str(body), u.username());
 		} catch (DuplicateKeyException e) {
@@ -149,6 +179,21 @@ public class RecordService {
 		requireWrite(u, d);
 		Integer expected = versionOf(body);
 		body.put("id", id);
+		if (isSupplier(coll)) {
+			Optional<String> curS = repo.getForUpdate(coll, id);
+			if (curS.isPresent()) {
+				Map<String, Object> cur = json.map(curS.get());
+				Integer curVer = cur.get("_version") instanceof Number n ? n.intValue() : null;
+				if (expected != null && curVer != null && !expected.equals(curVer)) {
+					throw ApiException.conflict("VERSION_CONFLICT", "ข้อมูลถูกแก้ไขโดยผู้อื่นแล้ว กรุณาโหลดใหม่");
+				}
+				// เปลี่ยนรหัสจริงเท่านั้นที่ถูกตรวจ (ข้อมูลเดิมที่ซ้ำอยู่ไม่ขวางการแก้ไขอื่น)
+				if (!normKey(cur.get("code")).equals(normKey(body.get("code")))) {
+					assertSupplierCodeNotReferenced(cur.get("code"));
+					assertUniqueSupplierCode(id, body);
+				}
+			}
+		}
 		if (isStockColl(coll)) {
 			Optional<String> curS = repo.getForUpdate(coll, id);
 			if (curS.isPresent()) {
@@ -194,13 +239,18 @@ public class RecordService {
 				if (!e.getKey().equals("stock") && !same(rec.get(e.getKey()), e.getValue())) throw onlyStockAllowed(u);
 			}
 		}
-		String oldCode = normKey(rec.get("code"));
+		Object oldCodeRaw = rec.get("code");
+		String oldCode = normKey(oldCodeRaw);
 		java.util.List<String> changed = new java.util.ArrayList<>();
 		patch.forEach((k, v) -> {
 			if (!java.util.Objects.equals(rec.get(k), v)) changed.add(k);
 			rec.put(k, v);
 		});
 		if (isStockColl(coll) && !normKey(rec.get("code")).equals(oldCode)) assertUniqueStockCode(coll, id, rec);
+		if (isSupplier(coll) && !normKey(rec.get("code")).equals(oldCode)) {
+			assertSupplierCodeNotReferenced(oldCodeRaw);
+			assertUniqueSupplierCode(id, rec);
+		}
 		repo.update(coll, id, json.str(rec), null, u.username());
 		if (!changed.isEmpty()) audit.log(u, "UPDATE", d.label(), id, "แก้ไข: " + String.join(", ", changed));
 		return repo.get(coll, id).orElseThrow();
@@ -213,6 +263,10 @@ public class RecordService {
 		// วัตถุดิบห้ามลบผ่าน API ทุก role (รวม admin) — ใช้ปิดใช้งาน (active=false) แทน
 		if ("materials".equals(coll)) {
 			throw ApiException.conflict("DELETE_NOT_ALLOWED", "ไม่อนุญาตให้ลบวัตถุดิบ — กรุณาปิดใช้งาน (active=false) แทน");
+		}
+		// Supplier ห้ามลบผ่าน API ทุก role — ใช้ status = inactive แทน
+		if (isSupplier(coll)) {
+			throw ApiException.conflict("DELETE_NOT_ALLOWED", "ไม่อนุญาตให้ลบ Supplier — กรุณาปิดใช้งาน (status = inactive) แทน");
 		}
 		Optional<String> cur = repo.getForUpdate(coll, id);
 		if (cur.isEmpty()) throw ApiException.notFound("ไม่พบข้อมูล " + id);
