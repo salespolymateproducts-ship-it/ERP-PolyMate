@@ -297,6 +297,12 @@ function _woReq(wo) {
   if (!bom) return [];
   return bom.lines.map((l) => ({ item: l.item, name: l.name, perPc: l.qty, kg: wo.quantity * l.qty * (1 + bom.wasteRate / 100) }));
 }
+// วัตถุดิบในสูตร BOM ที่ถูกปิดใช้งาน (active === false) — ใช้แจ้งเตือน ไม่บล็อกงานผลิตที่กำลังทำอยู่
+function _inactiveInBom(productCode) {
+  const bom = _bomFor(productCode);
+  if (!bom) return [];
+  return bom.lines.map((l) => MATERIALS.find((x) => x.id === l.item)).filter((m) => m && m.active === false);
+}
 function _reservedByOthers(materialId, currentWoId) {
   let sum = 0;
   WORK_ORDERS.forEach((w) => {
@@ -320,6 +326,8 @@ function MaterialReservation({ wo }) {
   const hasData = reqs.length > 0;
   const allOk = hasData && reqs.every((r) => r.ok);
   const shortItems = reqs.filter((r) => !r.ok);
+  const inactiveReqs = reqs.filter((r) => r.m && r.m.active === false);
+  const shortActive = shortItems.filter((r) => !(r.m && r.m.active === false)); // สั่งซื้อได้เฉพาะวัตถุดิบที่ยังใช้งานอยู่
   const alreadyReserved = ["running", "setup", "done"].includes(wo.status);
   const reserved = !!wo.reserved || alreadyReserved;
   const setReserved = (v) => runAction(() => Store.update("workOrders", wo.id, { reserved: v }, "id", v ? "จองวัตถุดิบ" : "ยกเลิกจองวัตถุดิบ"), v ? "จองวัตถุดิบแล้ว" : "ยกเลิกการจองแล้ว");
@@ -341,6 +349,7 @@ function MaterialReservation({ wo }) {
           </div>
         </div>
         <div className="card-actions">
+          {inactiveReqs.length > 0 && <span className="badge badge-warning"><I.Alert size={11}/> BOM อ้างวัตถุดิบที่ปิดใช้งาน</span>}
           <span className={"badge badge-" + pill.color}><span className="b-dot"/>{pill.th}</span>
         </div>
       </div>
@@ -366,7 +375,7 @@ function MaterialReservation({ wo }) {
                 {reqs.map((r, i) => (
                   <tr key={i}>
                     <td>
-                      <div style={{ fontWeight: 500 }}>{r.name}</div>
+                      <div style={{ fontWeight: 500 }}>{r.name}{r.m && r.m.active === false && <span className="badge badge-neutral" style={{ marginLeft: 6 }}>ปิดใช้งาน</span>}</div>
                       <div className="mono" style={{ fontSize: 11, color: "var(--text-secondary)" }}>{r.item} · {_fmt(r.perPc, 4)} {r.unit}/ชิ้น</div>
                     </td>
                     <td className="num" style={{ fontWeight: 600 }}>{_fmt(r.kg, 1)} <span style={{ fontSize: 10.5, color: "var(--text-secondary)" }}>{r.unit}</span></td>
@@ -382,6 +391,13 @@ function MaterialReservation({ wo }) {
                 ))}
               </tbody>
             </table>
+
+            {inactiveReqs.length > 0 && (
+              <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--amber-subtle)", color: "var(--amber)", fontSize: 12.5, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <I.Alert size={14}/>
+                <span>สูตรนี้ใช้วัตถุดิบที่<b>ปิดใช้งาน</b>: <b>{inactiveReqs.map((r) => r.m.code).join(", ")}</b> — งานผลิตที่กำลังดำเนินการทำต่อได้ตามปกติ แต่ระบบจะไม่สร้างใบสั่งซื้อวัตถุดิบเหล่านี้ให้ กรุณาเปิดใช้งานวัตถุดิบหรือตรวจสอบสูตรก่อน</span>
+              </div>
+            )}
 
             {bom && bom.packaging && (
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 12, color: "var(--text-secondary)" }}>
@@ -408,7 +424,8 @@ function MaterialReservation({ wo }) {
                 )}
               </div>
               {!allOk ? (
-                <button className="btn btn-outline btn-sm" onClick={() => createPOFromShortage(wo, shortItems)}><I.Boxes size={13}/> สร้างใบสั่งซื้อวัตถุดิบที่ขาด</button>
+                <button className="btn btn-outline btn-sm" disabled={shortActive.length === 0} title={shortActive.length === 0 ? "วัตถุดิบที่ขาดปิดใช้งานอยู่ — เปิดใช้งานก่อนจึงจะสั่งซื้อได้" : undefined}
+                  onClick={() => createPOFromShortage(wo, shortItems)}><I.Boxes size={13}/> สร้างใบสั่งซื้อวัตถุดิบที่ขาด</button>
               ) : reserved ? (
                 <button className="btn btn-outline btn-sm" onClick={() => setReserved(false)}>ยกเลิกจอง</button>
               ) : (
@@ -589,10 +606,13 @@ function WODeliveries({ wo }) {
 
 // สร้างใบสั่งซื้อ (สถานะรออนุมัติ) สำหรับวัตถุดิบที่ไม่พอ แยกตามผู้ขายหลักของวัตถุดิบ
 function createPOFromShortage(wo, shortItems) {
+  // วัตถุดิบที่ปิดใช้งาน (active === false) ไม่ถูกนำไปสร้างใบสั่งซื้อใหม่
+  const skipped = shortItems.filter((r) => r.m && r.m.active === false).map((r) => r.m.code);
   runAction(() => Store.tx("PO from shortage", () => {
     const bySup = {};
     shortItems.forEach((r) => {
       const m = r.m; if (!m) return;
+      if (m.active === false) return;
       const need = Math.ceil(r.kg - Math.max(0, r.available));
       if (need <= 0) return;
       (bySup[m.supplier || "—"] = bySup[m.supplier || "—"] || []).push({ item: m.id, name: `${m.code} ${m.name}`, qty: need, unit: m.unit, price: m.cost, amount: Math.round(need * m.cost * 100) / 100 });
@@ -609,9 +629,9 @@ function createPOFromShortage(wo, shortItems) {
       Store.log("CREATE", "ใบสั่งซื้อ", po.id, `สร้างจากวัตถุดิบไม่พอของ ${wo.id}`);
       return po.id;
     });
-    if (!made.length) Store.fail("ไม่มีรายการที่ต้องสั่งซื้อ");
+    if (!made.length) Store.fail(skipped.length ? `วัตถุดิบที่ขาดปิดใช้งานอยู่ (${skipped.join(", ")}) — ไม่สร้างใบสั่งซื้อ กรุณาเปิดใช้งานวัตถุดิบก่อน` : "ไม่มีรายการที่ต้องสั่งซื้อ");
     return made;
-  }), (ids) => `สร้างใบสั่งซื้อ ${ids.join(", ")} (รออนุมัติ) — ดูได้ที่เมนูใบสั่งซื้อ`);
+  }), (ids) => `สร้างใบสั่งซื้อ ${ids.join(", ")} (รออนุมัติ) — ดูได้ที่เมนูใบสั่งซื้อ` + (skipped.length ? ` · ข้าม ${skipped.join(", ")} (ปิดใช้งาน)` : ""));
 }
 
 // ต้นทุนวัตถุดิบตามสูตร BOM (ใช้ต้นทุนวัตถุดิบในทะเบียน)
@@ -642,8 +662,9 @@ function ProductionRecorder({ wo, onProduce }) {
   const preview = (bom && n > 0) ? bom.lines.map((bl) => {
     const m = MATERIALS.find((x) => x.id === bl.item);
     const use = Math.round(bl.qty * n * (1 + (bom.wasteRate || 0) / 100) * 1000) / 1000;
-    return { name: m ? m.name : bl.item, code: m ? m.code : bl.item, use, unit: m ? m.unit : "KG", stock: m ? m.stock : 0, short: m ? m.stock < use : false };
+    return { name: m ? m.name : bl.item, code: m ? m.code : bl.item, use, unit: m ? m.unit : "KG", stock: m ? m.stock : 0, short: m ? m.stock < use : false, inactive: !!m && m.active === false };
   }) : [];
+  const inactiveBom = _inactiveInBom(wo.productCode);
   const fg = FINISHED.find((f) => f.code === wo.productCode);
   const anyShort = preview.some((p) => p.short);
   const valid = n > 0 && ngN <= n && !done;
@@ -676,6 +697,12 @@ function ProductionRecorder({ wo, onProduce }) {
           </div>
         ) : (
           <>
+            {inactiveBom.length > 0 && (
+              <div style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 8, background: "var(--amber-subtle)", color: "var(--amber)", fontSize: 12.5, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <I.Alert size={14}/>
+                <span>สูตรนี้ใช้วัตถุดิบที่<b>ปิดใช้งาน</b>: <b>{inactiveBom.map((m) => m.code).join(", ")}</b> — บันทึกผลิตและตัดสต๊อกต่อได้ตามปกติ แต่ควรเปิดใช้งานวัตถุดิบหรือตรวจสอบสูตร</span>
+              </div>
+            )}
             <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
               <div style={{ width: 150 }}>
                 <label className="field-label">จำนวนที่ผลิต (ชิ้น)</label>
@@ -697,7 +724,7 @@ function ProductionRecorder({ wo, onProduce }) {
                 </div>
                 {preview.map((p, i) => (
                   <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 110px 110px", gap: 8, padding: "7px 12px", borderTop: "1px solid var(--border)", fontSize: 12.5, alignItems: "center" }}>
-                    <div><b style={{ fontWeight: 500 }}>{p.name}</b> <span className="mono" style={{ fontSize: 10.5, color: "var(--text-secondary)" }}>{p.code}</span></div>
+                    <div><b style={{ fontWeight: 500 }}>{p.name}</b> <span className="mono" style={{ fontSize: 10.5, color: "var(--text-secondary)" }}>{p.code}</span>{p.inactive && <span className="badge badge-neutral" style={{ marginLeft: 6 }}>ปิดใช้งาน</span>}</div>
                     <div className="num" style={{ textAlign: "right", color: "var(--amber)", fontWeight: 600 }}>−{_fmt(p.use, 2)} {p.unit}</div>
                     <div className="num" style={{ textAlign: "right", color: p.short ? "var(--danger)" : "var(--text-secondary)" }}>{_fmt(p.stock - p.use, 1)} {p.unit}</div>
                   </div>
@@ -785,6 +812,11 @@ function AddWorkOrderForm({ onSubmit, onCancel }) {
             {Object.values(BOMS).find((b) => b.productCode === productCode)
               ? <span style={{ color: "var(--success)" }}><I.Check size={11}/> มีสูตร BOM — ตัดสต๊อกอัตโนมัติ</span>
               : <span style={{ color: "var(--amber)" }}>⚠ ยังไม่มี BOM</span>}
+          </div>
+        )}
+        {product && _inactiveInBom(productCode).length > 0 && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--amber)", display: "flex", gap: 6, alignItems: "center" }}>
+            <I.Alert size={12}/> สูตรใช้วัตถุดิบที่ปิดใช้งาน: {_inactiveInBom(productCode).map((m) => m.code).join(", ")}
           </div>
         )}
       </div>

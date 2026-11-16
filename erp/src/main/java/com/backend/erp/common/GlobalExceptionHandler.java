@@ -21,6 +21,12 @@ public class GlobalExceptionHandler {
 		return body(e.status(), e.code(), e.getMessage());
 	}
 
+	/** ข้อมูลซ้ำจากข้อจำกัดของฐานข้อมูลที่ไม่ได้ดักไว้เฉพาะจุด → 409 แทน 500 */
+	@ExceptionHandler(org.springframework.dao.DuplicateKeyException.class)
+	public ResponseEntity<Map<String, Object>> duplicate(org.springframework.dao.DuplicateKeyException e) {
+		return body(HttpStatus.CONFLICT, "DUPLICATE", "ข้อมูลซ้ำกับรายการที่มีอยู่แล้ว");
+	}
+
 	@ExceptionHandler(HttpMessageNotReadableException.class)
 	public ResponseEntity<Map<String, Object>> unreadable(HttpMessageNotReadableException e) {
 		return body(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "รูปแบบ JSON ไม่ถูกต้อง");

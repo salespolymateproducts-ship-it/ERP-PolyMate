@@ -657,7 +657,7 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
   const editingApproved = existing && !["draft", "pending"].includes(existing.status);
   const customers = Store.state.customers;
   const products = [...Store.state.finished.map((f) => ({ code: f.code, name: f.name, unit: f.unit || "PCS", price: f.price })),
-    ...Store.state.materials.map((m) => ({ code: m.code, name: m.name, unit: m.unit, price: 0 }))];
+    ...Store.state.materials.filter((m) => m.active !== false).map((m) => ({ code: m.code, name: m.name, unit: m.unit, price: 0 }))];
 
   const [f, setF] = useState(init);
   const [editReason, setEditReason] = useState("");

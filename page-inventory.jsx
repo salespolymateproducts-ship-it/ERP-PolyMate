@@ -5,13 +5,16 @@ function PageInventory() {
   const [addOpen, setAddOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [adjOpen, setAdjOpen] = useState(false);
+  const [matForm, setMatForm] = useState(null); // null | { mode: "add" } | { mode: "edit", rec }
   useStore();
   const role = Store.user() ? ROLES[Store.user().role] : null;
   const canEdit = role && (role.canEdit === "*" || (role.canEdit || []).includes("inventory") || (role.canEdit || []).includes("production"));
+  // จัดการทะเบียนวัตถุดิบ (เพิ่ม/แก้ไข/ปิดใช้งาน): เฉพาะผู้ที่มีสิทธิ์คลังสินค้า (ไม่รวมฝ่ายผลิต)
+  const canManageMat = role && (role.canEdit === "*" || (role.canEdit || []).includes("inventory"));
 
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
 
-  const matLow = MATERIALS.filter((m) => m.stock < m.min).length;
+  const matLow = MATERIALS.filter((m) => m.active !== false && m.stock < m.min).length;
   const totalValue = MATERIALS.reduce((s, m) => s + m.stock * m.cost, 0)
     + FINISHED.reduce((s, f) => s + f.stock * f.cost, 0);
 
@@ -25,6 +28,7 @@ function PageInventory() {
             <button className="btn btn-outline btn-sm" onClick={() => printReport("รายงานสินค้าคงคลัง")}><I.Printer size={14}/> พิมพ์ / PDF</button>
             <button className="btn btn-outline btn-sm" onClick={() => exportCSV(`สต๊อก-${Store.today()}.csv`, ["ประเภท", "รหัส", "ชื่อ", "คงเหลือ", "หน่วย", "ขั้นต่ำ", "ต้นทุน/หน่วย", "มูลค่า"], [...MATERIALS.map((m) => ["วัตถุดิบ", m.code, m.name, m.stock, m.unit, m.min, m.cost, m.stock * m.cost]), ...FINISHED.map((f) => ["สินค้าสำเร็จรูป", f.code, f.name, f.stock, f.unit || "PCS", "", f.cost, f.stock * f.cost])])}><I.Download size={14}/> ส่งออก CSV</button>
             {canEdit && <button className="btn btn-outline btn-sm" onClick={() => setAdjOpen(true)}><I.Upload size={14}/> รับเข้า / ปรับยอด</button>}
+            {canManageMat && <button className="btn btn-outline btn-sm" onClick={() => { setTab("MAT"); setMatForm({ mode: "add" }); }}><I.Plus size={14}/> เพิ่มวัตถุดิบ</button>}
             <button className="btn btn-primary btn-sm" onClick={() => { setTab("FG"); setAddOpen(true); }}><I.Plus size={14}/> เพิ่มสินค้า</button>
           </>
         }
@@ -48,12 +52,16 @@ function PageInventory() {
         onChange={setTab}
       />
 
-      {tab === "MAT" && <MaterialTable/>}
+      {tab === "MAT" && <MaterialTable canManage={canManageMat} onAdd={() => setMatForm({ mode: "add" })} onEdit={(rec) => setMatForm({ mode: "edit", rec })}/>}
       {tab === "FG" && <FinishedTable onAdd={() => setAddOpen(true)}/>}
       {tab === "BOM" && <window.BOMViewer/>}
       {tab === "MOVE" && <Movement/>}
 
       {adjOpen && <StockAdjustModal onClose={() => setAdjOpen(false)}/>}
+      <Drawer open={!!matForm} onClose={() => setMatForm(null)} title={matForm && matForm.mode === "edit" ? "แก้ไขวัตถุดิบ " + matForm.rec.code : "เพิ่มวัตถุดิบ"} width={620}>
+        {matForm && <MaterialForm key={matForm.mode + (matForm.rec ? matForm.rec.id : "")} mode={matForm.mode} rec={matForm.rec}
+          onCancel={() => setMatForm(null)} onDone={(msg) => { setMatForm(null); showToast(msg); }}/>}
+      </Drawer>
       <Drawer open={addOpen} onClose={() => setAddOpen(false)} title="เพิ่มสินค้าสำเร็จรูป" width={620}>
         {addOpen && <AddProductForm
           onCancel={() => setAddOpen(false)}
@@ -103,7 +111,7 @@ function SmallStat({ label, value, unit, tone, icon, alert }) {
 
 // รับเข้า / เบิกออก / ปรับยอดสต๊อกด้วยมือ (ต้องระบุเหตุผล — บันทึก Stock Movement + Audit Log)
 function StockAdjustModal({ onClose }) {
-  const items = [...Store.state.materials.map((m) => ({ code: m.code, name: m.name, unit: m.unit, stock: m.stock })),
+  const items = [...Store.state.materials.filter((m) => m.active !== false).map((m) => ({ code: m.code, name: m.name, unit: m.unit, stock: m.stock })),
     ...Store.state.finished.map((f) => ({ code: f.code, name: f.name, unit: f.unit || "PCS", stock: f.stock }))];
   const [code, setCode] = useState(items[0] ? items[0].code : "");
   const [mode, setMode] = useState("IN");
@@ -160,9 +168,25 @@ function PriceEditModal({ f, onClose }) {
   );
 }
 
-function MaterialTable() {
+function MaterialTable({ canManage, onAdd, onEdit }) {
+  const [showInactive, setShowInactive] = useState(true);
+  const inactiveCount = MATERIALS.filter((m) => m.active === false).length;
+  const rows = showInactive ? MATERIALS : MATERIALS.filter((m) => m.active !== false);
+  // ไม่มีการลบวัตถุดิบ: ใช้ปิดใช้งาน/เปิดใช้งานเท่านั้น (ประวัติใน PO / Stock Movement / BOM คงเดิม)
+  function toggleActive(m) {
+    const activate = m.active === false;
+    if (!activate && !window.confirm(`ปิดใช้งาน ${m.code} · ${m.name} ?\n(ยังคงอยู่ในประวัติเดิมทั้งหมด แต่จะไม่แสดงให้เลือกใน PO ใหม่และการปรับยอดสต๊อก — เปิดใช้งานกลับได้ภายหลัง)`)) return;
+    runAction(() => Store.update("materials", m.id, { active: activate }, "id", activate ? "เปิดใช้งาน" : "ปิดใช้งาน"), activate ? `เปิดใช้งาน ${m.code} แล้ว` : `ปิดใช้งาน ${m.code} แล้ว`);
+  }
   return (
     <div className="card">
+      {(inactiveCount > 0 || canManage) && (
+        <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border)", fontSize: 12.5, color: "var(--text-secondary)" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+            <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)}/> แสดงรายการที่ปิดใช้งาน ({inactiveCount})
+          </label>
+        </div>
+      )}
       <div style={{ overflow: "auto" }}>
         <table className="table">
           <thead>
@@ -176,15 +200,22 @@ function MaterialTable() {
               <th className="num">ราคาทุน</th>
               <th className="num">มูลค่ารวม</th>
               <th>ผู้ขาย</th>
+              <th>สถานะ</th>
+              {canManage && <th></th>}
             </tr>
           </thead>
           <tbody>
-            {MATERIALS.map((m) => {
-              const ratio = (m.stock - m.min) / (m.max - m.min);
-              const low = m.stock < m.min;
-              const danger = m.stock < m.min * 0.8;
+            {rows.length === 0 && (
+              <tr><td colSpan={canManage ? 11 : 10} style={{ textAlign: "center", padding: 28, color: "var(--text-secondary)" }}>
+                ยังไม่มีวัตถุดิบ{canManage && <> · <a onClick={onAdd} style={{ color: "var(--accent)", cursor: "pointer" }}>เพิ่มวัตถุดิบรายการแรก</a></>}
+              </td></tr>
+            )}
+            {rows.map((m) => {
+              const inactive = m.active === false;
+              const low = !inactive && m.stock < m.min;
+              const danger = !inactive && m.stock < m.min * 0.8;
               return (
-                <tr key={m.id}>
+                <tr key={m.id} style={inactive ? { opacity: 0.55 } : undefined}>
                   <td className="mono"><b>{m.code}</b></td>
                   <td>
                     <div style={{ fontSize: 13, fontWeight: 500 }}>{m.name}</div>
@@ -201,6 +232,13 @@ function MaterialTable() {
                   <td className="num">{baht(m.cost, 2)}</td>
                   <td className="num" style={{ fontWeight: 500 }}>{baht(m.stock * m.cost)}</td>
                   <td style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>{m.supplier}</td>
+                  <td>{inactive ? <span className="badge badge-neutral">ปิดใช้งาน</span> : <span className="badge badge-success">ใช้งาน</span>}</td>
+                  {canManage && (
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <button className="btn btn-outline btn-sm" onClick={() => onEdit(m)}>แก้ไข</button>{" "}
+                      <button className="btn btn-outline btn-sm" onClick={() => toggleActive(m)}>{inactive ? "เปิดใช้งาน" : "ปิดใช้งาน"}</button>
+                    </td>
+                  )}
                 </tr>
               );
             })}
@@ -211,9 +249,181 @@ function MaterialTable() {
   );
 }
 
+// ---------- ทะเบียนวัตถุดิบ: ตัวช่วยตรวจรหัสซ้ำ / การอ้างอิง ----------
+const MAT_TYPES = ["เม็ดพลาสติก", "Masterbatch", "Additive", "สี-เม็ด", "สี-ผง", "เหล็ก", "บรรจุภัณฑ์", "อื่น ๆ"];
+const MAT_UNITS = ["KG", "G", "L", "PCS", "BAG", "ROLL", "SET", "BOX"];
+const matKey = (s) => String(s == null ? "" : s).replace(/\s+/g, "").toUpperCase(); // ไม่สนตัวพิมพ์เล็ก/ใหญ่และช่องว่าง
+
+// วัตถุดิบนี้ถูกอ้างอิงที่ใดบ้าง (PO / BOM / Stock Movement)
+function materialRefs(m) {
+  const po = Store.state.purchaseOrders.filter((p) => (p.lines || []).some((l) => l.item === m.id)).length;
+  const bom = Object.values(window.BOMS || {}).filter((b) => (b.lines || []).some((l) => l.item === m.id)).length;
+  const mv = Store.state.stockMovements.filter((x) => matKey(x.item) === matKey(m.code)).length;
+  return { po, bom, mv, total: po + bom + mv };
+}
+// รหัสชนกับวัตถุดิบอื่น หรือสินค้าสำเร็จรูป (ตรวจทั้ง code และ id)
+function matCodeConflict(code, selfId) {
+  const k = matKey(code);
+  if (!k) return null;
+  const m = Store.state.materials.find((x) => x.id !== selfId && (matKey(x.code) === k || matKey(x.id) === k));
+  if (m) return `รหัสนี้ซ้ำกับวัตถุดิบ ${m.code} · ${m.name}`;
+  const f = Store.state.finished.find((x) => matKey(x.code) === k || matKey(x.id) === k);
+  if (f) return `รหัสนี้ซ้ำกับสินค้าสำเร็จรูป ${f.code} · ${f.name}`;
+  return null;
+}
+
+function MaterialForm({ mode, rec, onCancel, onDone }) {
+  const editing = mode === "edit";
+  const refs = editing ? materialRefs(rec) : null;
+  const locked = editing && refs.total > 0; // มีการอ้างอิงแล้ว → ห้ามเปลี่ยนรหัส/หน่วยนับ
+  const [form, setForm] = useState(editing ? {
+    code: rec.code, name: rec.name, type: rec.type || "เม็ดพลาสติก", unit: rec.unit || "KG",
+    min: String(rec.min == null ? "" : rec.min), max: String(rec.max == null ? "" : rec.max),
+    cost: String(rec.cost == null ? "" : rec.cost), supplier: rec.supplier || "", location: rec.location || "", opening: "",
+  } : { code: "", name: "", type: "เม็ดพลาสติก", unit: "KG", min: "", max: "", cost: "", supplier: "", location: "", opening: "" });
+  const [saving, setSaving] = useState(false);
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const code = form.code.trim().toUpperCase();
+  const min = parseFloat(form.min), max = parseFloat(form.max), cost = parseFloat(form.cost);
+  const opening = form.opening === "" ? 0 : parseFloat(form.opening);
+  const codeChanged = editing && code !== rec.code;
+  const conflict = (!editing || codeChanged) ? matCodeConflict(code, editing ? rec.id : null) : null;
+  const errors = [];
+  if (!code) errors.push("กรุณาระบุรหัสวัตถุดิบ");
+  else if (!/^[A-Z0-9][A-Z0-9._\-\/]*$/.test(code)) errors.push("รหัสใช้ได้เฉพาะ A-Z 0-9 . _ - / และห้ามมีช่องว่าง");
+  if (conflict) errors.push(conflict);
+  if (!form.name.trim()) errors.push("กรุณาระบุชื่อวัตถุดิบ");
+  if (!(min >= 0)) errors.push("Min ต้องเป็นตัวเลขไม่ติดลบ");
+  if (!(max > 0)) errors.push("Max ต้องมากกว่า 0");
+  if (min >= 0 && max > 0 && min > max) errors.push("Min ต้องไม่มากกว่า Max");
+  if (!(cost >= 0)) errors.push("ราคาทุนต้องเป็นตัวเลขไม่ติดลบ");
+  if (!editing && !(opening >= 0)) errors.push("ยอดยกมาต้องไม่ติดลบ");
+  const units = MAT_UNITS.includes(form.unit) ? MAT_UNITS : [form.unit, ...MAT_UNITS];
+  const types = MAT_TYPES.includes(form.type) ? MAT_TYPES : [form.type, ...MAT_TYPES];
+  const showErr = errors.length > 0 && (form.code || form.name || form.min || form.max || form.cost);
+
+  function submit(e) {
+    e.preventDefault();
+    if (saving || errors.length) return;
+    setSaving(true);
+    const ok = runAction(() => Store.tx(editing ? "editMaterial" : "createMaterial", () => {
+      const clean = {
+        name: form.name.trim(), type: form.type, unit: form.unit, min, max, cost,
+        supplier: form.supplier.trim(), location: form.location.trim(),
+      };
+      if (!editing) {
+        // ตรวจซ้ำอีกครั้งในธุรกรรม (ข้อมูลล่าสุด) + ต้องไม่มีประวัติเคลื่อนไหวค้างของรหัสนี้
+        const c = matCodeConflict(code, null);
+        if (c) Store.fail(c);
+        if (Store.state.stockMovements.some((x) => matKey(x.item) === matKey(code))) Store.fail("พบประวัติเคลื่อนไหวสต๊อกของรหัสนี้อยู่แล้ว ไม่สามารถใช้รหัสซ้ำได้");
+        const m = { id: code, code, ...clean, stock: 0, active: true, costHistory: [{ date: Store.today(), cost, by: Store.userName(), note: "ตั้งต้น" }] };
+        Store.add("materials", m, `${code}${opening > 0 ? " · ยอดยกมา " + opening + " " + clean.unit : ""}`);
+        if (opening > 0) {
+          // ยอดยกมาผ่าน Stock Movement เท่านั้น (ref OPEN-รหัส) แล้วตรวจว่ายอดคงเหลือ = ผลรวม movement
+          Store.adjustStock(code, opening, "OPEN-" + code, "ยอดยกมา");
+          const bal = Store.state.stockMovements.filter((x) => matKey(x.item) === matKey(code)).reduce((s, x) => s + (x.type === "IN" ? x.qty : -x.qty), 0);
+          if (Math.abs(bal - m.stock) > 0.0005) Store.fail("ยอดยกมาไม่สอดคล้องกับ Stock Movement — ยกเลิกการบันทึก");
+        }
+        return m;
+      }
+      const m = Store.find("materials", rec.id);
+      if (!m) Store.fail("ไม่พบวัตถุดิบ");
+      const now = materialRefs(m);
+      const patch = { ...clean };
+      if (code !== m.code) {
+        if (now.total > 0) Store.fail("รหัสนี้ถูกอ้างอิงในเอกสารอื่นแล้ว ไม่สามารถเปลี่ยนได้");
+        const c = matCodeConflict(code, m.id);
+        if (c) Store.fail(c);
+        patch.code = code;
+      }
+      if (clean.unit !== m.unit && now.total > 0) Store.fail("วัตถุดิบนี้ถูกอ้างอิงแล้ว ไม่สามารถเปลี่ยนหน่วยนับได้");
+      // เก็บประวัติราคาทุน (PO เดิมเก็บราคาของตัวเองไว้ในบรรทัดอยู่แล้ว ไม่ได้อ้างราคานี้ย้อนหลัง)
+      if (cost !== m.cost) patch.costHistory = [...(m.costHistory || []), { date: Store.today(), cost, prev: m.cost, by: Store.userName() }];
+      const diff = Object.keys(patch).filter((k) => k !== "costHistory" && JSON.stringify(m[k]) !== JSON.stringify(patch[k]))
+        .map((k) => `${k}: ${m[k] == null ? "—" : m[k]}→${patch[k]}`);
+      return Store.update("materials", m.id, patch, "id", diff.length ? "แก้ไข: " + diff.join(", ") : "ไม่มีการเปลี่ยนแปลง");
+    }), editing ? `แก้ไข ${code} แล้ว` : `เพิ่มวัตถุดิบ ${code} แล้ว`);
+    if (ok) onDone(editing ? `แก้ไขวัตถุดิบ ${code} เรียบร้อย` : `เพิ่มวัตถุดิบ ${code} เรียบร้อย`);
+    else setSaving(false);
+  }
+
+  return (
+    <form onSubmit={submit} style={{ padding: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div>
+          <label className="field-label">รหัสวัตถุดิบ *</label>
+          <input className="input" style={{ fontFamily: "var(--font-mono)" }} placeholder="เช่น PP-H1300" value={form.code} disabled={locked}
+            onChange={(e) => set("code", e.target.value)}/>
+          {locked && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>ถูกอ้างอิงแล้ว (PO {refs.po} · BOM {refs.bom} · Movement {refs.mv}) — เปลี่ยนรหัสและหน่วยนับไม่ได้</div>}
+        </div>
+        <div>
+          <label className="field-label">ประเภท *</label>
+          <select className="select" value={form.type} onChange={(e) => set("type", e.target.value)}>
+            {types.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label className="field-label">ชื่อวัตถุดิบ *</label>
+          <input className="input" placeholder="เช่น PP Homopolymer (HMC H1300)" value={form.name} onChange={(e) => set("name", e.target.value)}/>
+        </div>
+        <div>
+          <label className="field-label">หน่วยนับ *</label>
+          <select className="select" value={form.unit} disabled={locked} onChange={(e) => set("unit", e.target.value)}>
+            {units.map((u) => <option key={u} value={u}>{u}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="field-label">ราคาทุน / หน่วย (บาท) *</label>
+          <input type="number" step="0.01" min="0" className="input num" placeholder="0.00" value={form.cost} onChange={(e) => set("cost", e.target.value)}/>
+        </div>
+        <div>
+          <label className="field-label">Min (จุดสั่งซื้อ) *</label>
+          <input type="number" step="any" min="0" className="input num" placeholder="0" value={form.min} onChange={(e) => set("min", e.target.value)}/>
+        </div>
+        <div>
+          <label className="field-label">Max *</label>
+          <input type="number" step="any" min="0" className="input num" placeholder="0" value={form.max} onChange={(e) => set("max", e.target.value)}/>
+        </div>
+        <div>
+          <label className="field-label">ผู้ขาย</label>
+          <input className="input" list="mat-suppliers" placeholder="เลือกจากรายการหรือพิมพ์เอง" value={form.supplier} onChange={(e) => set("supplier", e.target.value)}/>
+          <datalist id="mat-suppliers">{SUPPLIERS.map((s) => <option key={s.id} value={s.name}/>)}</datalist>
+        </div>
+        <div>
+          <label className="field-label">ตำแหน่งเก็บ</label>
+          <input className="input" placeholder="เช่น A-01-02" value={form.location} onChange={(e) => set("location", e.target.value)}/>
+        </div>
+        {!editing ? (
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label className="field-label">ยอดยกมา ({form.unit})</label>
+            <input type="number" step="any" min="0" className="input num" placeholder="0" value={form.opening} onChange={(e) => set("opening", e.target.value)}/>
+            <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>บันทึกเป็น Stock Movement "ยอดยกมา" หนึ่งรายการ — หลังสร้างแล้วเปลี่ยนยอดได้ผ่าน "รับเข้า / ปรับยอด" เท่านั้น</div>
+          </div>
+        ) : (
+          <div style={{ gridColumn: "1 / -1", fontSize: 12.5, color: "var(--text-secondary)" }}>
+            ยอดคงเหลือปัจจุบัน <b className="num">{_fmt(rec.stock)}</b> {rec.unit} — เปลี่ยนได้ผ่าน "รับเข้า / ปรับยอด" เท่านั้น
+          </div>
+        )}
+      </div>
+      {showErr && (
+        <div style={{ marginTop: 14, padding: 10, borderRadius: 8, background: "var(--danger-subtle, #fdecea)", color: "var(--danger)", fontSize: 12.5 }}>
+          {errors.map((m, i) => <div key={i}>• {m}</div>)}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
+        <button type="button" className="btn btn-outline" onClick={onCancel}>ยกเลิก</button>
+        <button type="submit" className="btn btn-primary" disabled={saving || errors.length > 0}><I.Check size={14}/> {editing ? "บันทึกการแก้ไข" : "บันทึกวัตถุดิบ"}</button>
+      </div>
+    </form>
+  );
+}
+
 function TypeBadge({ type }) {
   const map = {
     "เม็ดพลาสติก": "info",
+    "Masterbatch": "violet",
+    "Additive": "warning",
     "สี-เม็ด": "violet",
     "สี-ผง": "warning",
     "เหล็ก": "neutral",

@@ -275,7 +275,7 @@ function AddPOForm({ onSubmit, onCancel }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 78px 70px 90px 92px 30px", gap: 8, alignItems: "center" }}>
               <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.item} onChange={(e) => pickMaterial(i, e.target.value)}>
                 <option value="">— เลือกวัตถุดิบ —</option>
-                {MATERIALS.map((m) => <option key={m.id} value={m.id}>{m.code} · {m.name}</option>)}
+                {MATERIALS.filter((m) => m.active !== false).map((m) => <option key={m.id} value={m.id}>{m.code} · {m.name}</option>)}
                 <option value="custom">อื่นๆ / บริการ (ไม่เข้าคลัง)</option>
               </select>
               <input type="number" min="0" step="0.01" className="input num" style={{ height: 34, textAlign: "right" }} placeholder="0" value={l.qty} onChange={(e) => setLine(i, "qty", e.target.value)}/>

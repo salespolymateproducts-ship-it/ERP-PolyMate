@@ -191,7 +191,7 @@ function navCount(id) {
     case "customers": return n(s.customers.length);
     case "production": return n(s.workOrders.filter((w) => !["done", "cancelled"].includes(w.status)).length);
     case "molds": return n(s.molds.filter(_maintDue).length, true);
-    case "inventory": return n(s.materials.filter((m) => m.stock < m.min).length, true);
+    case "inventory": return n(s.materials.filter((m) => m.active !== false && m.stock < m.min).length, true);
     case "procurement": return n(s.purchaseOrders.filter((p) => !["received", "cancelled"].includes(p.status)).length);
     case "shipping": return n(s.docs.filter((d) => d.type === "DO" && Workflow.isLive(d) && (!d.ship || d.ship.status !== "delivered")).length);
     case "qc": return n(s.workOrders.filter((w) => w.produced > 0 && !s.qc.some((q) => q.wo === w.id)).length, true);
@@ -210,7 +210,7 @@ function buildNotifications(role) {
     const p = Workflow.paymentInfo(d);
     if (p.overdue) out.push({ id: "od" + d.id, kind: "alert", icon: "Wallet", title: `เกินกำหนดชำระ: ${d.id} ${d.customerName} ค้าง ${_fmt(p.outstanding, 2)} บาท`, time: "ครบกำหนด " + d.due, page: "sales", focus: { doc: d.id } });
   });
-  s.materials.filter((m) => m.stock < m.min).forEach((m) =>
+  s.materials.filter((m) => m.active !== false && m.stock < m.min).forEach((m) =>
     out.push({ id: "ls" + m.id, kind: "warning", icon: "Boxes", title: `วัตถุดิบต่ำกว่าจุดสั่งซื้อ: ${m.code} เหลือ ${_fmt(m.stock)} ${m.unit} (ขั้นต่ำ ${_fmt(m.min)})`, time: "สต๊อก", page: "inventory" }));
   s.molds.filter(_maintDue).forEach((m) =>
     out.push({ id: "md" + m.id, kind: "alert", icon: "Wrench", title: `แม่พิมพ์ ${m.code} ต้องซ่อมบำรุง (${_fmt(m.shots)}/${_fmt(m.life)} shots)`, time: "แม่พิมพ์", page: "molds" }));
