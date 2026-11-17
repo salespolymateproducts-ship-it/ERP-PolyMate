@@ -446,6 +446,32 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
             </div>
           );
         })()}
+        {editing && (() => {
+          // ประวัติการเปลี่ยนต้นทุนทุกครั้ง (ยกมา / ถัวเฉลี่ยจาก PO / admin ปรับด้วยมือ) — กัน admin ลืมว่าเคยปรับ
+          const hist = [...(rec.costHistory || [])].reverse();
+          const manual = hist.filter((h) => h.ref === "MANUAL").length;
+          return (
+            <div style={{ gridColumn: "1 / -1", background: "var(--bg-subtle)", borderRadius: 10, padding: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>
+                ประวัติต้นทุน
+                {manual > 0 && <span style={{ marginLeft: 8, fontWeight: 500, fontSize: 11.5, color: "var(--warning, #b45309)" }}>⚠ มีการปรับด้วยมือ {manual} ครั้ง</span>}
+              </div>
+              {!hist.length ? <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>ยังไม่มีการเปลี่ยนแปลงต้นทุน</div> : (
+                <table className="table" style={{ fontSize: 12 }}>
+                  <thead><tr><th>วันที่</th><th className="num">เดิม → ใหม่</th><th>โดย</th><th>ที่มา / เหตุผล</th></tr></thead>
+                  <tbody>{hist.slice(0, 20).map((h, i) => (
+                    <tr key={i} style={h.ref === "MANUAL" ? { background: "rgba(245, 158, 11, .12)" } : undefined}>
+                      <td>{h.date}</td>
+                      <td className="num">{h.prev == null ? "—" : _fmt(h.prev, 2)} → <b>{_fmt(h.cost, 2)}</b></td>
+                      <td>{h.by}</td>
+                      <td>{h.ref === "MANUAL" ? <b>{h.note}</b> : h.note}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              )}
+            </div>
+          );
+        })()}
         <div>
           <label className="field-label">Min (จุดสั่งซื้อ) *</label>
           <input type="number" step="any" min="0" className="input num" placeholder="0" value={form.min} onChange={(e) => set("min", e.target.value)}/>
