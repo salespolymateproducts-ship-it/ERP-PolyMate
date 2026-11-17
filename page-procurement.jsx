@@ -41,14 +41,21 @@ function PageProcurement() {
     window.location.href = `mailto:${sup.email}?subject=${encodeURIComponent("ใบสั่งซื้อ " + po.id + " - " + COMPANY.name)}&body=${encodeURIComponent(body)}`;
     Store.tx("mailPO", () => Store.log("SEND", "ใบสั่งซื้อ", po.id, "เปิดอีเมลส่งให้ " + sup.email));
   };
-  const handleReceive = (po) => {
-    if (!po) return;
-    const r = runAction(() => Store.receivePO(po.id));
-    if (!r) return;
-    setOpenPO(null);
-    if (r.ok) showToast(r.received.length
-      ? `รับเข้า ${po.id} → เพิ่มสต๊อก ${r.received.length} รายการเรียบร้อย`
-      : `รับเข้า ${po.id} แล้ว (ไม่มีรายการเข้าคลัง)`);
+  const [receiving, setReceiving] = useState(false);
+  const handleReceive = async (po) => {
+    if (!po || receiving) return;
+    setReceiving(true);
+    try {
+      const r = await Store.receivePO(po.id);
+      setOpenPO(null);
+      showToast(r.received.length
+        ? `รับเข้า ${po.id} → เพิ่มสต๊อก ${r.received.length} รายการเรียบร้อย`
+        : `รับเข้า ${po.id} แล้ว`);
+    } catch (e) {
+      notify(e && e.message ? e.message : String(e), "error");
+    } finally {
+      setReceiving(false);
+    }
   };
 
   return (
@@ -276,6 +283,7 @@ function AddPOForm({ onSubmit, onCancel }) {
     if (!valid) return;
     const cleanLines = computed.filter((l) => l.name.trim() && l.amount > 0)
       .map((l) => ({ item: l.item && l.item !== "custom" ? l.item : undefined, name: l.name.trim(), qty: parseFloat(l.qty) || 0, unit: l.unit, price: parseFloat(l.price) || 0, amount: l.amount }));
+    if (cleanLines.some((l) => !l.item)) { notify("ทุกรายการต้องเลือกวัตถุดิบจากทะเบียน (ไม่รองรับรายการพิมพ์เอง เพราะรับของเข้าสต๊อกไม่ได้)", "error"); return; }
     onSubmit({
       id: nextPoId(), date,
       supplier, supplierName: sup ? sup.name.replace(/ (Co\.|Public|PCL|Pte).*$/i, "").trim() : supplier,

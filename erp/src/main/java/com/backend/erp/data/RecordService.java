@@ -1,7 +1,11 @@
 package com.backend.erp.data;
 
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -153,6 +157,115 @@ public class RecordService {
 		}
 	}
 
+	// ---------- กติกาของใบสั่งซื้อ (PO) ----------
+	private static boolean isPO(String coll) { return "purchaseOrders".equals(coll); }
+
+	private static final Set<String> PO_CREATE_STATUS = Set.of("draft", "pending");
+	private static final Map<String, Set<String>> PO_TRANSITIONS = Map.of(
+		"draft", Set.of("draft", "pending", "approved", "cancelled"),
+		"pending", Set.of("pending", "draft", "approved", "cancelled"),
+		"approved", Set.of("approved", "cancelled"));
+	private static final Set<String> PO_FROZEN_WHEN_APPROVED = Set.of("supplier", "lines", "subtotal", "vat", "total", "whtRate");
+
+	private static double r2(double v) { return Math.round(v * 100d) / 100d; }
+
+	private static String nowStr() { return LocalDateTime.now(ZoneId.of("Asia/Bangkok")).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")); }
+
+	/** Supplier ต้องมีในทะเบียนและยังใช้งาน (เทียบด้วยรหัส Supplier ที่ PO เก็บไว้) */
+	private void assertSupplierUsable(Object code) {
+		String k = normKey(code);
+		if (k.isEmpty()) throw ApiException.badRequest("ต้องระบุ Supplier ในใบสั่งซื้อ");
+		List<Map<String, Object>> rows = jdbc.queryForList(
+			"select data->>'status' as st from erp_records where collection = 'suppliers' and upper(regexp_replace(coalesce(data->>'code', ''), '\\s', '', 'g')) = ?", k);
+		if (rows.isEmpty()) throw ApiException.badRequest("ไม่พบ Supplier รหัส " + String.valueOf(code).trim() + " ในทะเบียน");
+		if ("inactive".equals(rows.get(0).get("st"))) throw ApiException.badRequest("Supplier " + String.valueOf(code).trim() + " ปิดใช้งานแล้ว ออก PO ใหม่ไม่ได้");
+	}
+
+	/** ตรวจรายการสั่งซื้อทุกบรรทัด + คำนวณยอดเงินใหม่ฝั่ง server (ไม่เชื่อค่าจาก client) */
+	private void validatePOLinesAndTotals(Map<String, Object> po) {
+		if (!(po.get("lines") instanceof List<?> raw) || raw.isEmpty()) throw ApiException.badRequest("ใบสั่งซื้อต้องมีรายการอย่างน้อย 1 รายการ");
+		List<Object> out = new ArrayList<>();
+		Set<String> seen = new HashSet<>();
+		double subtotal = 0;
+		int i = 0;
+		for (Object o : raw) {
+			i++;
+			if (!(o instanceof Map<?, ?> lm)) throw ApiException.badRequest("รายการที่ " + i + " ไม่ถูกต้อง");
+			@SuppressWarnings("unchecked") Map<String, Object> line = new LinkedHashMap<>((Map<String, Object>) lm);
+			String item = line.get("item") == null ? "" : String.valueOf(line.get("item")).trim();
+			if (item.isEmpty() || "custom".equals(item)) throw ApiException.badRequest("รายการที่ " + i + " ต้องเลือกวัตถุดิบจากทะเบียน (ไม่รองรับรายการพิมพ์เอง เพราะรับของเข้าสต๊อกไม่ได้)");
+			Optional<String> ms = repo.get("materials", item);
+			if (ms.isEmpty()) throw ApiException.badRequest("รายการที่ " + i + " ไม่พบวัตถุดิบ " + item + " ในทะเบียน");
+			Map<String, Object> mat = json.map(ms.get());
+			if (Boolean.FALSE.equals(mat.get("active"))) throw ApiException.badRequest("รายการที่ " + i + " วัตถุดิบ " + item + " ปิดใช้งานแล้ว");
+			if (!seen.add(item)) throw ApiException.badRequest("วัตถุดิบ " + item + " ซ้ำในใบสั่งซื้อเดียวกัน (รายการที่ " + i + ")");
+			double qty = Json.num(line.get("qty")), price = Json.num(line.get("price"));
+			if (!(qty > 0) || Double.isInfinite(qty)) throw ApiException.badRequest("รายการที่ " + i + " จำนวนต้องมากกว่า 0");
+			if (!(price > 0) || Double.isInfinite(price)) throw ApiException.badRequest("รายการที่ " + i + " ราคาต่อหน่วยต้องมากกว่า 0");
+			double amount = r2(qty * price);
+			line.put("item", item);
+			line.put("qty", qty);
+			line.put("price", price);
+			line.put("amount", amount);
+			if (line.get("name") == null || String.valueOf(line.get("name")).isBlank()) line.put("name", mat.get("name"));
+			if (line.get("unit") == null || String.valueOf(line.get("unit")).isBlank()) line.put("unit", mat.get("unit"));
+			subtotal += amount;
+			out.add(line);
+		}
+		double sub = r2(subtotal), vat = r2(sub * 0.07);
+		po.put("lines", out);
+		po.put("items", out.size());
+		po.put("subtotal", sub);
+		po.put("vat", vat);
+		po.put("total", r2(sub + vat));
+	}
+
+	private void validatePOCreate(Map<String, Object> po) {
+		String st = po.get("status") == null ? "pending" : String.valueOf(po.get("status"));
+		if (!PO_CREATE_STATUS.contains(st)) throw ApiException.badRequest("ใบสั่งซื้อใหม่ต้องเริ่มที่สถานะ ร่าง หรือ รออนุมัติ เท่านั้น");
+		po.put("status", st);
+		po.remove("approvedBy"); po.remove("approvedAt"); po.remove("receivedAt"); po.remove("receivedBy"); po.remove("cancel");
+		assertSupplierUsable(po.get("supplier"));
+		validatePOLinesAndTotals(po);
+	}
+
+	private static Map<String, Object> stripMeta(Map<String, Object> m) {
+		Map<String, Object> c = new LinkedHashMap<>(m);
+		c.remove("_version");
+		return c;
+	}
+
+	/** กติกาตอนแก้ไข PO เดิม: cur = ค่าเดิมใน DB, next = ค่าที่จะบันทึก (แก้ค่าใน next ได้) */
+	private void validatePOUpdate(AuthUser u, Map<String, Object> cur, Map<String, Object> next) {
+		String oldSt = String.valueOf(cur.get("status")), newSt = next.get("status") == null ? oldSt : String.valueOf(next.get("status"));
+		if ("received".equals(oldSt) || "cancelled".equals(oldSt)) {
+			if (!same(stripMeta(cur), stripMeta(next))) {
+				throw ApiException.conflict("PO_LOCKED", "ใบสั่งซื้อที่" + ("received".equals(oldSt) ? "รับของแล้ว" : "ยกเลิกแล้ว") + " แก้ไขไม่ได้");
+			}
+			return;
+		}
+		if ("received".equals(newSt)) throw ApiException.conflict("USE_RECEIVE_ACTION", "การรับของต้องทำผ่านปุ่มรับของ (เพิ่มสต๊อกและเปลี่ยนสถานะพร้อมกัน) ไม่สามารถตั้งสถานะรับแล้วโดยตรง");
+		Set<String> allowed = PO_TRANSITIONS.get(oldSt);
+		if (allowed == null || !allowed.contains(newSt)) throw ApiException.conflict("INVALID_TRANSITION", "เปลี่ยนสถานะ PO จาก " + oldSt + " เป็น " + newSt + " ไม่ได้");
+		if ("approved".equals(oldSt)) {
+			for (String k : PO_FROZEN_WHEN_APPROVED) {
+				if (!same(cur.get(k), next.get(k))) throw ApiException.conflict("PO_LOCKED", "ใบสั่งซื้อที่อนุมัติแล้วแก้ไข Supplier/รายการ/ยอดเงินไม่ได้ (ต้องยกเลิกแล้วออกใหม่)");
+			}
+		} else {
+			if (!normKey(cur.get("supplier")).equals(normKey(next.get("supplier")))) assertSupplierUsable(next.get("supplier"));
+			if (!same(cur.get("lines"), next.get("lines"))) validatePOLinesAndTotals(next);
+		}
+		if ("approved".equals(newSt) && !"approved".equals(oldSt)) {
+			next.put("approvedBy", u.fullName());
+			next.put("approvedAt", nowStr());
+		}
+		if ("cancelled".equals(newSt)) {
+			Object c = next.get("cancel");
+			String reason = c instanceof Map<?, ?> cm && cm.get("reason") != null ? String.valueOf(cm.get("reason")).trim() : "";
+			if (reason.isEmpty()) throw ApiException.badRequest("ต้องระบุเหตุผลการยกเลิกใบสั่งซื้อ");
+		}
+	}
+
 	@Transactional
 	public String create(AuthUser u, String coll, Map<String, Object> body) {
 		Collections.Def d = def(coll);
@@ -164,6 +277,7 @@ public class RecordService {
 		body.put("id", id);
 		if (isStockColl(coll)) assertUniqueStockCode(coll, id, body);
 		if (isSupplier(coll)) assertUniqueSupplierCode(id, body);
+		if (isPO(coll)) validatePOCreate(body);
 		try {
 			repo.insert(coll, id, json.str(body), u.username());
 		} catch (DuplicateKeyException e) {
@@ -192,6 +306,17 @@ public class RecordService {
 					assertSupplierCodeNotReferenced(cur.get("code"));
 					assertUniqueSupplierCode(id, body);
 				}
+			}
+		}
+		if (isPO(coll)) {
+			Optional<String> curS = repo.getForUpdate(coll, id);
+			if (curS.isPresent()) {
+				Map<String, Object> cur = json.map(curS.get());
+				Integer curVer = cur.get("_version") instanceof Number n ? n.intValue() : null;
+				if (expected != null && curVer != null && !expected.equals(curVer)) {
+					throw ApiException.conflict("VERSION_CONFLICT", "ข้อมูลถูกแก้ไขโดยผู้อื่นแล้ว กรุณาโหลดใหม่");
+				}
+				validatePOUpdate(u, cur, body);
 			}
 		}
 		if (isStockColl(coll)) {
@@ -239,6 +364,7 @@ public class RecordService {
 				if (!e.getKey().equals("stock") && !same(rec.get(e.getKey()), e.getValue())) throw onlyStockAllowed(u);
 			}
 		}
+		Map<String, Object> before = new LinkedHashMap<>(rec);
 		Object oldCodeRaw = rec.get("code");
 		String oldCode = normKey(oldCodeRaw);
 		java.util.List<String> changed = new java.util.ArrayList<>();
@@ -246,6 +372,7 @@ public class RecordService {
 			if (!java.util.Objects.equals(rec.get(k), v)) changed.add(k);
 			rec.put(k, v);
 		});
+		if (isPO(coll)) validatePOUpdate(u, before, rec);
 		if (isStockColl(coll) && !normKey(rec.get("code")).equals(oldCode)) assertUniqueStockCode(coll, id, rec);
 		if (isSupplier(coll) && !normKey(rec.get("code")).equals(oldCode)) {
 			assertSupplierCodeNotReferenced(oldCodeRaw);
@@ -271,6 +398,9 @@ public class RecordService {
 		Optional<String> cur = repo.getForUpdate(coll, id);
 		if (cur.isEmpty()) throw ApiException.notFound("ไม่พบข้อมูล " + id);
 		Map<String, Object> rec = json.map(cur.get());
+		if (isPO(coll) && Set.of("approved", "received").contains(String.valueOf(rec.get("status")))) {
+			throw ApiException.conflict("DELETE_NOT_ALLOWED", "ลบใบสั่งซื้อที่อนุมัติหรือรับของแล้วไม่ได้ — ใช้การยกเลิกแทน");
+		}
 		repo.delete(coll, id);
 		if (rec.get("counterKey") instanceof String ck && rec.get("seq") instanceof Number sq) {
 			counters.releaseIfLast(ck, sq.intValue());

@@ -1,5 +1,20 @@
 # DEVLOG — PolyMate ERP
 
+## 2026-11-17 · Purchase Order Management + PO Receiving → Stock ✅ (ยังไม่ push / ไม่ deploy)
+อนุมัติขอบเขตโดยผู้ใช้ — ไม่ทำรับบางส่วน/GR เต็มรูปแบบ ไม่เปลี่ยนสถาปัตยกรรม
+
+**สาเหตุที่ stock ไม่เพิ่ม (จาก audit):** ปุ่มรับของเรียก `Store.receivePO` ฝั่งเบราว์เซอร์ แล้วซิงก์ขึ้น server ทีละ record (ไม่อยู่ใน transaction เดียว) ขณะที่ `WorkflowService.receivePO` ฝั่ง server ไม่เคยถูกเรียก, บรรทัดที่จับคู่วัตถุดิบไม่ได้ถูกข้ามเงียบ ๆ แต่ PO ยังถูกเปลี่ยนเป็น received
+
+**สิ่งที่เปลี่ยน**
+- `RecordService`: กฎ PO ฝั่ง server — Supplier ต้องมีและ active, ทุกบรรทัดต้องเลือกวัตถุดิบจากทะเบียน (ไม่ซ้ำ, qty/price > 0), server คำนวณ subtotal/VAT 7%/total เอง, สร้างได้เฉพาะ draft/pending, ลำดับสถานะ, ตั้งสถานะ received ตรง ๆ ไม่ได้, อนุมัติแล้วแก้รายการ/ยอดไม่ได้, ยกเลิกต้องมีเหตุผล, PO ที่ received/cancelled ล็อก, ลบ PO ที่ approved/received ไม่ได้, ประทับผู้อนุมัติ/เวลาโดย server
+- `WorkflowService.receivePO`: จับคู่วัตถุดิบครบทุกบรรทัดก่อน บรรทัดใดจับคู่ไม่ได้ (หรือ qty <= 0 / ไม่มีรายการ) ปฏิเสธทั้งใบ แล้วค่อยเพิ่มสต๊อก + movement (ref = เลข PO) + เปลี่ยนสถานะ + ตั้งเจ้าหนี้ ใน transaction เดียว
+- `store.jsx` / `page-procurement.jsx`: ปุ่มรับของเรียก `POST /actions/purchase-orders/{id}/receive` (รอให้การอนุมัติที่ค้างซิงก์ก่อน แล้วโหลดข้อมูลใหม่), กันกดซ้ำ, ฟอร์ม PO ไม่ให้ส่งบรรทัดพิมพ์เอง
+- Tests: `PurchaseOrderRulesTests` (9 เคส) + ปรับ `ErpApplicationTests`/`SupplierRulesTests` ให้ใช้ PO ที่ถูกต้องตามกฎใหม่
+
+**ผลทดสอบ:** gradlew test — 26 เคสผ่านทั้งหมด (รวมรับของพร้อมกัน 8 request เพิ่มสต๊อกครั้งเดียว, rollback เมื่อบรรทัดจับคู่ไม่ได้, รับซ้ำ/ยกเลิก/ยังไม่อนุมัติ/ไม่มีสิทธิ์ถูกปฏิเสธ)
+**ยังไม่ได้ทดสอบ:** กดปุ่มในหน้าเว็บจริง (UI) — ต้องทดสอบบน UAT หลัง deploy
+**ข้อควรรู้:** PO เก่าที่มีบรรทัดพิมพ์เอง/จับคู่วัตถุดิบไม่ได้ จะรับของไม่ได้ ต้องยกเลิกแล้วออกใหม่
+
 ## 2026-11-14 · UAT-1 Deploy บน EC2 ด้วย Docker ✅
 อนุมัติโดยผู้ใช้: ใช้ PostgreSQL เดิมบนเครื่อง, subdomain `erp.polymateproducts.com`, HTTPS ผ่าน Cloudflare, build image บน EC2 จาก jar (Docker Desktop ในเครื่องพัฒนาเปิดไม่ได้ จึงไม่ใช้ Docker Hub)
 

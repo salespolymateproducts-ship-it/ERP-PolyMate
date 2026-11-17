@@ -170,7 +170,9 @@ class SupplierRulesTests {
 		// ยังไม่มี PO → เปลี่ยนรหัสได้
 		call("PATCH", "/suppliers/S-L1", Map.of("code", "LOCK-1B"), proc, 200);
 		call("PATCH", "/suppliers/S-L1", Map.of("code", "LOCK-1"), proc, 200);
-		call("POST", "/purchaseOrders", Map.of("id", "PO-LOCK-1", "supplier", "LOCK-1", "supplierName", "ผู้ขาย LOCK-1", "total", 100, "status", "pending"), proc, 201);
+		// PO ที่มีอยู่เดิม (เพิ่มตรงเข้า DB เพราะ API ใหม่บังคับให้ PO ต้องมีรายการวัตถุดิบจริง)
+		jdbc.update("insert into erp_records(collection,id,data) values ('purchaseOrders','PO-LOCK-1', ?::jsonb)",
+			"{\"id\":\"PO-LOCK-1\",\"supplier\":\"LOCK-1\",\"supplierName\":\"ผู้ขาย LOCK-1\",\"total\":100,\"status\":\"pending\"}");
 
 		Map<String, Object> cur = call("GET", "/suppliers/S-L1", null, proc, 200);
 		call("PUT", "/suppliers/S-L1", with(cur, "code", "LOCK-2"), proc, 409);

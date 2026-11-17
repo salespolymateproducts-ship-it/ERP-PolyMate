@@ -126,12 +126,29 @@ public class WorkflowService {
 		List<Map<String, Object>> received = new ArrayList<>();
 		Object linesObj = po.get("lines");
 		List<?> lines = linesObj instanceof List<?> l ? l : List.of();
+		if (lines.isEmpty()) throw ApiException.unprocessable("PO_NO_LINES", poId + " ไม่มีรายการสั่งซื้อ รับของเข้าคลังไม่ได้");
+		// ขั้น 1: จับคู่วัตถุดิบให้ครบทุกบรรทัดก่อน — บรรทัดใดจับคู่ไม่ได้ให้ปฏิเสธทั้งใบ (ไม่รับเข้าบางรายการแบบเงียบ ๆ)
+		List<String> matchedIds = new ArrayList<>();
+		List<Double> matchedQty = new ArrayList<>();
+		int idx = 0;
 		for (Object lo : lines) {
-			if (!(lo instanceof Map<?, ?> raw)) continue;
+			idx++;
+			if (!(lo instanceof Map<?, ?> raw)) throw ApiException.unprocessable("PO_LINE_INVALID", poId + " รายการที่ " + idx + " ไม่ถูกต้อง");
 			@SuppressWarnings("unchecked") Map<String, Object> line = (Map<String, Object>) raw;
 			double qty = Json.num(line.get("qty"));
-			Map<String, Object> m = qty > 0 ? matchMaterial(line) : null;
-			if (m == null) continue;
+			String label = Json.s(line.get("name")).isBlank() ? Json.s(line.get("item")) : Json.s(line.get("name"));
+			if (!(qty > 0)) throw ApiException.unprocessable("PO_LINE_INVALID", poId + " รายการที่ " + idx + " (" + label + ") จำนวนต้องมากกว่า 0");
+			Map<String, Object> m = matchMaterial(line);
+			if (m == null) {
+				throw ApiException.unprocessable("MATERIAL_NOT_FOUND", poId + " รายการที่ " + idx + " (" + label + ") ไม่พบวัตถุดิบในทะเบียน จึงรับเข้าคลังไม่ได้ — ไม่มีการรับเข้าสต๊อกรายการใดเลย กรุณาแก้ไขรายการ (ยกเลิก PO แล้วออกใหม่โดยเลือกวัตถุดิบจากทะเบียน)");
+			}
+			matchedIds.add(String.valueOf(m.get("id")));
+			matchedQty.add(qty);
+		}
+		// ขั้น 2: เพิ่มสต๊อก + บันทึก movement (ทั้งหมดอยู่ในธุรกรรมเดียวกับการเปลี่ยนสถานะ PO)
+		for (int k = 0; k < matchedIds.size(); k++) {
+			double qty = matchedQty.get(k);
+			Map<String, Object> m = lock("materials", matchedIds.get(k), "ไม่พบวัตถุดิบ");
 			m.put("stock", Json.r3(Json.num(m.get("stock")) + qty));
 			save("materials", m, u);
 			logMove(u, "IN", Json.s(m.get("code")), qty, Json.s(m.get("unit")), poId, "รับเข้าจาก " + Json.s(po.get("supplierName")));

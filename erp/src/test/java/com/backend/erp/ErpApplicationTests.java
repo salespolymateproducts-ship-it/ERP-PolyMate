@@ -131,8 +131,9 @@ class ErpApplicationTests {
 		call("POST", "/molds", Map.of("id", "MOLD-1", "cavities", 2, "shots", 0), adminToken, 201);
 		call("POST", "/machines", Map.of("id", "INJ-01", "status", "idle"), adminToken, 201);
 		call("POST", "/boms", Map.of("id", "BOM-1", "productCode", "FAN-16", "wasteRate", 0, "lines", List.of(Map.of("item", "MAT-1", "qty", 0.5))), adminToken, 201);
-		call("POST", "/purchaseOrders", Map.of("id", "PO-1", "status", "draft", "supplierName", "S", "subtotal", 1000, "vat", 70,
-			"lines", List.of(Map.of("item", "MAT-1", "name", "PP", "qty", 500))), adminToken, 201);
+		call("POST", "/suppliers", Map.of("id", "SUP-1", "code", "SUP-1", "name", "S", "status", "active"), adminToken, 201);
+		call("POST", "/purchaseOrders", Map.of("id", "PO-1", "status", "draft", "supplier", "SUP-1", "supplierName", "S",
+			"lines", List.of(Map.of("item", "MAT-1", "name", "PP", "qty", 500, "price", 2))), adminToken, 201);
 		call("POST", "/actions/purchase-orders/PO-1/receive", null, adminToken, 422); // ยังไม่อนุมัติ
 		call("PATCH", "/purchaseOrders/PO-1", Map.of("status", "approved"), adminToken, 200);
 		call("POST", "/actions/purchase-orders/PO-1/receive", null, adminToken, 200);

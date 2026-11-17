@@ -357,34 +357,27 @@ const Store = (function () {
       || null;
   }
 
-  // รับของตาม PO → เพิ่มสต๊อก + ตั้งค่าใช้จ่าย (เจ้าหนี้) ในบัญชี
-  function receivePO(poId) {
-    return tx("receivePO", () => {
-      const po = find("purchaseOrders", poId);
-      if (!po) fail("ไม่พบใบสั่งซื้อ " + poId);
-      if (po.status === "received") fail(`${po.id} รับของไปแล้ว`);
-      if (po.status === "cancelled") fail(`${po.id} ถูกยกเลิกแล้ว`);
-      if (po.status !== "approved") fail(`${po.id} ต้องอนุมัติก่อนรับของเข้าคลัง`);
-      const received = [];
-      (po.lines || []).forEach((l) => {
-        const m = _matchMaterial(l);
-        if (m && l.qty > 0) {
-          m.stock = r3(m.stock + l.qty);
-          logMove({ type: "IN", item: m.code, qty: l.qty, unit: m.unit, ref: po.id, note: "รับเข้าจาก " + po.supplierName });
-          received.push({ code: m.code, qty: l.qty, unit: m.unit });
-        }
-      });
-      po.status = "received";
-      po.receivedAt = now(); po.receivedBy = userName();
-      const exp = {
-        id: "EXP-" + po.id, date: today(), category: "วัตถุดิบ", vendor: po.supplierName,
-        desc: `รับของตาม ${po.id} (${(po.lines || []).length} รายการ)`, amount: po.subtotal, vat: po.vat,
-        whtRate: po.whtRate || 0, status: "approved", ref: po.id, due: (() => { const d = new Date(); d.setDate(d.getDate() + 30); return d.toISOString().slice(0, 10); })(),
-      };
-      if (!find("expenses", exp.id)) state.expenses.unshift(exp);
-      log("RECEIVE", "ใบสั่งซื้อ", po.id, `รับเข้าสต๊อก ${received.length} รายการ · ตั้งเจ้าหนี้ ${exp.id}`);
-      return { ok: true, received, expenseId: exp.id };
-    });
+  // รับของตาม PO — ทำฝั่งเซิร์ฟเวอร์ทั้งหมดใน transaction เดียว (เพิ่มสต๊อก + movement + เปลี่ยนสถานะ PO + ตั้งเจ้าหนี้)
+  // ถ้าขั้นตอนใดล้มเหลว เซิร์ฟเวอร์ rollback ทั้งหมด แล้วหน้าจอโหลดข้อมูลจริงจากเซิร์ฟเวอร์ใหม่
+  async function settleSync() {
+    for (let i = 0; i < 100; i++) {
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      if (!flushing) await flush();
+      if (!flushing && !flushTimer && !auditQueue.length) return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  async function receivePO(poId) {
+    if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
+    await settleSync(); // ให้การอนุมัติ PO ที่ค้างอยู่ถึงเซิร์ฟเวอร์ก่อน
+    try {
+      const r = await api("POST", "/actions/purchase-orders/" + encodeURIComponent(poId) + "/receive");
+      await refresh(true);
+      return r;
+    } catch (e) {
+      try { await refresh(true); } catch (e2) { /* ignore */ }
+      throw e;
+    }
   }
 
   // บันทึกผลิต → ตัดวัตถุดิบตาม BOM, รับ FG เข้าสต๊อก, นับ shot แม่พิมพ์, สถานะเครื่อง
