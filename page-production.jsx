@@ -801,9 +801,14 @@ function createPOFromShortage(wo, shortItems) {
       if (!(price > 0)) Store.fail(`วัตถุดิบ ${m.code} ยังไม่เคยซื้อ จึงไม่มีราคาอ้างอิง — กรุณาออก PO ที่หน้าจัดซื้อและกรอกราคา`);
       (bySup[m.supplier || "—"] = bySup[m.supplier || "—"] || []).push({ item: m.id, name: `${m.code} ${m.name}`, qty: need, unit: m.unit, price, amount: Math.round(need * price * 100) / 100 });
     });
+    // จับคู่ผู้ขายแบบเข้มงวด: รหัส หรือชื่อ (ไทย/อังกฤษ) ตรงทั้งชื่อ — ไม่เดาจากคำแรก กันสั่งผิดเจ้า
+    const norm = (v) => String(v || "").trim().toLowerCase();
+    const findSup = (name) => { const k = norm(name); if (!k || k === "—") return null;
+      return Store.state.suppliers.find((s) => s.status !== "inactive" && [s.code, s.name, s.nameEn].some((x) => norm(x) === k)) || null; };
+    const unmatched = [];
     const made = Object.entries(bySup).map(([supName, lines]) => {
-      const sup = Store.state.suppliers.find((s) => s.name.toLowerCase().includes(supName.toLowerCase().split(" ")[0])) || null;
-      if (!sup) Store.fail(`ไม่พบ Supplier "${supName}" ในทะเบียน — กำหนดผู้ขายหลักของวัตถุดิบให้ตรงกับทะเบียน Supplier หรือออก PO ที่หน้าจัดซื้อ`);
+      const sup = findSup(supName);
+      if (!sup) { unmatched.push(supName === "—" ? "(ไม่ระบุผู้ขาย)" : supName); return null; }
       const n = Store.nextDocNo("PO");
       const subtotal = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
       const vat = Math.round(subtotal * 7) / 100;
@@ -814,10 +819,11 @@ function createPOFromShortage(wo, shortItems) {
       Store.state.purchaseOrders.unshift(po);
       Store.log("CREATE", "ใบสั่งซื้อ", po.id, `สร้างจากวัตถุดิบไม่พอของ ${wo.id}`);
       return po.id;
-    });
+    }).filter(Boolean);
+    if (!made.length && unmatched.length) Store.fail(`ไม่พบผู้ขาย ${unmatched.join(", ")} ในทะเบียน Supplier (ต้องตรงรหัสหรือชื่อเต็ม) — แก้ผู้ขายหลักของวัตถุดิบให้ตรงทะเบียน หรือออก PO ที่หน้าจัดซื้อ`);
     if (!made.length) Store.fail(skipped.length ? `วัตถุดิบที่ขาดปิดใช้งานอยู่ (${skipped.join(", ")}) — ไม่สร้างใบสั่งซื้อ กรุณาเปิดใช้งานวัตถุดิบก่อน` : "ไม่มีรายการที่ต้องสั่งซื้อ");
-    return made;
-  }), (ids) => `สร้างใบสั่งซื้อ ${ids.join(", ")} (รออนุมัติ) — ดูได้ที่เมนูใบสั่งซื้อ` + (skipped.length ? ` · ข้าม ${skipped.join(", ")} (ปิดใช้งาน)` : ""));
+    return { ids: made, unmatched };
+  }), (r) => `สร้างใบสั่งซื้อ ${r.ids.join(", ")} (รออนุมัติ) — ดูได้ที่เมนูใบสั่งซื้อ` + (skipped.length ? ` · ข้าม ${skipped.join(", ")} (ปิดใช้งาน)` : "") + (r.unmatched.length ? ` · ยังไม่สร้างของผู้ขาย ${r.unmatched.join(", ")} (ไม่ตรงทะเบียน Supplier)` : ""));
 }
 
 // ต้นทุนวัตถุดิบตามสูตรของใบสั่ง (snapshot) ใช้ต้นทุนถัวเฉลี่ยปัจจุบันของวัตถุดิบในทะเบียน
