@@ -36,6 +36,7 @@ const BOM_TYPE_TH = { resin: "เม็ดพลาสติก", masterbatch: "
 const BOM_STATUS = { draft: { th: "ร่าง", cls: "badge-neutral" }, active: { th: "ใช้งาน", cls: "badge-success" }, inactive: { th: "เลิกใช้", cls: "badge-danger" } };
 
 function bomLineText(l) {
+  if (l.basis === "shareOfResin") return `${_fmt(l.pct, 2)} % ของเม็ดผสม`;
   if (l.pct != null && (l.basis === "pctOfResin" || l.type === "regrind")) return `${_fmt(l.pct, 2)} % ของเม็ด`;
   return `${_fmt(l.qty, 5)} กก./ชิ้น`;
 }
@@ -155,7 +156,7 @@ function BomCompare({ productCode }) {
                 <tr key={it.item}>
                   <td><div style={{ fontWeight: 500 }}>{it.name}</div><div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{it.item} · {BOM_TYPE_TH[it.type] || it.type}</div></td>
                   {qs.map((l, i) => (
-                    <td key={i} className="num">{l ? <>{_fmt(l.qty, 5)} <span style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>กก.</span>{l.pct != null ? <div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{_fmt(l.pct, 2)} % ของเม็ด</div> : null}{i > 0 && fmtDiff(l.qty, qs[0] ? qs[0].qty : 0, 5)}</> : <span style={{ color: "var(--text-tertiary)" }}>—</span>}</td>
+                    <td key={i} className="num">{l ? <>{_fmt(l.qty, 5)} <span style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>กก.</span>{l.pct != null ? <div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{_fmt(l.pct, 2)} % ของเม็ด{l.basis === "shareOfResin" ? "ผสม" : ""}</div> : null}{i > 0 && fmtDiff(l.qty, qs[0] ? qs[0].qty : 0, 5)}</> : <span style={{ color: "var(--text-tertiary)" }}>—</span>}</td>
                   ))}
                 </tr>
               );
@@ -246,12 +247,14 @@ function BomCard({ b, canEdit, onEdit, onCopy, onActivate, onDeactivate, onDefau
 
 function BomForm({ mode, rec, onCancel, onDone }) {
   const editing = mode === "edit";
-  const toLine = (l) => ({ item: l.item, type: l.type, basis: l.type === "regrind" ? "pctOfResin" : (l.basis || "perPiece"), value: String(l.basis === "pctOfResin" || l.type === "regrind" ? l.pct : l.qty) });
+  const toLine = (l) => ({ item: l.item, type: l.type, basis: l.type === "regrind" ? "pctOfResin" : (l.basis || "perPiece"), value: String(l.basis === "pctOfResin" || l.basis === "shareOfResin" || l.type === "regrind" ? l.pct : l.qty) });
+  const isMix0 = !!(rec && (rec.lines || []).some((l) => l.type === "resin" && l.basis === "shareOfResin"));
   const [f, setF] = useState(rec ? {
+    resinMix: isMix0, resinWeight: isMix0 ? String(rec.resinWeight || "") : "",
     productCode: rec.productCode, name: mode === "copy" ? rec.name + " (สำเนา)" : rec.name, color: rec.color || "", mold: rec.mold || "",
     status: mode === "copy" ? "draft" : rec.status, wasteRate: String(rec.wasteRate || 0), packaging: rec.packaging || "",
     lines: (rec.lines || []).map(toLine),
-  } : { productCode: "", name: "", color: "", mold: "", status: "draft", wasteRate: "0", packaging: "", lines: [{ item: "", type: "resin", basis: "perPiece", value: "" }] });
+  } : { resinMix: false, resinWeight: "", productCode: "", name: "", color: "", mold: "", status: "draft", wasteRate: "0", packaging: "", lines: [{ item: "", type: "resin", basis: "perPiece", value: "" }] });
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
   const [changeReason, setChangeReason] = useState("");
@@ -261,7 +264,11 @@ function BomForm({ mode, rec, onCancel, onDone }) {
 
   // ตัวอย่างการคำนวณสด (ตามกติกาเดียวกับ server)
   const draft = { lines: f.lines.filter((l) => l.item).map((l) => ({ item: l.item, name: (Store.state.materials.find((m) => m.id === l.item) || {}).name || l.item, type: l.type, basis: l.basis,
-    qty: l.basis === "perPiece" ? parseFloat(l.value) || 0 : undefined, pct: l.basis === "pctOfResin" ? parseFloat(l.value) || 0 : undefined })), wasteRate: parseFloat(f.wasteRate) || 0 };
+    qty: l.basis === "perPiece" ? parseFloat(l.value) || 0 : undefined, pct: l.basis !== "perPiece" ? parseFloat(l.value) || 0 : undefined })), wasteRate: parseFloat(f.wasteRate) || 0,
+    resinWeight: f.resinMix ? parseFloat(f.resinWeight) || 0 : undefined };
+  const shareSum = f.lines.filter((l) => l.type === "resin").reduce((t, l) => t + (parseFloat(l.value) || 0), 0);
+  // เปิด/ปิดโหมดเม็ดผสม: เปลี่ยนวิธีกำหนดของทุกบรรทัดเม็ดพร้อมกัน
+  const setMix = (on) => setF((x) => ({ ...x, resinMix: on, lines: x.lines.map((l) => l.type === "resin" ? { ...l, basis: on ? "shareOfResin" : "perPiece", value: "" } : l) }));
   const resolved = Store.bomResolve(draft);
   const cost = Store.bomCost({ lines: resolved, wasteRate: draft.wasteRate });
 
@@ -277,6 +284,11 @@ function BomForm({ mode, rec, onCancel, onDone }) {
       const v = parseFloat(l.value);
       if (!(v > 0)) return setErr("รายการที่ " + (i + 1) + " ต้องกรอกปริมาณมากกว่า 0");
       if (l.basis === "pctOfResin" && !(v < 100)) return setErr("รายการที่ " + (i + 1) + " สัดส่วนต้องน้อยกว่า 100%");
+      if (l.basis === "shareOfResin" && !(v <= 100)) return setErr("รายการที่ " + (i + 1) + " สัดส่วนเม็ดต้องไม่เกิน 100%");
+    }
+    if (f.resinMix) {
+      if (!(parseFloat(f.resinWeight) > 0)) return setErr("กรุณากรอกน้ำหนักเม็ดรวมต่อชิ้น (กก./ชิ้น)");
+      if (Math.abs(shareSum - 100) > 1e-6) return setErr("สัดส่วนเม็ดรวมต้องเท่ากับ 100 % พอดี (ตอนนี้ " + _fmt(shareSum, 2) + " %)");
     }
     const lines = f.lines.map((l) => {
       const m = Store.state.materials.find((x) => x.id === l.item);
@@ -285,6 +297,7 @@ function BomForm({ mode, rec, onCancel, onDone }) {
     });
     const body = { ...(editing ? rec : {}), productCode: f.productCode, name: f.name.trim(), color: f.color.trim(), mold: f.mold, status: f.status,
       wasteRate: parseFloat(f.wasteRate) || 0, packaging: f.packaging.trim(), lines };
+    if (f.resinMix) body.resinWeight = parseFloat(f.resinWeight); else delete body.resinWeight;
     if (editing) body.changeReason = changeReason.trim();
     if (!editing) {
       let n = Store.state.boms.filter((b) => b.productCode === f.productCode).length + 1;
@@ -347,6 +360,14 @@ function BomForm({ mode, rec, onCancel, onDone }) {
       </div>
 
       <label className="field-label" style={{ marginTop: 16 }}>รายการวัตถุดิบ *</label>
+      <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 8, fontSize: 12.5 }}>
+        <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
+          <input type="checkbox" checked={f.resinMix} onChange={(e) => setMix(e.target.checked)}/> ผสมเม็ดหลายเกรด (กำหนดเป็น % ของเม็ดรวม เช่น PP1100 80% + PP4510 20%)
+        </label>
+        {f.resinMix && <label style={{ display: "flex", gap: 6, alignItems: "center" }}>น้ำหนักเม็ดรวม/ชิ้น (ไม่รวมมาสเตอร์แบตช์)
+          <input type="number" step="any" min="0" className="input num" style={{ width: 100, height: 32, textAlign: "right" }} value={f.resinWeight} onChange={(e) => set("resinWeight", e.target.value)}/> กก.</label>}
+        {f.resinMix && <span style={{ color: Math.abs(shareSum - 100) > 1e-6 ? "var(--danger)" : "var(--success)" }}>สัดส่วนเม็ดรวม {_fmt(shareSum, 2)} % {Math.abs(shareSum - 100) > 1e-6 ? "(ต้องเป็น 100)" : "✓"}</span>}
+      </div>
       <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginBottom: 6 }}>เม็ดพลาสติกกรอกเป็น กก./ชิ้น · มาสเตอร์แบตช์/สารเติมแต่งกรอกเป็น กก./ชิ้น หรือ % ของน้ำหนักเม็ดก็ได้ · เศษรีไซเคิลกรอกเป็น % ของเม็ด (แทนเม็ดใหม่) — ถ้าจะใช้ ให้สร้างวัตถุดิบ "เศษบด" ในคลังก่อน</div>
       <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 90px 90px 28px", gap: 8, padding: "8px 10px", background: "var(--bg-subtle)", fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>
@@ -359,14 +380,14 @@ function BomForm({ mode, rec, onCancel, onDone }) {
               {mats.map((m) => <option key={m.id} value={m.id}>{m.code} · {m.name}</option>)}
             </select>
             <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.type}
-              onChange={(e) => { const t = e.target.value; setLine(i, { type: t, basis: t === "regrind" ? "pctOfResin" : t === "resin" ? "perPiece" : l.basis }); }}>
+              onChange={(e) => { const t = e.target.value; setLine(i, { type: t, basis: t === "regrind" ? "pctOfResin" : t === "resin" ? (f.resinMix ? "shareOfResin" : "perPiece") : (l.basis === "shareOfResin" ? "pctOfResin" : l.basis) }); }}>
               {Object.entries(BOM_TYPE_TH).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>
             {l.type === "masterbatch" || l.type === "additive"
               ? <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.basis} onChange={(e) => setLine(i, { basis: e.target.value })}>
                   <option value="perPiece">กก./ชิ้น</option><option value="pctOfResin">% ของเม็ด</option>
                 </select>
-              : <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{l.type === "regrind" ? "% ของเม็ด" : "กก./ชิ้น"}</div>}
+              : <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{l.type === "regrind" ? "% ของเม็ด" : l.type === "resin" ? (f.resinMix ? "% ของเม็ดรวม" : "กก./ชิ้น") : "กก./ชิ้น"}</div>}
             <input type="number" step="any" min="0" className="input num" style={{ height: 34, textAlign: "right" }} value={l.value} onChange={(e) => setLine(i, { value: e.target.value })}/>
             <div className="num" style={{ textAlign: "right", fontSize: 12 }}>{_fmt((resolved[draft.lines.findIndex((d) => d.item === l.item && d.type === l.type)] || {}).qty || 0, 5)}</div>
             <button type="button" className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => set("lines", f.lines.length > 1 ? f.lines.filter((_, idx) => idx !== i) : f.lines)} title="ลบ"><I.X size={13}/></button>

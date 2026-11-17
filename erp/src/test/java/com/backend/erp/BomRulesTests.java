@@ -433,4 +433,40 @@ class BomRulesTests {
 		call("POST", url, Map.of("adjustments", List.of(Map.of("item", "MB-BK", "pct", 1)), "reason", "x"), prod, 409);
 		assertEquals(1, jdbc.queryForObject("select count(*)::int from erp_audit_logs where action='BOM_ADJUST' and detail like '%ปรับก่อนผลิต%'", Integer.class));
 	}
+
+	static Map<String, Object> share(String item, double p) {
+		Map<String, Object> l = new LinkedHashMap<>();
+		l.put("item", item); l.put("type", "resin"); l.put("basis", "shareOfResin"); l.put("pct", p);
+		return l;
+	}
+
+	@SuppressWarnings("unchecked")
+	@Test @Order(12)
+	void blendedResinShares() throws Exception {
+		call("POST", "/finished", fg("P-BLEND"), admin, 201);
+		List<Map<String, Object>> ok = List.of(share("R-ABS", 80), share("R-PC", 20), pct("MB-BK", "masterbatch", 2));
+		Map<String, Object> good = with(bom("B-BLEND", "P-BLEND", "active", ok), "resinWeight", 0.02);
+		// ผลรวมไม่ใช่ 100 / ไม่มีน้ำหนักเม็ดรวม / ปนกับ กก./ชิ้น → ปฏิเสธ
+		call("POST", "/boms", with(bom("B-BLEND-X1", "P-BLEND", "active", List.of(share("R-ABS", 80), share("R-PC", 10))), "resinWeight", 0.02), prod, 400);
+		call("POST", "/boms", bom("B-BLEND-X2", "P-BLEND", "active", ok), prod, 400);
+		call("POST", "/boms", with(bom("B-BLEND-X3", "P-BLEND", "active", List.of(share("R-ABS", 100), resin("R-PC", 0.01))), "resinWeight", 0.02), prod, 400);
+		call("POST", "/boms", good, prod, 201);
+		call("POST", "/workOrders", with(wo("WO-BLEND", "P-BLEND", 100), "bomId", "B-BLEND"), prod, 201);
+		assertEquals(0.016, snapQty("WO-BLEND", "R-ABS"), 1e-9);    // 0.02 x 80%
+		assertEquals(0.004, snapQty("WO-BLEND", "R-PC"), 1e-9);     // 0.02 x 20%
+		assertEquals(0.0004, snapQty("WO-BLEND", "MB-BK"), 1e-9);   // มาสเตอร์แบตช์ 2% ของเม็ดรวม
+		String url = "/actions/work-orders/WO-BLEND/bom-adjust";
+		// ปรับสัดส่วนเม็ดรายใบ: ต้องครบ 100% เสมอ
+		call("POST", url, Map.of("adjustments", List.of(Map.of("item", "R-ABS", "pct", 70)), "reason", "x"), prod, 400);
+		call("POST", url, Map.of("adjustments", List.of(Map.of("item", "R-ABS", "pct", 70), Map.of("item", "R-PC", "pct", 40)), "reason", "x"), prod, 400);
+		call("POST", url, Map.of("adjustments", List.of(Map.of("item", "R-ABS", "pct", 70), Map.of("item", "R-PC", "pct", 30)), "reason", "เพิ่มความเหนียว"), prod, 200);
+		assertEquals(0.014, snapQty("WO-BLEND", "R-ABS"), 1e-9);
+		assertEquals(0.006, snapQty("WO-BLEND", "R-PC"), 1e-9);
+		assertEquals(0.0004, snapQty("WO-BLEND", "MB-BK"), 1e-9);   // น้ำหนักเม็ดรวมไม่เปลี่ยน
+		// ตัดวัตถุดิบตามสัดส่วนที่ปรับ
+		double abs0 = stockOf("materials", "R-ABS"), pc0 = stockOf("materials", "R-PC");
+		call("POST", "/actions/work-orders/WO-BLEND/produce", Map.of("produced", 50, "ng", 0), prod, 200);
+		assertEquals(abs0 - 0.7, stockOf("materials", "R-ABS"), 1e-6);
+		assertEquals(pc0 - 0.3, stockOf("materials", "R-PC"), 1e-6);
+	}
 }

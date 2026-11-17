@@ -494,24 +494,30 @@ function _reservedByOthers(materialId, currentWoId) {
 function AdjustBomModal({ wo, onClose }) {
   const snap = wo.bomSnapshot;
   const base = snap.baseLines || [];
-  const adjustable = base.filter((l) => l.type !== "resin");
-  const isPct = (l) => l.type === "regrind" || l.basis === "pctOfResin";
+  const isShare = (l) => l.type === "resin" && l.basis === "shareOfResin";
+  const canAdj = (l) => l.type !== "resin" || isShare(l);
+  const adjustable = base.filter(canAdj);
+  const isPct = (l) => isShare(l) || l.type === "regrind" || l.basis === "pctOfResin";
   const key = (l) => isPct(l) ? "pct" : "qty";
   const cur = (l) => { const x = (snap.lines || []).find((y) => y.item === l.item); return x && x[key(l)] != null ? x[key(l)] : l[key(l)]; };
   const [vals, setVals] = useState(() => Object.fromEntries(adjustable.map((l) => [l.item, String(cur(l))])));
   const [reason, setReason] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const edited = base.map((l) => (l.type === "resin" || vals[l.item] === undefined || !(parseFloat(vals[l.item]) > 0)) ? l : { ...l, [key(l)]: parseFloat(vals[l.item]) });
-  const resolved = Store.bomResolve({ lines: edited });
-  const baseResolved = Store.bomResolve({ lines: base });
+  const edited = base.map((l) => (!canAdj(l) || vals[l.item] === undefined || !(parseFloat(vals[l.item]) > 0)) ? l : { ...l, [key(l)]: parseFloat(vals[l.item]) });
+  const resolved = Store.bomResolve({ lines: edited, resinWeight: snap.baseResinWeight });
+  const baseResolved = Store.bomResolve({ lines: base, resinWeight: snap.baseResinWeight });
+  const shareLines = adjustable.filter(isShare);
+  const shareSum = shareLines.reduce((t, l) => t + (parseFloat(vals[l.item]) || 0), 0);
+  const shareBad = shareLines.length > 0 && Math.abs(shareSum - 100) > 1e-6;
   const wasteRate = Number(snap.wasteRate) || 0;
   const costNew = Store.bomCost({ lines: resolved, wasteRate }).perPiece, costBase = Store.bomCost({ lines: baseResolved, wasteRate }).perPiece;
   const diffs = adjustable.filter((l) => Math.abs((parseFloat(vals[l.item]) || 0) - Number(l[key(l)])) > 1e-9);
   const hadAdj = !!(snap.adjustments && snap.adjustments.length);
   const submit = async () => {
     setErr("");
-    for (const l of adjustable) { const v = parseFloat(vals[l.item]); if (!(v > 0) || (isPct(l) && !(v < 100))) return setErr("ค่าของ " + (l.name || l.item) + " ต้องมากกว่า 0" + (isPct(l) ? " และน้อยกว่า 100 %" : "")); }
+    if (shareBad) return setErr("สัดส่วนเม็ดรวมต้องเท่ากับ 100 % พอดี (ตอนนี้ " + _fmt(shareSum, 2) + " %)");
+    for (const l of adjustable) { const v = parseFloat(vals[l.item]); if (!(v > 0) || (isPct(l) && !(v <= 100))) return setErr("ค่าของ " + (l.name || l.item) + " ต้องมากกว่า 0" + (isPct(l) ? " และน้อยกว่า 100 %" : "")); }
     setBusy(true);
     try {
       await Store.adjustWoBom(wo.id, diffs.map((l) => ({ item: l.item, [key(l)]: parseFloat(vals[l.item]) })), reason.trim());
@@ -523,15 +529,15 @@ function AdjustBomModal({ wo, onClose }) {
     <ErpModal title={"ปรับสัดส่วนสูตร · " + wo.id} onClose={onClose} width={640}
       footer={<>
         <button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button>
-        <button className="btn btn-primary btn-sm" disabled={busy || !reason.trim() || (!diffs.length && !hadAdj)} onClick={submit}>{diffs.length ? "บันทึกการปรับ" : "คืนค่าตามสูตร"}</button>
+        <button className="btn btn-primary btn-sm" disabled={busy || shareBad || !reason.trim() || (!diffs.length && !hadAdj)} onClick={submit}>{diffs.length ? "บันทึกการปรับ" : "คืนค่าตามสูตร"}</button>
       </>}>
-      <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 10 }}>ปรับเฉพาะใบสั่งผลิตนี้ — ไม่กระทบสูตรหลักและใบอื่น ปรับได้ก่อนเริ่มผลิตเท่านั้น และปรับได้เฉพาะมาสเตอร์แบตช์ สารเติมแต่ง และเศษรีไซเคิล</div>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 10 }}>ปรับเฉพาะใบสั่งผลิตนี้ — ไม่กระทบสูตรหลักและใบอื่น ปรับได้ก่อนเริ่มผลิตเท่านั้น และปรับได้เฉพาะมาสเตอร์แบตช์ สารเติมแต่ง เศษรีไซเคิล และสัดส่วนเม็ดผสม (ผลรวมต้องเป็น 100 %)</div>
       <table className="table" style={{ fontSize: 12.5 }}>
         <thead><tr><th>วัตถุดิบ</th><th className="num">ตามสูตร</th><th className="num">ใบนี้</th><th className="num">กก./ชิ้น</th></tr></thead>
         <tbody>
           {base.map((l, i) => {
             const rl = resolved[i] || {};
-            const adj = l.type !== "resin";
+            const adj = canAdj(l);
             return (
               <tr key={l.item}>
                 <td><div style={{ fontWeight: 500 }}>{l.name}</div><div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{l.item} · {{ resin: "เม็ดพลาสติก", masterbatch: "มาสเตอร์แบตช์", additive: "สารเติมแต่ง", regrind: "เศษรีไซเคิล" }[l.type]}</div></td>
@@ -545,6 +551,7 @@ function AdjustBomModal({ wo, onClose }) {
           })}
         </tbody>
       </table>
+      {shareLines.length > 0 && <div style={{ marginTop: 8, fontSize: 12.5, color: shareBad ? "var(--danger)" : "var(--success)" }}>สัดส่วนเม็ดรวม {_fmt(shareSum, 2)} % {shareBad ? "— ต้องเท่ากับ 100 %" : "✓"}</div>}
       <div style={{ marginTop: 10, padding: 10, background: "var(--bg-subtle)", borderRadius: 8, fontSize: 12.5 }}>
         ต้นทุนวัสดุ/ชิ้น: ตามสูตร <b>{costBase > 0 ? "฿" + _fmt(costBase, 4) : "—"}</b> → ใบนี้ <b>{costNew > 0 ? "฿" + _fmt(costNew, 4) : "—"}</b>
         {costBase > 0 && costNew > 0 && Math.abs(costNew - costBase) > 1e-9 && <span style={{ color: costNew > costBase ? "var(--danger)" : "var(--success)" }}> ({costNew > costBase ? "+" : "−"}{_fmt(Math.abs(costNew - costBase), 4)})</span>}

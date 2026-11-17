@@ -66,21 +66,29 @@ public class BomService {
 
 	// ---------- คำนวณปริมาณต่อชิ้น ----------
 
+	/** เม็ดผสม: basis = shareOfResin → pct คือสัดส่วน % ของน้ำหนักเม็ดรวม (resinWeight กก./ชิ้น ไม่รวมมาสเตอร์แบตช์) */
+	static final String SHARE = "shareOfResin";
+
+	private static double resinQty(Map<String, Object> l, double resinWeight) {
+		return SHARE.equals(Json.s(l.get("basis"))) ? resinWeight * Json.num(l.get("pct")) / 100d : Json.num(l.get("qty"));
+	}
+
 	/** แปลงบรรทัด BOM (qty หรือ pct) เป็นปริมาณ กก./ชิ้น ที่ใช้จริง */
 	@SuppressWarnings("unchecked")
 	public static List<Map<String, Object>> resolveLines(Map<String, Object> bom) {
 		List<Map<String, Object>> in = new ArrayList<>();
 		if (bom.get("lines") instanceof List<?> l) for (Object o : l) if (o instanceof Map<?, ?> m) in.add((Map<String, Object>) m);
+		double resinWeight = Json.num(bom.get("resinWeight"));
 		double resinTotal = 0, regrindPct = 0;
 		for (Map<String, Object> l : in) {
-			if ("resin".equals(Json.s(l.get("type")))) resinTotal += Json.num(l.get("qty"));
+			if ("resin".equals(Json.s(l.get("type")))) resinTotal += resinQty(l, resinWeight);
 			if ("regrind".equals(Json.s(l.get("type")))) regrindPct += Json.num(l.get("pct"));
 		}
 		List<Map<String, Object>> out = new ArrayList<>();
 		for (Map<String, Object> l : in) {
 			String type = Json.s(l.get("type")), basis = Json.s(l.get("basis"));
 			double q;
-			if ("resin".equals(type)) q = Json.num(l.get("qty")) * (1 - regrindPct / 100d);
+			if ("resin".equals(type)) q = resinQty(l, resinWeight) * (1 - regrindPct / 100d);
 			else if ("pctOfResin".equals(basis) || "regrind".equals(type)) q = resinTotal * Json.num(l.get("pct")) / 100d;
 			else q = Json.num(l.get("qty"));
 			Map<String, Object> r = new LinkedHashMap<>();
@@ -88,7 +96,7 @@ public class BomService {
 			r.put("name", l.get("name"));
 			r.put("type", type);
 			r.put("basis", "regrind".equals(type) ? "pctOfResin" : basis);
-			if ("pctOfResin".equals(basis) || "regrind".equals(type)) r.put("pct", Json.num(l.get("pct")));
+			if (SHARE.equals(basis) || "pctOfResin".equals(basis) || "regrind".equals(type)) r.put("pct", Json.num(l.get("pct")));
 			r.put("qty", r6(q));
 			r.put("unit", "KG/PCS");
 			out.add(r);
@@ -108,6 +116,7 @@ public class BomService {
 		s.put("lines", resolveLines(bom));
 		// สูตรตั้งต้น (ก่อนปรับสัดส่วนรายใบ) — ใช้คำนวณใหม่เมื่อปรับ % ของใบสั่งผลิต
 		s.put("baseLines", bom.get("lines"));
+		if (bom.get("resinWeight") != null) s.put("baseResinWeight", Json.num(bom.get("resinWeight")));
 		return s;
 	}
 
@@ -163,6 +172,7 @@ public class BomService {
 			he.put("color", cur.get("color"));
 			he.put("wasteRate", Json.num(cur.get("wasteRate")));
 			he.put("lines", cur.get("lines"));
+			if (cur.get("resinWeight") != null) he.put("resinWeight", cur.get("resinWeight"));
 			he.put("by", u.fullName());
 			he.put("at", nowStr());
 			he.put("reason", why);
@@ -203,6 +213,7 @@ public class BomService {
 	private static Object resolveCore(Map<String, Object> b) {
 		Map<String, Object> c = new LinkedHashMap<>();
 		c.put("lines", b.get("lines"));
+		c.put("resinWeight", b.get("resinWeight") == null ? 0 : Json.num(b.get("resinWeight")));
 		c.put("wasteRate", Json.num(b.get("wasteRate")));
 		c.put("name", b.get("name"));
 		c.put("color", b.get("color"));
@@ -215,8 +226,8 @@ public class BomService {
 		List<Object> out = new ArrayList<>();
 		Set<String> seen = new HashSet<>();
 		boolean hasResin = false;
-		double regrindPct = 0;
-		int i = 0;
+		double regrindPct = 0, shareSum = 0;
+		int i = 0, shareLines = 0, resinLines = 0;
 		for (Object o : raw) {
 			i++;
 			if (!(o instanceof Map<?, ?> lm)) throw ApiException.badRequest("รายการที่ " + i + " ไม่ถูกต้อง");
@@ -230,11 +241,19 @@ public class BomService {
 			if (!seen.add(item)) throw ApiException.badRequest("วัตถุดิบ " + item + " ซ้ำในสูตรเดียวกัน (รายการที่ " + i + ")");
 			String type = Json.s(l.get("type"));
 			if (!TYPES.contains(type)) throw ApiException.badRequest("รายการที่ " + i + " ชนิดต้องเป็น เม็ดพลาสติก / มาสเตอร์แบตช์ / สารเติมแต่ง / เศษรีไซเคิล");
-			String basis = "regrind".equals(type) ? "pctOfResin" : ("resin".equals(type) ? "perPiece" : (l.get("basis") == null ? "perPiece" : Json.s(l.get("basis"))));
-			if (!basis.equals("perPiece") && !basis.equals("pctOfResin")) throw ApiException.badRequest("รายการที่ " + i + " วิธีกำหนดปริมาณไม่ถูกต้อง");
+			String basis = "regrind".equals(type) ? "pctOfResin"
+				: ("resin".equals(type) ? (SHARE.equals(Json.s(l.get("basis"))) ? SHARE : "perPiece") : (l.get("basis") == null ? "perPiece" : Json.s(l.get("basis"))));
+			if (!basis.equals("perPiece") && !basis.equals("pctOfResin") && !basis.equals(SHARE)) throw ApiException.badRequest("รายการที่ " + i + " วิธีกำหนดปริมาณไม่ถูกต้อง");
 			l.put("type", type);
 			l.put("basis", basis);
-			if (basis.equals("perPiece")) {
+			if (basis.equals(SHARE)) {
+				double p = Json.num(l.get("pct"));
+				if (!(p > 0 && p <= 100)) throw ApiException.badRequest("รายการที่ " + i + " สัดส่วนเม็ดต้องมากกว่า 0 และไม่เกิน 100 %");
+				l.put("pct", p);
+				l.remove("qty");
+				shareSum += p;
+				shareLines++;
+			} else if (basis.equals("perPiece")) {
 				double q = Json.num(l.get("qty"));
 				if (!(q > 0) || Double.isInfinite(q)) throw ApiException.badRequest("รายการที่ " + i + " ปริมาณต่อชิ้นต้องมากกว่า 0");
 				l.put("qty", q);
@@ -245,7 +264,7 @@ public class BomService {
 				l.put("pct", p);
 				l.remove("qty");
 			}
-			if ("resin".equals(type)) hasResin = true;
+			if ("resin".equals(type)) { hasResin = true; resinLines++; }
 			if ("regrind".equals(type)) regrindPct += Json.num(l.get("pct"));
 			l.put("name", Json.s(l.get("name")).isBlank() ? mat.get("name") : l.get("name"));
 			l.put("unit", "KG/PCS");
@@ -253,6 +272,16 @@ public class BomService {
 		}
 		if (!hasResin) throw ApiException.badRequest("BOM ต้องมีเม็ดพลาสติก (resin) อย่างน้อย 1 รายการ");
 		if (regrindPct >= 100) throw ApiException.badRequest("สัดส่วนเศษรีไซเคิลรวมต้องน้อยกว่า 100 %");
+		if (shareLines > 0) {
+			// เม็ดผสมเป็น % : ทุกบรรทัดเม็ดต้องกำหนดเป็น % ของเม็ดรวม, ผลรวม = 100 และต้องมีน้ำหนักเม็ดรวมต่อชิ้น
+			if (shareLines != resinLines) throw ApiException.badRequest("เม็ดพลาสติกทุกรายการต้องกำหนดเป็น % ของเม็ดรวมเหมือนกัน (ห้ามปนกับ กก./ชิ้น)");
+			if (Math.abs(shareSum - 100) > 1e-6) throw ApiException.badRequest("สัดส่วนเม็ดรวมต้องเท่ากับ 100 % พอดี (ตอนนี้ " + shareSum + " %)");
+			double rw = Json.num(bom.get("resinWeight"));
+			if (!(rw > 0) || Double.isInfinite(rw)) throw ApiException.badRequest("ต้องระบุน้ำหนักเม็ดรวมต่อชิ้น (กก./ชิ้น) มากกว่า 0");
+			bom.put("resinWeight", rw);
+		} else {
+			bom.remove("resinWeight");
+		}
 		bom.put("lines", out);
 	}
 
@@ -324,11 +353,12 @@ public class BomService {
 			if (!touched.add(item)) throw ApiException.badRequest("วัตถุดิบ " + item + " ซ้ำในรายการปรับ");
 			Map<String, Object> l = lines.stream().filter(x -> item.equals(Json.s(x.get("item")))).findFirst().orElseThrow(() -> ApiException.badRequest("ไม่พบวัตถุดิบ " + item + " ในสูตรของใบนี้"));
 			String type = Json.s(l.get("type"));
-			if ("resin".equals(type)) throw ApiException.badRequest("ปรับสัดส่วนเม็ดพลาสติกหลักไม่ได้ — ปรับได้เฉพาะมาสเตอร์แบตช์ สารเติมแต่ง และเศษรีไซเคิล");
-			boolean pct = "regrind".equals(type) || "pctOfResin".equals(Json.s(l.get("basis")));
+			boolean share = SHARE.equals(Json.s(l.get("basis")));
+			if ("resin".equals(type) && !share) throw ApiException.badRequest("ปรับเม็ดพลาสติกได้เฉพาะสูตรที่กำหนดเม็ดผสมเป็น % — เม็ดที่กำหนดเป็น กก./ชิ้น ปรับไม่ได้");
+			boolean pct = share || "regrind".equals(type) || "pctOfResin".equals(Json.s(l.get("basis")));
 			String key = pct ? "pct" : "qty";
 			double v = Json.num(a.get(key));
-			if (!(v > 0) || Double.isInfinite(v) || (pct && v >= 100)) throw ApiException.badRequest("ค่าของ " + item + " ต้องมากกว่า 0" + (pct ? " และน้อยกว่า 100 %" : ""));
+			if (!(v > 0) || Double.isInfinite(v) || (pct && (share ? v > 100 : v >= 100))) throw ApiException.badRequest("ค่าของ " + item + " ต้องมากกว่า 0" + (pct ? " และน้อยกว่า 100 %" : ""));
 			double from = Json.num(l.get(key));
 			if (Math.abs(from - v) < 1e-9) continue;
 			l.put(key, v);
@@ -339,8 +369,12 @@ public class BomService {
 		double rg = 0;
 		for (Map<String, Object> l : lines) if ("regrind".equals(Json.s(l.get("type")))) rg += Json.num(l.get("pct"));
 		if (rg >= 100) throw ApiException.badRequest("สัดส่วนเศษรีไซเคิลรวมต้องน้อยกว่า 100 %");
+		double ss = 0; boolean anyShare = false;
+		for (Map<String, Object> l : lines) if (SHARE.equals(Json.s(l.get("basis")))) { anyShare = true; ss += Json.num(l.get("pct")); }
+		if (anyShare && Math.abs(ss - 100) > 1e-6) throw ApiException.badRequest("สัดส่วนเม็ดรวมต้องเท่ากับ 100 % พอดี (ตอนนี้ " + r6(ss) + " %)");
 		Map<String, Object> tmp = new LinkedHashMap<>();
 		tmp.put("lines", lines);
+		if (snap.get("baseResinWeight") != null) tmp.put("resinWeight", snap.get("baseResinWeight"));
 		snap.put("lines", resolveLines(tmp));
 		if (changes.isEmpty()) { snap.remove("adjustments"); snap.remove("adjustReason"); snap.remove("adjustBy"); snap.remove("adjustAt"); }
 		else { snap.put("adjustments", changes); snap.put("adjustReason", why); snap.put("adjustBy", u.fullName()); snap.put("adjustAt", nowStr()); }

@@ -416,12 +416,15 @@ const Store = (function () {
   // แปลงบรรทัดสูตร (กก./ชิ้น หรือ % ของเม็ด) เป็นปริมาณ กก./ชิ้น ที่ใช้จริง — ต้องตรงกับ BomService ฝั่ง server
   function bomResolve(bom) {
     const lines = bom.lines || [];
-    const resinTotal = lines.filter((l) => l.type === "resin").reduce((t, l) => t + (Number(l.qty) || 0), 0);
+    const rw = Number(bom.resinWeight ?? bom.baseResinWeight) || 0;
+    const isShare = (l) => l.type === "resin" && l.basis === "shareOfResin";
+    const resinQty = (l) => isShare(l) ? rw * (Number(l.pct) || 0) / 100 : (Number(l.qty) || 0);
+    const resinTotal = lines.filter((l) => l.type === "resin").reduce((t, l) => t + resinQty(l), 0);
     const regrindPct = lines.filter((l) => l.type === "regrind").reduce((t, l) => t + (Number(l.pct) || 0), 0);
     return lines.map((l) => {
-      const pctBasis = l.type === "regrind" || l.basis === "pctOfResin";
+      const pctBasis = isShare(l) || l.type === "regrind" || l.basis === "pctOfResin";
       let q;
-      if (l.type === "resin") q = (Number(l.qty) || 0) * (1 - regrindPct / 100);
+      if (l.type === "resin") q = resinQty(l) * (1 - regrindPct / 100);
       else if (pctBasis) q = resinTotal * (Number(l.pct) || 0) / 100;
       else q = Number(l.qty) || 0;
       const out = { item: l.item, name: l.name, type: l.type, basis: l.type === "regrind" ? "pctOfResin" : l.basis, qty: r6(q), unit: "KG/PCS" };
