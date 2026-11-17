@@ -121,6 +121,33 @@ public class WorkflowService {
 		return out;
 	}
 
+	// ---------- ปรับต้นทุนวัตถุดิบฉุกเฉิน (admin เท่านั้น) ----------
+	@Transactional
+	public Map<String, Object> adjustMaterialCost(AuthUser u, String id, double newCost, String reason) {
+		need(u, "admin");
+		if (reason == null || reason.isBlank()) throw ApiException.badRequest("ต้องระบุเหตุผลการปรับต้นทุน");
+		if (!(newCost >= 0) || Double.isInfinite(newCost)) throw ApiException.badRequest("ต้นทุนต้องเป็นตัวเลขไม่ติดลบ");
+		Map<String, Object> m = lock("materials", id, "ไม่พบวัตถุดิบ " + id);
+		double old = Json.num(m.get("cost")), next = r4(newCost);
+		List<Object> hist = m.get("costHistory") instanceof List<?> h ? new ArrayList<>(h) : new ArrayList<>();
+		Map<String, Object> he = new LinkedHashMap<>();
+		he.put("date", LocalDate.now(BKK).toString());
+		he.put("cost", next);
+		he.put("prev", old);
+		he.put("by", u.fullName());
+		he.put("ref", "MANUAL");
+		he.put("note", "ปรับโดย admin: " + reason.trim());
+		hist.add(he);
+		m.put("cost", next);
+		m.put("costHistory", hist);
+		save("materials", m, u);
+		audit.log(u, "ADJUST_COST", "วัตถุดิบ", id, old + " → " + next + " · " + reason.trim());
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("id", id);
+		out.put("cost", next);
+		return out;
+	}
+
 	// ---------- receive PO ----------
 	@Transactional
 	public Map<String, Object> receivePO(AuthUser u, String poId) {

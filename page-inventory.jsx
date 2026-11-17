@@ -229,7 +229,7 @@ function MaterialTable({ canManage, onAdd, onEdit }) {
                       <I.Alert size={11}/>ต่ำกว่า Min · ควรสั่งซื้อ
                     </div>}
                   </td>
-                  <td className="num">{baht(m.cost, 2)}</td>
+                  <td className="num">{m.cost > 0 ? baht(m.cost, 2) : <span style={{ color: "var(--text-tertiary)", fontSize: 11 }}>ยังไม่มีต้นทุน</span>}</td>
                   <td className="num" style={{ fontWeight: 500 }}>{baht(m.stock * m.cost)}</td>
                   <td style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>{m.supplier}</td>
                   <td>{inactive ? <span className="badge badge-neutral">ปิดใช้งาน</span> : <span className="badge badge-success">ใช้งาน</span>}</td>
@@ -288,6 +288,30 @@ function matCodeConflict(code, selfId) {
   return null;
 }
 
+// admin ปรับต้นทุนวัตถุดิบฉุกเฉิน (ต้องมีเหตุผล บันทึกลงประวัติ + audit)
+function AdjustCostModal({ rec, onClose, onDone }) {
+  const [c, setC] = useState(String(rec.cost == null ? "" : rec.cost));
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const v = parseFloat(c);
+  const ok = v >= 0 && reason.trim() && !busy;
+  const go = async () => {
+    setBusy(true);
+    try { await Store.adjustMaterialCost(rec.id, v, reason.trim()); onDone("ปรับต้นทุน " + rec.code + " แล้ว"); }
+    catch (e) { notify(e && e.message ? e.message : String(e), "error"); setBusy(false); }
+  };
+  return (
+    <ErpModal title={"ปรับต้นทุน " + rec.code} onClose={onClose} width={460}
+      footer={<><button type="button" className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button><button type="button" className="btn btn-primary btn-sm" disabled={!ok} onClick={go}>บันทึก</button></>}>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 10 }}>ใช้เฉพาะกรณีข้อมูลผิดปกติ ต้นทุนปกติคำนวณจากการรับ PO อัตโนมัติ</div>
+      <label className="field-label">ต้นทุนใหม่ / หน่วย (บาท) *</label>
+      <input type="number" step="0.0001" min="0" className="input num" value={c} onChange={(e) => setC(e.target.value)}/>
+      <label className="field-label" style={{ marginTop: 10 }}>เหตุผล *</label>
+      <textarea className="input" rows={3} style={{ width: "100%", height: "auto", padding: 8 }} value={reason} onChange={(e) => setReason(e.target.value)}/>
+    </ErpModal>
+  );
+}
+
 function MaterialForm({ mode, rec, onCancel, onDone }) {
   const editing = mode === "edit";
   const refs = editing ? materialRefs(rec) : null;
@@ -295,13 +319,14 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
   const [form, setForm] = useState(editing ? {
     code: rec.code, name: rec.name, type: rec.type || "เม็ดพลาสติก", unit: rec.unit || "KG",
     min: String(rec.min == null ? "" : rec.min), max: String(rec.max == null ? "" : rec.max),
-    cost: String(rec.cost == null ? "" : rec.cost), supplier: rec.supplier || "", location: rec.location || "", opening: "",
-  } : { code: "", name: "", type: "เม็ดพลาสติก", unit: "KG", min: "", max: "", cost: "", supplier: "", location: "", opening: "" });
+    openingCost: "", supplier: rec.supplier || "", location: rec.location || "", opening: "",
+  } : { code: "", name: "", type: "เม็ดพลาสติก", unit: "KG", min: "", max: "", openingCost: "", supplier: "", location: "", opening: "" });
   const [saving, setSaving] = useState(false);
+  const [adj, setAdj] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const code = form.code.trim().toUpperCase();
-  const min = parseFloat(form.min), max = parseFloat(form.max), cost = parseFloat(form.cost);
+  const min = parseFloat(form.min), max = parseFloat(form.max), openingCost = parseFloat(form.openingCost);
   const opening = form.opening === "" ? 0 : parseFloat(form.opening);
   const codeChanged = editing && code !== rec.code;
   const conflict = (!editing || codeChanged) ? matCodeConflict(code, editing ? rec.id : null) : null;
@@ -313,11 +338,11 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
   if (!(min >= 0)) errors.push("Min ต้องเป็นตัวเลขไม่ติดลบ");
   if (!(max > 0)) errors.push("Max ต้องมากกว่า 0");
   if (min >= 0 && max > 0 && min > max) errors.push("Min ต้องไม่มากกว่า Max");
-  if (!(cost >= 0)) errors.push("ราคาทุนต้องเป็นตัวเลขไม่ติดลบ");
+  if (!editing && opening > 0 && !(openingCost > 0)) errors.push("มียอดยกมา ต้องระบุต้นทุนยกมา/หน่วย (มากกว่า 0)");
   if (!editing && !(opening >= 0)) errors.push("ยอดยกมาต้องไม่ติดลบ");
   const units = MAT_UNITS.includes(form.unit) ? MAT_UNITS : [form.unit, ...MAT_UNITS];
   const types = MAT_TYPES.includes(form.type) ? MAT_TYPES : [form.type, ...MAT_TYPES];
-  const showErr = errors.length > 0 && (form.code || form.name || form.min || form.max || form.cost);
+  const showErr = errors.length > 0 && (form.code || form.name || form.min || form.max || form.openingCost);
 
   function submit(e) {
     e.preventDefault();
@@ -325,7 +350,7 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
     setSaving(true);
     const ok = runAction(() => Store.tx(editing ? "editMaterial" : "createMaterial", () => {
       const clean = {
-        name: form.name.trim(), type: form.type, unit: form.unit, min, max, cost,
+        name: form.name.trim(), type: form.type, unit: form.unit, min, max,
         supplier: form.supplier.trim(), location: form.location.trim(),
       };
       if (!editing) {
@@ -333,7 +358,8 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
         const c = matCodeConflict(code, null);
         if (c) Store.fail(c);
         if (Store.state.stockMovements.some((x) => matKey(x.item) === matKey(code))) Store.fail("พบประวัติเคลื่อนไหวสต๊อกของรหัสนี้อยู่แล้ว ไม่สามารถใช้รหัสซ้ำได้");
-        const m = { id: code, code, ...clean, stock: 0, active: true, costHistory: [{ date: Store.today(), cost, by: Store.userName(), note: "ตั้งต้น" }] };
+        const startCost = opening > 0 ? openingCost : 0; // ต้นทุนเกิดจากการรับ PO — ตั้งต้นเฉพาะกรณีมียอดยกมา
+        const m = { id: code, code, ...clean, cost: startCost, stock: 0, active: true, costHistory: startCost > 0 ? [{ date: Store.today(), cost: startCost, by: Store.userName(), note: "ต้นทุนยกมา" }] : [] };
         Store.add("materials", m, `${code}${opening > 0 ? " · ยอดยกมา " + opening + " " + clean.unit : ""}`);
         if (opening > 0) {
           // ยอดยกมาผ่าน Stock Movement เท่านั้น (ref OPEN-รหัส) แล้วตรวจว่ายอดคงเหลือ = ผลรวม movement
@@ -354,8 +380,6 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
         patch.code = code;
       }
       if (clean.unit !== m.unit && now.total > 0) Store.fail("วัตถุดิบนี้ถูกอ้างอิงแล้ว ไม่สามารถเปลี่ยนหน่วยนับได้");
-      // เก็บประวัติราคาทุน (PO เดิมเก็บราคาของตัวเองไว้ในบรรทัดอยู่แล้ว ไม่ได้อ้างราคานี้ย้อนหลัง)
-      if (cost !== m.cost) patch.costHistory = [...(m.costHistory || []), { date: Store.today(), cost, prev: m.cost, by: Store.userName() }];
       const diff = Object.keys(patch).filter((k) => k !== "costHistory" && JSON.stringify(m[k]) !== JSON.stringify(patch[k]))
         .map((k) => `${k}: ${m[k] == null ? "—" : m[k]}→${patch[k]}`);
       return Store.update("materials", m.id, patch, "id", diff.length ? "แก้ไข: " + diff.join(", ") : "ไม่มีการเปลี่ยนแปลง");
@@ -389,11 +413,16 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
             {units.map((u) => <option key={u} value={u}>{u}</option>)}
           </select>
         </div>
-        <div>
-          <label className="field-label">ราคาทุน / หน่วย (บาท) *</label>
-          <input type="number" step="0.01" min="0" className="input num" placeholder="0.00" value={form.cost} onChange={(e) => set("cost", e.target.value)}/>
-          {editing && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>ระบบถัวเฉลี่ยต้นทุนให้อัตโนมัติทุกครั้งที่รับของตาม PO</div>}
-        </div>
+        {editing && (
+          <div>
+            <label className="field-label">ต้นทุนถัวเฉลี่ย / หน่วย (บาท)</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div className="input num" style={{ flex: 1, display: "flex", alignItems: "center", background: "var(--bg-subtle)" }}>{rec.cost > 0 ? _fmt(rec.cost, 2) : "ยังไม่มีต้นทุน"}</div>
+              {Store.user() && Store.user().role === "admin" && <button type="button" className="btn btn-outline btn-sm" onClick={() => setAdj(true)}>ปรับต้นทุน</button>}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>คำนวณจากราคาที่กรอกใน PO ทุกครั้งที่รับของ (admin ปรับฉุกเฉินได้พร้อมเหตุผล)</div>
+          </div>
+        )}
         {editing && (() => {
           const ps = materialPurchaseStats(rec);
           return (
@@ -438,6 +467,13 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
           <div style={{ gridColumn: "1 / -1" }}>
             <label className="field-label">ยอดยกมา ({form.unit})</label>
             <input type="number" step="any" min="0" className="input num" placeholder="0" value={form.opening} onChange={(e) => set("opening", e.target.value)}/>
+            {opening > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <label className="field-label">ต้นทุนยกมา / หน่วย (บาท) *</label>
+                <input type="number" step="0.01" min="0" className="input num" placeholder="0.00" value={form.openingCost} onChange={(e) => set("openingCost", e.target.value)}/>
+                <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>ใช้เป็นต้นทุนตั้งต้นของยอดยกมาเท่านั้น หลังจากนี้ต้นทุนจะคำนวณจากราคาใน PO ที่รับของ</div>
+              </div>
+            )}
             <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>บันทึกเป็น Stock Movement "ยอดยกมา" หนึ่งรายการ — หลังสร้างแล้วเปลี่ยนยอดได้ผ่าน "รับเข้า / ปรับยอด" เท่านั้น</div>
           </div>
         ) : (
@@ -455,6 +491,7 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
         <button type="button" className="btn btn-outline" onClick={onCancel}>ยกเลิก</button>
         <button type="submit" className="btn btn-primary" disabled={saving || errors.length > 0}><I.Check size={14}/> {editing ? "บันทึกการแก้ไข" : "บันทึกวัตถุดิบ"}</button>
       </div>
+      {adj && <AdjustCostModal rec={rec} onClose={() => setAdj(false)} onDone={(msg) => { setAdj(false); onDone(msg); }}/>}
     </form>
   );
 }

@@ -140,6 +140,11 @@ public class DataController {
 			Json.s(b.get("ref")), Json.s(b.get("note")), Boolean.TRUE.equals(b.get("allowNegative")));
 	}
 
+	@PostMapping("/actions/materials/{id}/adjust-cost")
+	public Map<String, Object> adjustMaterialCost(@PathVariable String id, @RequestBody Map<String, Object> b, HttpServletRequest req) {
+		return workflow.adjustMaterialCost(AuthInterceptor.user(req), id, Json.num(b.get("cost")), Json.s(b.get("reason")));
+	}
+
 	// ---------- Bootstrap / backup ----------
 	@GetMapping("/bootstrap")
 	public ResponseEntity<String> bootstrap(HttpServletRequest req) {

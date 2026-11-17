@@ -263,7 +263,10 @@ function AddPOForm({ onSubmit, onCancel }) {
     if (val === "custom") return { ...l, item: "custom", name: "" };
     if (!val) return { ...l, item: "", name: "" };
     const m = MATERIALS.find((x) => x.id === val);
-    return m ? { ...l, item: val, name: m.name, unit: m.unit, price: String(m.cost) } : l;
+    if (!m) return l;
+    // ราคาตั้งต้น = ราคาซื้อล่าสุด (ไม่เคยซื้อ = เว้นว่างให้กรอกเอง) — ต้นทุนวัตถุดิบคำนวณจากราคาที่กรอกใน PO
+    const ps = window.materialPurchaseStats ? window.materialPurchaseStats(m) : null;
+    return { ...l, item: val, name: m.name, unit: m.unit, price: ps && ps.last > 0 ? String(ps.last) : "" };
   }));
 
   const computed = lines.map((l) => ({ ...l, amount: (parseFloat(l.qty) || 0) * (parseFloat(l.price) || 0) }));

@@ -100,6 +100,35 @@ public class RecordService {
 		return Objects.equals(a, b);
 	}
 
+	/** ต้นทุนวัตถุดิบ (cost / costHistory) เกิดจากการรับ PO หรือการปรับโดย admin ผ่าน action เท่านั้น — PUT/PATCH แก้ตรงไม่ได้ทุก role */
+	private static final Set<String> MATERIAL_COST_KEYS = Set.of("cost", "costHistory");
+
+	private static ApiException costManaged() {
+		return ApiException.conflict("COST_MANAGED", "ต้นทุนวัตถุดิบแก้ตรงไม่ได้ — ระบบคำนวณจากการรับ PO (admin ปรับฉุกเฉินได้ที่ปุ่ม ปรับต้นทุน พร้อมเหตุผล)");
+	}
+
+	private static void assertMaterialCostUntouched(Map<String, Object> cur, Map<String, Object> next) {
+		for (String k : MATERIAL_COST_KEYS) {
+			if (!same(cur.get(k), next.get(k))) throw costManaged();
+		}
+	}
+
+	/** วัตถุดิบใหม่: cost ที่ส่งมาคือต้นทุนยกมา (ไม่ติดลบ) ประวัติต้นทุนเริ่มต้นสร้างโดย server เอง */
+	private static void initMaterialCost(AuthUser u, Map<String, Object> m) {
+		double c = Math.max(0d, Json.num(m.get("cost")));
+		m.put("cost", c);
+		List<Object> hist = new ArrayList<>();
+		if (c > 0) {
+			Map<String, Object> he = new LinkedHashMap<>();
+			he.put("date", nowStr().substring(0, 10));
+			he.put("cost", c);
+			he.put("by", u.fullName());
+			he.put("note", "ต้นทุนยกมา");
+			hist.add(he);
+		}
+		m.put("costHistory", hist);
+	}
+
 	private static ApiException onlyStockAllowed(AuthUser u) {
 		return ApiException.forbidden("บทบาท " + u.role() + " แก้ไขได้เฉพาะยอดคงเหลือ (stock) ของวัตถุดิบ — ข้อมูลทะเบียนวัตถุดิบแก้ได้เฉพาะผู้ดูแลระบบและฝ่ายจัดซื้อ");
 	}
@@ -277,6 +306,7 @@ public class RecordService {
 		body.put("id", id);
 		if (isStockColl(coll)) assertUniqueStockCode(coll, id, body);
 		if (isSupplier(coll)) assertUniqueSupplierCode(id, body);
+		if ("materials".equals(coll)) initMaterialCost(u, body);
 		if (isPO(coll)) validatePOCreate(body);
 		try {
 			repo.insert(coll, id, json.str(body), u.username());
@@ -327,6 +357,7 @@ public class RecordService {
 				if (expected != null && curVer != null && !expected.equals(curVer)) {
 					throw ApiException.conflict("VERSION_CONFLICT", "ข้อมูลถูกแก้ไขโดยผู้อื่นแล้ว กรุณาโหลดใหม่");
 				}
+				if ("materials".equals(coll)) assertMaterialCostUntouched(cur, body);
 				if ("materials".equals(coll) && !isMaterialMaster(u)) {
 					Set<String> keys = new HashSet<>(cur.keySet());
 					keys.addAll(body.keySet());
@@ -359,6 +390,11 @@ public class RecordService {
 		}
 		rec.remove("_version");
 		patch.remove("id");
+		if ("materials".equals(coll)) {
+			for (String k : MATERIAL_COST_KEYS) {
+				if (patch.containsKey(k) && !same(rec.get(k), patch.get(k))) throw costManaged();
+			}
+		}
 		if ("materials".equals(coll) && !isMaterialMaster(u)) {
 			for (Map.Entry<String, Object> e : patch.entrySet()) {
 				if (!e.getKey().equals("stock") && !same(rec.get(e.getKey()), e.getValue())) throw onlyStockAllowed(u);

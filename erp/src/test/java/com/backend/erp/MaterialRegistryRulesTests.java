@@ -135,7 +135,7 @@ class MaterialRegistryRulesTests {
 			ok.put("stock", s - 1);
 			assertEquals(s - 1, ((Number) call("PUT", "/materials/M-A", ok, t, 200).get("stock")).doubleValue());
 			cur = call("GET", "/materials/M-A", null, t, 200);
-			call("PUT", "/materials/M-A", with(cur, "cost", 99), t, 403);
+			call("PUT", "/materials/M-A", with(cur, "cost", 99), t, 409);  // ต้นทุนแก้ตรงไม่ได้ทุก role
 			call("PUT", "/materials/M-A", with(cur, "active", false), t, 403);
 			call("PUT", "/materials/M-A", with(cur, "code", "OTHER"), t, 403);
 			call("PUT", "/materials/M-A", with(cur, "name", "เปลี่ยนชื่อ"), t, 403);
@@ -149,14 +149,14 @@ class MaterialRegistryRulesTests {
 		// admin / procurement: แก้ทะเบียนได้
 		Map<String, Object> cur = call("GET", "/materials/M-A", null, proc, 200);
 		Map<String, Object> edited = new HashMap<>(cur);
-		edited.put("cost", 8.25); edited.put("name", "แก้โดยจัดซื้อ"); edited.put("active", false);
+		edited.put("name", "แก้โดยจัดซื้อ"); edited.put("active", false);
 		Map<String, Object> saved = call("PUT", "/materials/M-A", edited, proc, 200);
 		assertEquals(false, saved.get("active"));
 		call("PATCH", "/materials/M-A", Map.of("active", true, "max", 500), admin, 200);
 
 		// เวอร์ชันเก่า → 409 (ไม่ใช่ 403) แม้ฟิลด์ทะเบียนที่ส่งมาจะเป็นค่าเก่า
 		Map<String, Object> stale = call("GET", "/materials/M-A", null, prod, 200);
-		call("PATCH", "/materials/M-A", Map.of("cost", 9), admin, 200);
+		call("PATCH", "/materials/M-A", Map.of("max", 501), admin, 200);
 		call("PUT", "/materials/M-A", with(stale, "stock", 1), prod, 409);
 	}
 

@@ -367,6 +367,19 @@ const Store = (function () {
       await new Promise((r) => setTimeout(r, 100));
     }
   }
+  // admin ปรับต้นทุนวัตถุดิบฉุกเฉิน (ต้องมีเหตุผล) — ต้นทุนปกติคำนวณจากการรับ PO
+  async function adjustMaterialCost(id, cost, reason) {
+    if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
+    await settleSync();
+    try {
+      const r = await api("POST", "/actions/materials/" + encodeURIComponent(id) + "/adjust-cost", { cost, reason });
+      await refresh(true);
+      return r;
+    } catch (e) {
+      try { await refresh(true); } catch (e2) { /* ignore */ }
+      throw e;
+    }
+  }
   async function receivePO(poId) {
     if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
     await settleSync(); // ให้การอนุมัติ PO ที่ค้างอยู่ถึงเซิร์ฟเวอร์ก่อน
@@ -560,7 +573,7 @@ const Store = (function () {
     state, subscribe, getVersion: () => version,
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
-    adjustStock, findStockItem, receivePO, produceWO,
+    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,
     exportData, importData, resetAll, saveCompany,

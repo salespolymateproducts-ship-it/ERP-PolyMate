@@ -525,7 +525,7 @@ function WorkOrderDetail({ wo, onProduce }) {
         </div>
         <div style={{ padding: "8px 18px 18px" }}>
           {!bc.hasBom && <div style={{ fontSize: 12.5, color: "var(--text-tertiary)" }}>สินค้านี้ยังไม่มีสูตร BOM — เพิ่มสูตรเพื่อคำนวณต้นทุนวัตถุดิบ</div>}
-          {bc.lines.map((l, i) => <CostLine key={i} label={l.name} calc={`${_fmt(l.qty, 2)} ${l.unit} × ฿${_fmt(l.cost, 2)} (รวมเผื่อเสีย ${bc.wasteRate}%)`} v={l.v}/>)}
+          {bc.lines.map((l, i) => <CostLine key={i} label={l.name} calc={`${_fmt(l.qty, 2)} ${l.unit} × ${l.cost > 0 ? "฿" + _fmt(l.cost, 2) : "ยังไม่มีต้นทุน"} (รวมเผื่อเสีย ${bc.wasteRate}%)`} v={l.v}/>)}
           {fg && <CostLine label="ต้นทุนมาตรฐานในทะเบียนสินค้า" calc={`${_fmt(bc.basis)} ชิ้น × ฿${_fmt(fg.cost, 2)}`} v={bc.basis * fg.cost} note tone="amber"/>}
           <div style={{ height: 1, background: "var(--border)", margin: "10px 0" }}/>
           <div style={{ display: "flex", alignItems: "center", padding: "8px 0" }}>
@@ -615,10 +615,15 @@ function createPOFromShortage(wo, shortItems) {
       if (m.active === false) return;
       const need = Math.ceil(r.kg - Math.max(0, r.available));
       if (need <= 0) return;
-      (bySup[m.supplier || "—"] = bySup[m.supplier || "—"] || []).push({ item: m.id, name: `${m.code} ${m.name}`, qty: need, unit: m.unit, price: m.cost, amount: Math.round(need * m.cost * 100) / 100 });
+      // ราคาอ้างอิง = ราคาซื้อล่าสุด (ไม่มีก็ใช้ต้นทุนถัวเฉลี่ย) — ถ้าไม่เคยซื้อเลยต้องกรอกราคาที่หน้าจัดซื้อ
+      const ps = window.materialPurchaseStats ? window.materialPurchaseStats(m) : null;
+      const price = (ps && ps.last > 0 ? ps.last : 0) || (m.cost > 0 ? m.cost : 0);
+      if (!(price > 0)) Store.fail(`วัตถุดิบ ${m.code} ยังไม่เคยซื้อ จึงไม่มีราคาอ้างอิง — กรุณาออก PO ที่หน้าจัดซื้อและกรอกราคา`);
+      (bySup[m.supplier || "—"] = bySup[m.supplier || "—"] || []).push({ item: m.id, name: `${m.code} ${m.name}`, qty: need, unit: m.unit, price, amount: Math.round(need * price * 100) / 100 });
     });
     const made = Object.entries(bySup).map(([supName, lines]) => {
       const sup = Store.state.suppliers.find((s) => s.name.toLowerCase().includes(supName.toLowerCase().split(" ")[0])) || null;
+      if (!sup) Store.fail(`ไม่พบ Supplier "${supName}" ในทะเบียน — กำหนดผู้ขายหลักของวัตถุดิบให้ตรงกับทะเบียน Supplier หรือออก PO ที่หน้าจัดซื้อ`);
       const n = Store.nextDocNo("PO");
       const subtotal = Math.round(lines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
       const vat = Math.round(subtotal * 7) / 100;

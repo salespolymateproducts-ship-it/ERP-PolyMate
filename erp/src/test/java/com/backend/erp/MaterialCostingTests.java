@@ -168,10 +168,11 @@ class MaterialCostingTests {
 	void costHistoryRecordsEachReceive() throws Exception {
 		List<Map<String, Object>> h = (List<Map<String, Object>>) call("GET", "/materials/M-C1", null, admin, 200).get("costHistory");
 		assertNotNull(h);
-		assertEquals(3, h.size());
-		assertEquals("PO-C1", h.get(0).get("ref"));
-		assertEquals(50.0, ((Number) h.get(0).get("prev")).doubleValue(), 0.00001);
-		assertEquals("PO-C3", h.get(2).get("ref"));
+		assertEquals(4, h.size()); // ต้นทุนยกมา + รับ PO 3 ครั้ง
+		assertEquals("ต้นทุนยกมา", h.get(0).get("note"));
+		assertEquals("PO-C1", h.get(1).get("ref"));
+		assertEquals(50.0, ((Number) h.get(1).get("prev")).doubleValue(), 0.00001);
+		assertEquals("PO-C3", h.get(3).get("ref"));
 	}
 
 	@Test @Order(4)
@@ -191,7 +192,7 @@ class MaterialCostingTests {
 		call("POST", "/actions/purchase-orders/PO-C3/receive", null, proc, 409);
 		assertEquals(c, costOf("M-C1"), 0.00001);
 		assertEquals(s, stockOf("M-C1"), 0.0001);
-		assertEquals(3, ((List<?>) call("GET", "/materials/M-C1", null, admin, 200).get("costHistory")).size());
+		assertEquals(4, ((List<?>) call("GET", "/materials/M-C1", null, admin, 200).get("costHistory")).size());
 	}
 
 	@Test @Order(6)
@@ -244,12 +245,63 @@ class MaterialCostingTests {
 	}
 
 	@Test @Order(10)
-	void manualCostEditStillWorksForMasterRolesOnly() throws Exception {
+	void costCannotBeEditedDirectlyByAnyRole() throws Exception {
+		double c = costOf("M-C3");
 		Map<String, Object> cur = call("GET", "/materials/M-C3", null, admin, 200);
-		call("PUT", "/materials/M-C3", with(cur, "cost", 7.25), proc, 200);
-		assertEquals(7.25, costOf("M-C3"), 0.00001);
-		cur = call("GET", "/materials/M-C3", null, admin, 200);
-		call("PUT", "/materials/M-C3", with(cur, "cost", 1), prod, 403);
-		assertEquals(7.25, costOf("M-C3"), 0.00001);
+		call("PUT", "/materials/M-C3", with(cur, "cost", 7.25), proc, 409);
+		call("PUT", "/materials/M-C3", with(cur, "cost", 7.25), admin, 409);
+		call("PUT", "/materials/M-C3", with(cur, "cost", 1), prod, 409);
+		call("PATCH", "/materials/M-C3", Map.of("cost", 7.25), admin, 409);
+		call("PATCH", "/materials/M-C3", Map.of("costHistory", List.of()), admin, 409);
+		assertEquals(c, costOf("M-C3"), 0.00001);
+		// ส่งค่าเดิมซ้ำ (sync ปกติของหน้าจอ) ต้องไม่ถูกขวาง
+		call("PUT", "/materials/M-C3", with(cur, "name", "เปลี่ยนชื่อได้"), proc, 200);
+		call("PATCH", "/materials/M-C3", Map.of("cost", c), proc, 200);
+	}
+
+	@Test @Order(11)
+	void adminCanAdjustCostWithReasonOnly() throws Exception {
+		call("POST", "/actions/materials/M-C3/adjust-cost", Map.of("cost", 9.5, "reason", "แก้ข้อมูลผิด"), proc, 403);
+		call("POST", "/actions/materials/M-C3/adjust-cost", Map.of("cost", 9.5, "reason", "แก้ข้อมูลผิด"), prod, 403);
+		call("POST", "/actions/materials/M-C3/adjust-cost", Map.of("cost", 9.5, "reason", "  "), admin, 400);
+		call("POST", "/actions/materials/M-C3/adjust-cost", Map.of("cost", 9.5), admin, 400);
+		call("POST", "/actions/materials/M-C3/adjust-cost", Map.of("cost", -1, "reason", "x"), admin, 400);
+		call("POST", "/actions/materials/NOPE/adjust-cost", Map.of("cost", 1, "reason", "x"), admin, 422);
+		double before = costOf("M-C3");
+		assertEquals(before, costOf("M-C3"), 0.00001);
+		call("POST", "/actions/materials/M-C3/adjust-cost", Map.of("cost", 9.5, "reason", "แก้ข้อมูลผิด"), admin, 200);
+		assertEquals(9.5, costOf("M-C3"), 0.00001);
+		@SuppressWarnings("unchecked")
+		List<Map<String, Object>> h = (List<Map<String, Object>>) call("GET", "/materials/M-C3", null, admin, 200).get("costHistory");
+		Map<String, Object> last = h.get(h.size() - 1);
+		assertEquals("MANUAL", last.get("ref"));
+		assertEquals(before, ((Number) last.get("prev")).doubleValue(), 0.00001);
+		assertTrue(String.valueOf(last.get("note")).contains("แก้ข้อมูลผิด"));
+		Integer n = jdbc.queryForObject("select count(*)::int from erp_audit_logs where action = 'ADJUST_COST' and entity_id = 'M-C3'", Integer.class);
+		assertTrue(n != null && n >= 1);
+	}
+
+	@Test @Order(12)
+	void newMaterialStartsWithoutCostUnlessOpeningCost() throws Exception {
+		// ไม่มีต้นทุนยกมา → 0, ประวัติว่าง, ค่าที่ client ยัดมา (costHistory) ถูกทับ
+		Map<String, Object> m = mat("M-N1", "MATN1", 0, 0);
+		m.remove("cost");
+		m.put("costHistory", List.of(Map.of("cost", 999)));
+		call("POST", "/materials", m, proc, 201);
+		assertEquals(0.0, costOf("M-N1"), 0.00001);
+		assertEquals(0, ((List<?>) call("GET", "/materials/M-N1", null, admin, 200).get("costHistory")).size());
+		// รับ PO แรก → ต้นทุน = ราคา PO
+		receive("PO-N1", "M-N1", 20, 33.3);
+		assertEquals(33.3, costOf("M-N1"), 0.00001);
+		// ต้นทุนยกมา (ส่งมาตอนสร้างพร้อมยอดยกมา) → ถือเป็นต้นทุนตั้งต้นและเฉลี่ยกับ PO ถัดไปได้ถูกต้อง
+		call("POST", "/materials", mat("M-N2", "MATN2", 0, 40), proc, 201);
+		assertEquals(40.0, costOf("M-N2"), 0.00001);
+		@SuppressWarnings("unchecked")
+		List<Map<String, Object>> h = (List<Map<String, Object>>) call("GET", "/materials/M-N2", null, admin, 200).get("costHistory");
+		assertEquals(1, h.size());
+		assertEquals("ต้นทุนยกมา", h.get(0).get("note"));
+		// ติดลบ → ถูกปรับเป็น 0
+		call("POST", "/materials", mat("M-N3", "MATN3", 0, -5), proc, 201);
+		assertEquals(0.0, costOf("M-N3"), 0.00001);
 	}
 }
