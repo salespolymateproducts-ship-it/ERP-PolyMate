@@ -253,20 +253,22 @@ function AddPOForm({ onSubmit, onCancel }) {
   const [expectedDate, setExpectedDate] = useState("");
   const [whtRate, setWhtRate] = useState(0);
   const [status, setStatus] = useState("pending");
-  const [lines, setLines] = useState([{ item: "", name: "", qty: "", unit: "KG", price: "" }]);
+  const [lines, setLines] = useState([{ itemType: "material", item: "", name: "", qty: "", unit: "KG", price: "" }]);
 
   const setLine = (i, k, v) => setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, [k]: v } : l));
-  const addLine = () => setLines((ls) => [...ls, { item: "", name: "", qty: "", unit: "KG", price: "" }]);
+  const addLine = () => setLines((ls) => [...ls, { itemType: "material", item: "", name: "", qty: "", unit: "KG", price: "" }]);
   const delLine = (i) => setLines((ls) => ls.length > 1 ? ls.filter((_, idx) => idx !== i) : ls);
-  const pickMaterial = (i, val) => setLines((ls) => ls.map((l, idx) => {
+  // val: "m:<id>" วัตถุดิบ · "p:<id>" สินค้าซื้อมาขาย (สินค้าที่ซื้อได้) · "custom" · ""
+  const pickItem = (i, val) => setLines((ls) => ls.map((l, idx) => {
     if (idx !== i) return l;
-    if (val === "custom") return { ...l, item: "custom", name: "" };
-    if (!val) return { ...l, item: "", name: "" };
-    const m = MATERIALS.find((x) => x.id === val);
+    if (val === "custom") return { ...l, itemType: "material", item: "custom", name: "" };
+    if (!val) return { ...l, itemType: "material", item: "", name: "" };
+    const isP = val.startsWith("p:"), id = val.slice(2);
+    const m = isP ? FINISHED.find((x) => x.id === id) : MATERIALS.find((x) => x.id === id);
     if (!m) return l;
-    // ราคาตั้งต้น = ราคาซื้อล่าสุด (ไม่เคยซื้อ = เว้นว่างให้กรอกเอง) — ต้นทุนวัตถุดิบคำนวณจากราคาที่กรอกใน PO
-    const ps = window.materialPurchaseStats ? window.materialPurchaseStats(m) : null;
-    return { ...l, item: val, name: m.name, unit: m.unit, price: ps && ps.last > 0 ? String(ps.last) : "" };
+    // ราคาตั้งต้น = ราคาซื้อล่าสุด (ไม่เคยซื้อ = เว้นว่างให้กรอกเอง) — ต้นทุนคำนวณจากราคาที่กรอกใน PO
+    const ps = isP ? (window.productPurchaseStats ? window.productPurchaseStats(m) : null) : (window.materialPurchaseStats ? window.materialPurchaseStats(m) : null);
+    return { ...l, itemType: isP ? "product" : "material", item: id, name: isP ? m.code + " " + m.name : m.name, unit: m.unit || "PCS", price: ps && ps.last > 0 ? String(ps.last) : "" };
   }));
 
   const computed = lines.map((l) => ({ ...l, amount: (parseFloat(l.qty) || 0) * (parseFloat(l.price) || 0) }));
@@ -285,7 +287,7 @@ function AddPOForm({ onSubmit, onCancel }) {
     e.preventDefault();
     if (!valid) return;
     const cleanLines = computed.filter((l) => l.name.trim() && l.amount > 0)
-      .map((l) => ({ item: l.item && l.item !== "custom" ? l.item : undefined, name: l.name.trim(), qty: parseFloat(l.qty) || 0, unit: l.unit, price: parseFloat(l.price) || 0, amount: l.amount }));
+      .map((l) => ({ itemType: l.itemType === "product" ? "product" : "material", item: l.item && l.item !== "custom" ? l.item : undefined, name: l.name.trim(), qty: parseFloat(l.qty) || 0, unit: l.unit, price: parseFloat(l.price) || 0, amount: l.amount }));
     if (cleanLines.some((l) => !l.item)) { notify("ทุกรายการต้องเลือกวัตถุดิบจากทะเบียน (ไม่รองรับรายการพิมพ์เอง เพราะรับของเข้าสต๊อกไม่ได้)", "error"); return; }
     onSubmit({
       id: nextPoId(), date,
@@ -318,27 +320,33 @@ function AddPOForm({ onSubmit, onCancel }) {
       <label className="field-label">รายการสั่งซื้อ * <span style={{ fontWeight: 400, color: "var(--text-tertiary)" }}>· เลือกวัตถุดิบจากคลัง → รับเข้าแล้วตัดสต๊อกให้อัตโนมัติ</span></label>
       <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", marginBottom: 10 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 78px 70px 90px 92px 30px", gap: 8, padding: "8px 10px", background: "var(--bg-subtle)", fontSize: 11, color: "var(--text-secondary)", fontWeight: 600 }}>
-          <div>วัตถุดิบ / รายการ</div><div style={{ textAlign: "right" }}>จำนวน</div><div>หน่วย</div><div style={{ textAlign: "right" }}>หน่วยละ</div><div style={{ textAlign: "right" }}>รวม</div><div></div>
+          <div>วัตถุดิบ / สินค้า</div><div style={{ textAlign: "right" }}>จำนวน</div><div>หน่วย</div><div style={{ textAlign: "right" }}>หน่วยละ</div><div style={{ textAlign: "right" }}>รวม</div><div></div>
         </div>
         {computed.map((l, i) => (
           <div key={i} style={{ padding: "8px 10px", borderTop: "1px solid var(--border)" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 78px 70px 90px 92px 30px", gap: 8, alignItems: "center" }}>
-              <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.item} onChange={(e) => pickMaterial(i, e.target.value)}>
-                <option value="">— เลือกวัตถุดิบ —</option>
-                {MATERIALS.filter((m) => m.active !== false).map((m) => <option key={m.id} value={m.id}>{m.code} · {m.name}</option>)}
+              <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.item === "custom" ? "custom" : l.item ? (l.itemType === "product" ? "p:" : "m:") + l.item : ""} onChange={(e) => pickItem(i, e.target.value)}>
+                <option value="">— เลือกวัตถุดิบ / สินค้า —</option>
+                <optgroup label="วัตถุดิบ">
+                  {MATERIALS.filter((m) => m.active !== false).map((m) => <option key={"m" + m.id} value={"m:" + m.id}>{m.code} · {m.name}</option>)}
+                </optgroup>
+                <optgroup label="สินค้าซื้อมาขาย (สั่งซื้อได้)">
+                  {FINISHED.filter((f) => Store.isBuyable(f) && f.active !== false).map((f) => <option key={"p" + f.id} value={"p:" + f.id}>{f.code} · {f.name}</option>)}
+                </optgroup>
                 <option value="custom">อื่นๆ / บริการ (ไม่เข้าคลัง)</option>
               </select>
               <input type="number" min="0" step="0.01" className="input num" style={{ height: 34, textAlign: "right" }} placeholder="0" value={l.qty} onChange={(e) => setLine(i, "qty", e.target.value)}/>
               <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.unit} onChange={(e) => setLine(i, "unit", e.target.value)}>
-                {["KG", "PCS", "งาน", "SET", "ROLL", "L"].map((u) => <option key={u} value={u}>{u}</option>)}
+                {["KG", "PCS", "งาน", "SET", "ROLL", "L", "BOX", "PACK"].map((u) => <option key={u} value={u}>{u}</option>)}
               </select>
               <input type="number" min="0" step="0.01" className="input num" style={{ height: 34, textAlign: "right" }} placeholder="0.00" value={l.price} onChange={(e) => setLine(i, "price", e.target.value)}/>
               <div className="num" style={{ textAlign: "right", fontSize: 12.5, fontWeight: 500 }}>{_fmt(l.amount, 2)}</div>
               <button type="button" className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => delLine(i)} title="ลบ"><I.X size={13}/></button>
             </div>
-            {l.item && l.item !== "custom" && window.materialPurchaseStats && (() => {
-              const m = MATERIALS.find((x) => x.id === l.item);
-              const ps = m ? window.materialPurchaseStats(m) : null;
+            {l.item && l.item !== "custom" && window.materialPurchaseStats && window.productPurchaseStats && (() => {
+              const isP = l.itemType === "product";
+              const m = isP ? FINISHED.find((x) => x.id === l.item) : MATERIALS.find((x) => x.id === l.item);
+              const ps = m ? (isP ? window.productPurchaseStats(m) : window.materialPurchaseStats(m)) : null;
               if (!ps || ps.last == null) return <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>ยังไม่มีประวัติซื้อ · ต้นทุนถัวเฉลี่ย ฿{_fmt(m.cost, 2)}</div>;
               const cur = parseFloat(l.price) || 0;
               const diff = cur && ps.last ? ((cur - ps.last) / ps.last) * 100 : 0;

@@ -62,7 +62,7 @@ const FINISHED = [
   { id: "FG-004", code: "GP-LID-RND", name: "ฝาภาชนะกลม Eco (PE)", customer: "GREENPACK", jobType: "own", color: "เขียวธรรมชาติ", weight: 11.5, unit: "PCS", stock: 0, cost: 1.6, price: 3.2 },
   { id: "FG-005", code: "TG-GRIP-08", name: "Handle Grip 08", customer: "TECHGRIP", jobType: "oem", color: "น้ำเงิน 2925", weight: 24.0, unit: "PCS", stock: 12400, cost: 7.2, price: 14.5 },
   { id: "FG-006", code: "PM-HOOK-3M", name: "ตะขอติดผนัง 3M (แพ็ค 4)", customer: "—", jobType: "own", color: "ขาว", weight: 38.0, unit: "PCS", stock: 2600, cost: 6.5, price: 19.0 },
-  { id: "FG-007", code: "TR-GLOVE-NBR", name: "ถุงมือไนไตรล์ (กล่อง 100)", customer: "PRIMAFOOD", jobType: "trade", color: "ฟ้า", weight: 520.0, unit: "BOX", stock: 480, cost: 95.0, price: 145.0 },
+  { id: "FG-007", code: "TR-GLOVE-NBR", name: "ถุงมือไนไตรล์ (กล่อง 100)", customer: "PRIMAFOOD", jobType: "trade", min: 100, leadDays: 7, color: "ฟ้า", weight: 520.0, unit: "BOX", stock: 480, cost: 95.0, price: 145.0 },
 ];
 
 const MOLDS = [
@@ -139,7 +139,7 @@ const WO_STATUS = {
 // Expenses
 const EXPENSES = [];  // ข้อมูลจริงมาจาก Store
 
-const EXPENSE_CATEGORIES = ["วัตถุดิบ", "สีผสม", "ค่าแรง", "ค่าไฟ", "ค่าซ่อมเครื่องจักร", "ค่าแพ็คสินค้า", "ค่าขนส่ง", "ค่าแม่พิมพ์", "ค่าใช้จ่ายทั่วไป"];
+const EXPENSE_CATEGORIES = ["วัตถุดิบ", "สินค้าซื้อมาขาย", "สีผสม", "ค่าแรง", "ค่าไฟ", "ค่าซ่อมเครื่องจักร", "ค่าแพ็คสินค้า", "ค่าขนส่ง", "ค่าแม่พิมพ์", "ค่าใช้จ่ายทั่วไป"];
 
 const EMPLOYEES = [
   { id: "EMP-001", name: "สมชาย ใจดี", role: "หัวหน้าฝ่ายผลิต", dept: "Production", phone: "081-234-5678", joined: "2018-03-12", salary: 38000 },

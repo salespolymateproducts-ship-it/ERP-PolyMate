@@ -148,22 +148,145 @@ function StockAdjustModal({ onClose }) {
     </ErpModal>
   );
 }
-// แก้ไขต้นทุน/ราคาขายมาตรฐาน (ใช้คำนวณต้นทุนขายในงบกำไรขาดทุน)
-function PriceEditModal({ f, onClose }) {
-  const [cost, setCost] = useState(f.cost);
-  const [price, setPrice] = useState(f.price);
-  function save() {
-    const ok = runAction(() => {
-      if (!(Number(cost) >= 0) || !(Number(price) >= 0)) Store.fail("ราคาต้องไม่ติดลบ");
-      return Store.update("finished", f.id, { cost: Number(cost), price: Number(price) }, "id", `ต้นทุน ${f.cost}→${cost} · ราคา ${f.price}→${price}`);
-    }, "บันทึกราคาแล้ว");
-    if (ok) onClose();
-  }
+// แก้ไขสินค้า: ราคาขาย / ต้นทุนมาตรฐาน (สินค้าผลิตเอง) / ผู้ขายประจำ-จุดสั่งซื้อ-ระยะเวลาสั่งของ (สินค้าที่ซื้อได้)
+// สินค้าซื้อมาขายไป (หรือเปิดธง สั่งซื้อได้) ต้นทุนคำนวณจากการรับ PO — แก้ตรงไม่ได้ (admin ปรับพร้อมเหตุผล)
+function ProductEditModal({ f, onClose, onDone }) {
+  const managed0 = Store.isBuyable(f);
+  const isAdmin = Store.user() && Store.user().role === "admin";
+  const [price, setPrice] = useState(String(f.price == null ? "" : f.price));
+  const [cost, setCost] = useState(String(f.cost == null ? "" : f.cost));
+  const [buyable, setBuyable] = useState(f.buyable === true);
+  const [supplier, setSupplier] = useState(f.supplier || "");
+  const [min, setMin] = useState(f.min == null ? "" : String(f.min));
+  const [leadDays, setLeadDays] = useState(f.leadDays == null ? "" : String(f.leadDays));
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [adj, setAdj] = useState(false);
+  const managed = f.jobType === "trade" || buyable;
+  const ps = managed ? productPurchaseStats(f) : null;
+  const num = (v) => (String(v).trim() === "" ? null : Number(v));
+  const save = async () => {
+    setErr("");
+    if (!(Number(price) >= 0)) return setErr("ราคาขายต้องไม่ติดลบ");
+    if (!managed && !(Number(cost) >= 0)) return setErr("ต้นทุนต้องไม่ติดลบ");
+    const body = { ...f, price: Number(price), buyable: f.jobType === "trade" ? undefined : buyable };
+    if (!managed0 && !managed) body.cost = Number(cost);
+    if (managed && !managed0) body.cost = Number(cost) || 0; // เพิ่งเปิดธงซื้อได้: ค่านี้เป็นต้นทุนยกมา
+    body.supplier = supplier || undefined; body.min = num(min); body.leadDays = num(leadDays);
+    setBusy(true);
+    try { await Store.saveProduct(body); onDone("บันทึกสินค้า " + f.code + " แล้ว"); }
+    catch (e) { setErr(e && e.message ? e.message : String(e)); setBusy(false); }
+  };
   return (
-    <ErpModal title={"ต้นทุน / ราคาขาย " + f.code} width={420} onClose={onClose}
-      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" onClick={save}>บันทึก</button></>}>
-      <label className="field-label">ต้นทุนมาตรฐาน / หน่วย</label><input className="input num" type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)}/>
-      <label className="field-label" style={{ marginTop: 10 }}>ราคาขาย / หน่วย (ค่าเริ่มต้นในเอกสารขาย)</label><input className="input num" type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)}/>
+    <ErpModal title={"แก้ไขสินค้า " + f.code} width={640} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={save}>บันทึก</button></>}>
+      <div className="grid-2" style={{ gap: 10 }}>
+        <div><label className="field-label">ราคาขาย / หน่วย (ค่าเริ่มต้นในเอกสารขาย)</label><input className="input num" type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)}/></div>
+        {!managed ? (
+          <div><label className="field-label">ต้นทุนมาตรฐาน / หน่วย</label><input className="input num" type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)}/></div>
+        ) : managed0 ? (
+          <div>
+            <label className="field-label">ต้นทุนถัวเฉลี่ย / หน่วย</label>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <div className="input num" style={{ flex: 1, display: "flex", alignItems: "center", background: "var(--bg-subtle)" }}>{f.cost > 0 ? _fmt(f.cost, 2) : "ยังไม่มีต้นทุน"}</div>
+              {isAdmin && <button type="button" className="btn btn-outline btn-sm" onClick={() => setAdj(true)}>ปรับต้นทุน</button>}
+            </div>
+          </div>
+        ) : (
+          <div><label className="field-label">ต้นทุนยกมา / หน่วย</label><input className="input num" type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)}/></div>
+        )}
+        {f.jobType !== "trade" && (
+          <label style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "center", fontSize: 12.5 }}>
+            <input type="checkbox" checked={buyable} onChange={(e) => setBuyable(e.target.checked)}/> สั่งซื้อได้ (ซื้อสำเร็จรูป / จ้างผู้อื่นผลิต) — ต้นทุนจะคำนวณจากการรับ PO
+          </label>
+        )}
+        {managed && (<>
+          <div><label className="field-label">ผู้ขายประจำ</label>
+            <select className="select" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
+              <option value="">— ไม่ระบุ —</option>
+              {SUPPLIERS.filter((x) => x.status !== "inactive").map((x) => <option key={x.id} value={x.code}>{x.name}</option>)}
+            </select></div>
+          <div className="grid-2" style={{ gap: 10 }}>
+            <div><label className="field-label">จุดสั่งซื้อ (Min)</label><input className="input num" type="number" min="0" step="any" value={min} onChange={(e) => setMin(e.target.value)}/></div>
+            <div><label className="field-label">สั่งของใช้เวลา (วัน)</label><input className="input num" type="number" min="0" step="1" value={leadDays} onChange={(e) => setLeadDays(e.target.value)}/></div>
+          </div>
+        </>)}
+      </div>
+      {managed0 && ps && (
+        <div style={{ marginTop: 14, background: "var(--bg-subtle)", borderRadius: 10, padding: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>ประวัติราคาซื้อ (จาก PO ที่รับของแล้ว)</div>
+          {!ps.rows.length ? <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>ยังไม่มีประวัติการซื้อ</div> : (<>
+            <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12, marginBottom: 8 }}>
+              <span>ล่าสุด <b className="num">{_fmt(ps.last, 2)}</b></span><span>เฉลี่ยถ่วงน้ำหนัก <b className="num">{_fmt(ps.avg, 2)}</b></span>
+              <span>ต่ำสุด <b className="num">{_fmt(ps.min, 2)}</b></span><span>สูงสุด <b className="num">{_fmt(ps.max, 2)}</b></span>
+            </div>
+            <table className="table" style={{ fontSize: 12 }}>
+              <thead><tr><th>วันที่</th><th>PO</th><th>Supplier</th><th className="num">จำนวน</th><th className="num">ราคา/หน่วย</th></tr></thead>
+              <tbody>{ps.rows.slice(0, 8).map((r, i) => <tr key={i}><td>{r.date}</td><td>{r.po}</td><td>{r.supplier}</td><td className="num">{_fmt(r.qty, 2)} {r.unit}</td><td className="num">{_fmt(r.price, 2)}</td></tr>)}</tbody>
+            </table>
+          </>)}
+        </div>
+      )}
+      {managed0 && (f.costHistory || []).length > 0 && (
+        <div style={{ marginTop: 12, background: "var(--bg-subtle)", borderRadius: 10, padding: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>ประวัติต้นทุน{(f.costHistory || []).some((h) => h.ref === "MANUAL") && <span style={{ marginLeft: 8, fontWeight: 500, fontSize: 11.5, color: "var(--amber)" }}>⚠ มีการปรับด้วยมือ</span>}</div>
+          <table className="table" style={{ fontSize: 12 }}>
+            <thead><tr><th>วันที่</th><th className="num">เดิม → ใหม่</th><th>โดย</th><th>ที่มา / เหตุผล</th></tr></thead>
+            <tbody>{[...f.costHistory].reverse().slice(0, 12).map((h, i) => (
+              <tr key={i} style={h.ref === "MANUAL" ? { background: "rgba(245, 158, 11, .12)" } : undefined}>
+                <td>{h.date}</td><td className="num">{h.prev == null ? "—" : _fmt(h.prev, 2)} → <b>{_fmt(h.cost, 2)}</b></td><td>{h.by}</td><td>{h.ref === "MANUAL" ? <b>{h.note}</b> : h.note}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>
+      )}
+      {err && <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+      {adj && <AdjustCostModal rec={f} kind="product" onClose={() => setAdj(false)} onDone={(m) => { setAdj(false); onDone(m); }}/>}
+    </ErpModal>
+  );
+}
+
+// สั่งซื้อสินค้า (ซื้อมาขายไป) จากหน้าสินค้า: สร้าง PO รออนุมัติให้ผู้ขายประจำ
+function ProductOrderModal({ f, onClose, onDone }) {
+  const ps = productPurchaseStats(f);
+  const demand = f.demandOpen || 0;
+  const suggest = f.suggestQty || Math.max(1, Math.ceil(Math.max((Number(f.min) || 0) + demand - f.stock, 0)));
+  const [qty, setQty] = useState(String(suggest));
+  const [price, setPrice] = useState(String(ps.last > 0 ? ps.last : (f.cost > 0 ? f.cost : "")));
+  const [supplier, setSupplier] = useState(f.supplier || "");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setErr("");
+    const q = Number(qty), p = Number(price);
+    if (!supplier) return setErr("กรุณาเลือก Supplier");
+    if (!(q > 0)) return setErr("จำนวนต้องมากกว่า 0");
+    if (!(p > 0)) return setErr("กรุณากรอกราคาซื้อต่อหน่วย (มากกว่า 0)");
+    const sup = SUPPLIERS.find((x) => x.code === supplier);
+    const subtotal = Math.round(q * p * 100) / 100, vat = Math.round(subtotal * 7) / 100;
+    const rec = { id: Store.nextDocNo("PO").docNo, date: Store.today(), supplier, supplierName: sup ? sup.name : supplier, items: 1, subtotal, vat, whtRate: 0,
+      total: Math.round((subtotal + vat) * 100) / 100, expectedDate: "—", status: "pending", createdBy: Store.userName(),
+      lines: [{ itemType: "product", item: f.id, name: f.code + " " + f.name, qty: q, unit: f.unit || "PCS", price: p, amount: subtotal }] };
+    setBusy(true);
+    try { await Store.savePO(rec); onDone("สร้างใบสั่งซื้อ " + rec.id + " (รออนุมัติ) แล้ว — ดูได้ที่เมนูใบสั่งซื้อ"); }
+    catch (e) { setErr(e && e.message ? e.message : String(e)); setBusy(false); }
+  };
+  return (
+    <ErpModal title={"สั่งซื้อ " + f.code} width={520} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={go}>สร้างใบสั่งซื้อ</button></>}>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 10 }}>
+        คงเหลือ <b>{_fmt(f.stock)}</b> {f.unit}{f.min > 0 ? " · Min " + _fmt(f.min) : ""}{demand > 0 ? " · ใบสั่งขายที่รอส่ง " + _fmt(demand) : ""}{(f.onOrder || 0) > 0 ? " · สั่งไว้แล้ว " + _fmt(f.onOrder) : ""}
+      </div>
+      <div className="grid-2" style={{ gap: 10 }}>
+        <div style={{ gridColumn: "1 / -1" }}><label className="field-label">Supplier *</label>
+          <select className="select" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
+            <option value="">— เลือก Supplier —</option>
+            {SUPPLIERS.filter((x) => x.status !== "inactive").map((x) => <option key={x.id} value={x.code}>{x.name}</option>)}
+          </select></div>
+        <div><label className="field-label">จำนวน ({f.unit}) *</label><input className="input num" type="number" min="0" step="any" value={qty} onChange={(e) => setQty(e.target.value)}/></div>
+        <div><label className="field-label">ราคาซื้อ / หน่วย (บาท) *</label><input className="input num" type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)}/></div>
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginTop: 8 }}>{ps.last > 0 ? "ซื้อล่าสุด ฿" + _fmt(ps.last, 2) + " · " : ""}ราคาตั้งต้น = ราคาซื้อล่าสุด (ไม่เคยซื้อ = ต้นทุนปัจจุบัน) แก้ได้ · PO ใหม่รออนุมัติ</div>
+      {err && <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
     </ErpModal>
   );
 }
@@ -256,12 +379,12 @@ const matKey = (s) => String(s == null ? "" : s).replace(/\s+/g, "").toUpperCase
 
 const BOM_STATUS_TH = { draft: "ร่าง", active: "ใช้งาน", inactive: "เลิกใช้" };
 
-// ประวัติราคาซื้อของวัตถุดิบ — อ่านจากบรรทัดของ PO ที่รับของแล้ว (ราคาก่อน VAT)
-function materialPurchaseStats(m) {
+// ประวัติราคาซื้อ — อ่านจากบรรทัดของ PO ที่รับของแล้ว (ราคาก่อน VAT); itemType: "material" (ค่าเริ่มต้น) | "product"
+function purchaseStats(itemType, id) {
   const rows = [];
   Store.state.purchaseOrders.filter((p) => p.status === "received").forEach((p) => {
     (p.lines || []).forEach((l) => {
-      if (l.item === m.id && l.price > 0) rows.push({ po: p.id, date: String(p.receivedAt || p.date || "").slice(0, 10), supplier: p.supplierName, qty: l.qty, unit: l.unit, price: l.price });
+      if (l.item === id && (l.itemType || "material") === itemType && l.price > 0) rows.push({ po: p.id, date: String(p.receivedAt || p.date || "").slice(0, 10), supplier: p.supplierName, qty: l.qty, unit: l.unit, price: l.price });
     });
   });
   rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.po < b.po ? 1 : -1));
@@ -270,6 +393,9 @@ function materialPurchaseStats(m) {
   const avg = totQty > 0 ? rows.reduce((s, r) => s + r.qty * r.price, 0) / totQty : null;
   return { rows, last: rows[0].price, avg, min: Math.min(...rows.map((r) => r.price)), max: Math.max(...rows.map((r) => r.price)) };
 }
+const materialPurchaseStats = (m) => purchaseStats("material", m.id);
+const productPurchaseStats = (f) => purchaseStats("product", f.id);
+window.productPurchaseStats = productPurchaseStats;
 window.materialPurchaseStats = materialPurchaseStats;
 
 // วัตถุดิบนี้ถูกอ้างอิงที่ใดบ้าง (PO / BOM / Stock Movement)
@@ -291,7 +417,7 @@ function matCodeConflict(code, selfId) {
 }
 
 // admin ปรับต้นทุนวัตถุดิบฉุกเฉิน (ต้องมีเหตุผล บันทึกลงประวัติ + audit)
-function AdjustCostModal({ rec, onClose, onDone }) {
+function AdjustCostModal({ rec, kind, onClose, onDone }) {
   const [c, setC] = useState(String(rec.cost == null ? "" : rec.cost));
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -299,7 +425,7 @@ function AdjustCostModal({ rec, onClose, onDone }) {
   const ok = v >= 0 && reason.trim() && !busy;
   const go = async () => {
     setBusy(true);
-    try { await Store.adjustMaterialCost(rec.id, v, reason.trim()); onDone("ปรับต้นทุน " + rec.code + " แล้ว"); }
+    try { await (kind === "product" ? Store.adjustProductCost : Store.adjustMaterialCost)(rec.id, v, reason.trim()); onDone("ปรับต้นทุน " + rec.code + " แล้ว"); }
     catch (e) { notify(e && e.message ? e.message : String(e), "error"); setBusy(false); }
   };
   return (
@@ -566,14 +692,21 @@ function JobBadge({ type }) {
 }
 
 function FinishedTable({ onAdd }) {
+  useStore();
   const [pe, setPe] = useState(null);
+  const [po, setPo] = useState(null);
+  const [toast, setToast] = useState(null);
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2800); };
+  const canBuy = Store.user() && ["admin", "procurement"].includes(Store.user().role);
   const custName = (code) => {
     const c = CUSTOMERS.find((x) => x.code === code);
     return c ? c.name : (code && code !== "—" ? code : null);
   };
   return (
     <div className="card">
-      {pe && <PriceEditModal f={pe} onClose={() => setPe(null)}/>}
+      {pe && <ProductEditModal f={Store.state.finished.find((x) => x.id === pe.id) || pe} onClose={() => setPe(null)} onDone={(m) => { setPe(null); flash(m); }}/>}
+      {po && <ProductOrderModal f={po} onClose={() => setPo(null)} onDone={(m) => { setPo(null); flash(m); }}/>}
+      {toast && <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 1100, background: "var(--text-primary)", color: "white", padding: "12px 18px", borderRadius: 10, boxShadow: "var(--shadow-lg)", fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 10 }}><I.Check size={16}/> {toast}</div>}
       <div style={{ overflow: "auto" }}>
       <table className="table">
         <thead>
@@ -592,14 +725,18 @@ function FinishedTable({ onAdd }) {
         </thead>
         <tbody>
           {FINISHED.map((f) => {
-            const margin = f.price ? ((f.price - f.cost) / f.price) * 100 : 0;
+            const margin = f.price && f.cost > 0 ? ((f.price - f.cost) / f.price) * 100 : 0;
             const cn = custName(f.customer);
+            const buy = Store.isBuyable(f);
+            const low = buy && f.min > 0 && f.stock < f.min;
+            const supName = buy && f.supplier ? ((SUPPLIERS.find((x) => x.code === f.supplier) || {}).name || f.supplier) : null;
             return (
               <tr key={f.id}>
                 <td className="mono"><b>{f.code}</b></td>
                 <td>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>{f.name}</div>
                   {f.color && <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>สี: {f.color}</div>}
+                  {supName && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 2 }}>ผู้ขายประจำ: {supName}{f.leadDays != null ? " · " + f.leadDays + " วัน" : ""}</div>}
                 </td>
                 <td><JobBadge type={f.jobType}/></td>
                 <td>{cn ? <span className="badge badge-neutral">{cn}</span> : <span style={{ color: "var(--text-tertiary)" }}>—</span>}</td>
@@ -609,11 +746,16 @@ function FinishedTable({ onAdd }) {
                 <td className="num">
                   <b>{_fmt(f.stock)}</b> <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{f.unit}</span>
                   {f.stock === 0 && <span className="badge badge-danger" style={{ marginLeft: 6 }}>หมด</span>}
+                  {f.stock > 0 && low && <span className="badge badge-warning" style={{ marginLeft: 6 }}>ต่ำกว่า Min</span>}
+                  {buy && f.min > 0 && <div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>Min {_fmt(f.min)}</div>}
                 </td>
-                <td className="num">{baht(f.cost, 2)}</td>
+                <td className="num">{buy && !(f.cost > 0) ? <span style={{ color: "var(--text-tertiary)", fontSize: 11 }}>ยังไม่มีต้นทุน</span> : baht(f.cost, 2)}</td>
                 <td className="num">{baht(f.price, 2)}</td>
                 <td className="num" style={{ color: margin > 40 ? "var(--success)" : "var(--text-primary)", fontWeight: 500 }}>{_fmt(margin, 1)}%</td>
-                <td><button className="btn btn-ghost btn-sm" onClick={() => setPe(f)}><I.Edit size={13}/> ราคา</button></td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setPe(f)}><I.Edit size={13}/> {buy ? "แก้ไข" : "ราคา"}</button>
+                  {buy && canBuy && <button className="btn btn-outline btn-sm" style={{ marginLeft: 4 }} onClick={() => setPo({ ...f, onOrder: Store.productOnOrder(f.id), demandOpen: Store.productDemand ? Store.productDemand(f.code) : 0 })}>สั่งซื้อ</button>}
+                </td>
               </tr>
             );
           })}
@@ -665,13 +807,17 @@ function AddProductForm({ onSubmit, onCancel }) {
   const [form, setForm] = useState({
     jobType: "oem", code: "", name: "", customer: "", color: "",
     weight: "", unit: "PCS", cost: "", price: "", stock: "",
+    buyable: false, supplier: "", min: "", leadDays: "",
   });
+  // สินค้าซื้อมาขายไป / สั่งซื้อได้: ต้นทุนมาจากการรับ PO — ตอนสร้างกรอกเฉพาะต้นทุนยกมา (เมื่อมีสต็อกตั้งต้น)
+  const managed = form.jobType === "trade" || form.buyable;
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const cost = parseFloat(form.cost) || 0;
   const price = parseFloat(form.price) || 0;
   const margin = price ? ((price - cost) / price) * 100 : 0;
-  const valid = form.code.trim() && form.name.trim() && price > 0;
+  const stock0 = parseInt(form.stock, 10) || 0;
+  const valid = form.code.trim() && form.name.trim() && price > 0 && (!managed || stock0 <= 0 || cost > 0);
 
   const submit = (e) => {
     e.preventDefault();
@@ -688,6 +834,8 @@ function AddProductForm({ onSubmit, onCancel }) {
       unit: form.unit,
       stock: parseInt(form.stock, 10) || 0,
       cost, price,
+      ...(form.jobType !== "trade" && form.buyable ? { buyable: true } : {}),
+      ...(managed ? { supplier: form.supplier || undefined, min: form.min === "" ? undefined : Number(form.min), leadDays: form.leadDays === "" ? undefined : Number(form.leadDays) } : {}),
     });
   };
 
@@ -747,13 +895,30 @@ function AddProductForm({ onSubmit, onCancel }) {
           <input type="number" min="0" className="input" placeholder="0" value={form.stock} onChange={(e) => set("stock", e.target.value)}/>
         </div>
         <div>
-          <label className="field-label">ราคาทุน / หน่วย (บาท)</label>
+          <label className="field-label">{managed ? "ต้นทุนยกมา / หน่วย (บาท)" + (stock0 > 0 ? " *" : "") : "ราคาทุน / หน่วย (บาท)"}</label>
           <input type="number" step="0.01" min="0" className="input" placeholder="0.00" value={form.cost} onChange={(e) => set("cost", e.target.value)}/>
+          {managed && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>ใช้เป็นต้นทุนตั้งต้นของสต็อกยกมาเท่านั้น หลังจากนี้ต้นทุนคำนวณจากราคาใน PO ที่รับของ{stock0 > 0 ? "" : " (ไม่มีสต็อกตั้งต้น เว้นว่างได้)"}</div>}
         </div>
         <div>
           <label className="field-label">ราคาขาย / หน่วย (บาท) *</label>
           <input required type="number" step="0.01" min="0" className="input" placeholder="0.00" value={form.price} onChange={(e) => set("price", e.target.value)}/>
         </div>
+        {form.jobType !== "trade" && (
+          <label style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "center", fontSize: 12.5 }}>
+            <input type="checkbox" checked={form.buyable} onChange={(e) => set("buyable", e.target.checked)}/> สั่งซื้อได้ (ซื้อสำเร็จรูป / จ้างผู้อื่นผลิต)
+          </label>
+        )}
+        {managed && (<>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label className="field-label">ผู้ขายประจำ</label>
+            <select className="select" value={form.supplier} onChange={(e) => set("supplier", e.target.value)}>
+              <option value="">— ไม่ระบุ —</option>
+              {SUPPLIERS.filter((x) => x.status !== "inactive").map((x) => <option key={x.id} value={x.code}>{x.name}</option>)}
+            </select>
+          </div>
+          <div><label className="field-label">จุดสั่งซื้อ (Min)</label><input type="number" min="0" step="any" className="input" placeholder="0" value={form.min} onChange={(e) => set("min", e.target.value)}/></div>
+          <div><label className="field-label">สั่งของใช้เวลา (วัน)</label><input type="number" min="0" step="1" className="input" placeholder="0" value={form.leadDays} onChange={(e) => set("leadDays", e.target.value)}/></div>
+        </>)}
       </div>
 
       {price > 0 && (

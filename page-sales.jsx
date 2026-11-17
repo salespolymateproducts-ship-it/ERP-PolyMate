@@ -212,6 +212,7 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
   if (!doc) return null;
   const rel = Workflow.related(doc.id);
   const can = (a) => Workflow.can(a, doc);
+  const live = Workflow.isLive(doc);
 
   return (
     <Drawer open onClose={onClose} width={900} title={<span>{DOC_LABEL[doc.type].th} · <span className="mono">{doc.id}</span> <DocStatusBadge doc={doc}/></span>}>
@@ -228,6 +229,7 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
         onRelated={() => setView("related")}
         onPrint={() => { setView("doc"); printDoc(doc.id); }}/>
 
+      {doc.type === "SO" && live && <TradeStockBanner doc={doc}/>}
       <div style={{ padding: "12px 18px 0" }}>
         <DocFlowStrip doc={doc} rel={rel} onOpen={onOpen}/>
         <div style={{ marginTop: 10 }}>
@@ -253,6 +255,43 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
       {woOpen && <WOModal so={doc} onClose={() => setWoOpen(false)}/>}
       {shipOpen && <ShipModal doc={doc} to={shipOpen} onClose={() => setShipOpen(null)}/>}
     </Drawer>
+  );
+}
+
+// สินค้าซื้อมาขายไปในใบสั่งขายที่สต๊อกไม่พอ: ขาดรวมทุกใบสั่งขายที่เปิดอยู่ − สต๊อก − ที่สั่งซื้อไว้แล้ว พร้อมปุ่มสั่งซื้อ
+function TradeStockBanner({ doc }) {
+  const [order, setOrder] = useState(null);
+  const [toast, setToast] = useState(null);
+  const canBuy = Store.user() && ["admin", "procurement"].includes(Store.user().role);
+  const rows = [];
+  const seen = new Set();
+  Workflow.remainingLines(doc).forEach((l) => {
+    if (l.remaining <= 0.0005 || seen.has(l.code)) return;
+    const f = Store.state.finished.find((x) => x.code === l.code);
+    if (!f || !Store.isBuyable(f)) return;
+    seen.add(l.code);
+    const pos = Store.productPosition(f);
+    if (pos.deficit > 0.0005) rows.push({ f, pos, need: l.remaining });
+  });
+  if (!rows.length) return null;
+  const anyShort = rows.some((r) => r.pos.short > 0.0005);
+  return (
+    <div style={{ margin: "12px 18px 0", border: "1px solid " + (anyShort ? "var(--danger)" : "var(--amber)"), borderRadius: 10, overflow: "hidden" }}>
+      <div style={{ padding: "9px 12px", background: anyShort ? "var(--danger-subtle, #fee2e2)" : "var(--amber-subtle)", color: anyShort ? "var(--danger)" : "var(--amber)", fontSize: 12.5, fontWeight: 600 }}>
+        <I.Alert size={14} style={{ verticalAlign: "middle" }}/> {anyShort ? "สินค้าซื้อมาขายสต๊อกไม่พอสำหรับใบสั่งขายที่เปิดอยู่ — ต้องสั่งซื้อ" : "สินค้าซื้อมาขายรอรับของตามใบสั่งซื้อที่สั่งไว้แล้ว"}
+      </div>
+      {rows.map(({ f, pos, need }) => (
+        <div key={f.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", borderTop: "1px solid var(--border)", fontSize: 12.5, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <b>{f.code}</b> {f.name}
+            <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>ใบนี้ต้องส่ง {_fmt(need)} · ทุกใบสั่งขายรวม {_fmt(pos.demand)} · สต๊อก {_fmt(pos.stock)} · สั่งไว้แล้ว {_fmt(pos.incoming)} · <b style={{ color: pos.short > 0.0005 ? "var(--danger)" : "var(--amber)" }}>{pos.short > 0.0005 ? "ขาด " + _fmt(Math.ceil(pos.short)) : "รอรับของ"}</b></div>
+          </div>
+          {canBuy && pos.short > 0.0005 && <button className="btn btn-primary btn-sm" onClick={() => setOrder({ ...f, onOrder: pos.incoming, demandOpen: pos.demand, suggestQty: Math.ceil(pos.short) })}>สั่งซื้อ</button>}
+        </div>
+      ))}
+      {order && <ProductOrderModal f={order} onClose={() => setOrder(null)} onDone={(m) => { setOrder(null); setToast(m); setTimeout(() => setToast(null), 2800); }}/>}
+      {toast && <div style={{ padding: "8px 12px", borderTop: "1px solid var(--border)", fontSize: 12.5, color: "var(--success)" }}><I.Check size={13}/> {toast}</div>}
+    </div>
   );
 }
 

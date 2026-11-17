@@ -17,8 +17,18 @@ const Analytics = (function () {
     const f = S.state.finished.find((x) => x.code === code); if (f) return f.cost || 0;
     const m = S.state.materials.find((x) => x.code === code); return m ? m.cost || 0 : 0;
   }
-  // ต้นทุนขายของใบกำกับภาษี = จำนวน × ต้นทุนมาตรฐานของสินค้า
-  function cogsOf(inv) { return r2((inv.lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * unitCost(l.code), 0)); }
+  // ต้นทุนต่อหน่วยของรายการเอกสาร: ใช้ต้นทุน ณ วันส่ง (unitCost ที่ใบส่งสินค้าบันทึกไว้ ตามสายเอกสารต้นทาง) — เอกสารเก่าที่ไม่มีค่านี้ใช้ต้นทุนปัจจุบัน
+  function lineCost(l, depth) {
+    if (l.unitCost != null) return Number(l.unitCost) || 0;
+    if (l.src && (depth || 0) < 5) {
+      const sd = S.state.docs.find((d) => d.id === l.src.doc);
+      const sl = sd && (sd.lines || [])[l.src.line];
+      if (sl) return lineCost(sl, (depth || 0) + 1);
+    }
+    return unitCost(l.code);
+  }
+  // ต้นทุนขายของใบกำกับภาษี = จำนวน × ต้นทุน ณ วันส่ง
+  function cogsOf(inv) { return r2((inv.lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * lineCost(l), 0)); }
   function month(ym) {
     const inv = invoices().filter((d) => d.date.slice(0, 7) === ym);
     const exps = S.state.expenses.filter((e) => e.status !== "cancelled" && (e.date || "").slice(0, 7) === ym);

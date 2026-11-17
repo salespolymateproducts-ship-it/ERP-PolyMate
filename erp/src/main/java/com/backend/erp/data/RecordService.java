@@ -190,6 +190,23 @@ public class RecordService {
 		}
 	}
 
+	// ---------- สินค้าซื้อมาขายไป / สินค้าที่ซื้อได้ ----------
+	/** สินค้าที่ออก PO ซื้อได้: ประเภทซื้อมาขายไป หรือเปิดธง buyable (เช่น สินค้า OEM ที่จ้างผู้อื่นผลิต) */
+	private static boolean isBuyable(Map<String, Object> f) {
+		return Boolean.TRUE.equals(f.get("buyable")) || "trade".equals(Json.s(f.get("jobType")));
+	}
+
+	/** ฟิลด์สำหรับการสั่งซื้อซ้ำ: จุดสั่งซื้อ (min) และระยะเวลาสั่งของ (leadDays) ต้องไม่ติดลบ */
+	private static void validateProductExtras(Map<String, Object> f) {
+		for (String k : List.of("min", "leadDays")) {
+			Object v = f.get(k);
+			if (v == null || (v instanceof String s && s.isBlank())) { f.remove(k); continue; }
+			if (!(v instanceof Number n) || !(n.doubleValue() >= 0) || Double.isInfinite(n.doubleValue())) {
+				throw ApiException.badRequest(("min".equals(k) ? "จุดสั่งซื้อ (Min)" : "ระยะเวลาสั่งของ (วัน)") + " ต้องเป็นตัวเลขไม่ติดลบ");
+			}
+		}
+	}
+
 	// ---------- กติกาของใบสั่งซื้อ (PO) ----------
 	private static boolean isPO(String coll) { return "purchaseOrders".equals(coll); }
 
@@ -226,12 +243,15 @@ public class RecordService {
 			if (!(o instanceof Map<?, ?> lm)) throw ApiException.badRequest("รายการที่ " + i + " ไม่ถูกต้อง");
 			@SuppressWarnings("unchecked") Map<String, Object> line = new LinkedHashMap<>((Map<String, Object>) lm);
 			String item = line.get("item") == null ? "" : String.valueOf(line.get("item")).trim();
-			if (item.isEmpty() || "custom".equals(item)) throw ApiException.badRequest("รายการที่ " + i + " ต้องเลือกวัตถุดิบจากทะเบียน (ไม่รองรับรายการพิมพ์เอง เพราะรับของเข้าสต๊อกไม่ได้)");
-			Optional<String> ms = repo.get("materials", item);
-			if (ms.isEmpty()) throw ApiException.badRequest("รายการที่ " + i + " ไม่พบวัตถุดิบ " + item + " ในทะเบียน");
+			if (item.isEmpty() || "custom".equals(item)) throw ApiException.badRequest("รายการที่ " + i + " ต้องเลือกวัตถุดิบหรือสินค้าจากทะเบียน (ไม่รองรับรายการพิมพ์เอง เพราะรับของเข้าสต๊อกไม่ได้)");
+			boolean isProduct = "product".equals(Json.s(line.get("itemType")));
+			Optional<String> ms = repo.get(isProduct ? "finished" : "materials", item);
+			if (ms.isEmpty()) throw ApiException.badRequest("รายการที่ " + i + " ไม่พบ" + (isProduct ? "สินค้า " : "วัตถุดิบ ") + item + " ในทะเบียน");
 			Map<String, Object> mat = json.map(ms.get());
-			if (Boolean.FALSE.equals(mat.get("active"))) throw ApiException.badRequest("รายการที่ " + i + " วัตถุดิบ " + item + " ปิดใช้งานแล้ว");
-			if (!seen.add(item)) throw ApiException.badRequest("วัตถุดิบ " + item + " ซ้ำในใบสั่งซื้อเดียวกัน (รายการที่ " + i + ")");
+			if (isProduct && !isBuyable(mat)) throw ApiException.badRequest("รายการที่ " + i + " สินค้า " + item + " ไม่ได้ตั้งเป็นสินค้าที่ซื้อได้ (ซื้อมาขายไป) — ตั้งค่า \"ซื้อได้\" ที่ทะเบียนสินค้าก่อน");
+			if (Boolean.FALSE.equals(mat.get("active"))) throw ApiException.badRequest("รายการที่ " + i + (isProduct ? " สินค้า " : " วัตถุดิบ ") + item + " ปิดใช้งานแล้ว");
+			if (!seen.add((isProduct ? "p:" : "m:") + item)) throw ApiException.badRequest((isProduct ? "สินค้า " : "วัตถุดิบ ") + item + " ซ้ำในใบสั่งซื้อเดียวกัน (รายการที่ " + i + ")");
+			line.put("itemType", isProduct ? "product" : "material");
 			double qty = Json.num(line.get("qty")), price = Json.num(line.get("price"));
 			if (!(qty > 0) || Double.isInfinite(qty)) throw ApiException.badRequest("รายการที่ " + i + " จำนวนต้องมากกว่า 0");
 			if (!(price > 0) || Double.isInfinite(price)) throw ApiException.badRequest("รายการที่ " + i + " ราคาต่อหน่วยต้องมากกว่า 0");
@@ -312,6 +332,10 @@ public class RecordService {
 		if (isSupplier(coll)) assertUniqueSupplierCode(id, body);
 		if ("materials".equals(coll)) initMaterialCost(u, body);
 		if (isPO(coll)) validatePOCreate(body);
+		if ("finished".equals(coll)) {
+			validateProductExtras(body);
+			if (isBuyable(body)) initMaterialCost(u, body); // ต้นทุนยกมา; หลังจากนี้ต้นทุนเกิดจากการรับ PO
+		}
 		if ("boms".equals(coll)) boms.prepare(u, id, body, null);
 		if ("workOrders".equals(coll)) { boms.attachToNewWorkOrder(body); machines.assertUsable(body.get("machine")); }
 		if ("machines".equals(coll)) machines.prepareCreate(u, id, body);
@@ -391,6 +415,11 @@ public class RecordService {
 					throw ApiException.conflict("VERSION_CONFLICT", "ข้อมูลถูกแก้ไขโดยผู้อื่นแล้ว กรุณาโหลดใหม่");
 				}
 				if ("materials".equals(coll)) assertMaterialCostUntouched(cur, body);
+				if ("finished".equals(coll)) {
+					if (isBuyable(cur)) assertMaterialCostUntouched(cur, body);
+					else if (isBuyable(body)) initMaterialCost(u, body);
+					validateProductExtras(body);
+				}
 				if ("materials".equals(coll) && !isMaterialMaster(u)) {
 					Set<String> keys = new HashSet<>(cur.keySet());
 					keys.addAll(body.keySet());
@@ -442,6 +471,11 @@ public class RecordService {
 			rec.put(k, v);
 		});
 		if (isPO(coll)) validatePOUpdate(u, before, rec);
+		if ("finished".equals(coll)) {
+			if (isBuyable(before)) assertMaterialCostUntouched(before, rec);
+			else if (isBuyable(rec)) initMaterialCost(u, rec);
+			validateProductExtras(rec);
+		}
 		if ("boms".equals(coll)) boms.prepare(u, id, rec, before);
 		if ("workOrders".equals(coll)) {
 			boms.keepWorkOrderBom(before, rec);

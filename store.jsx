@@ -558,6 +558,39 @@ const Store = (function () {
   const setMachineCondition = (id, condition, reason) => serverCall("POST", "/actions/machines/" + encodeURIComponent(id) + "/condition", { condition, reason });
   const logMachineMaintenance = (id, body) => serverCall("POST", "/actions/machines/" + encodeURIComponent(id) + "/maintenance", body);
 
+  // ---------- สินค้าซื้อมาขายไป ----------
+  // สินค้าที่ออก PO ซื้อได้ = ประเภทซื้อมาขายไป หรือเปิดธง buyable (เช่น สินค้า OEM ที่จ้างผู้อื่นผลิต) — ต้นทุนของสินค้ากลุ่มนี้มาจากการรับ PO
+  const isBuyable = (f) => !!f && (f.buyable === true || f.jobType === "trade");
+  const saveProduct = (rec) => serverCall("PUT", "/finished/" + encodeURIComponent(rec.id), rec);
+  const savePO = (rec) => serverCall("POST", "/purchaseOrders", rec);
+  const adjustProductCost = (id, cost, reason) => serverCall("POST", "/actions/products/" + encodeURIComponent(id) + "/adjust-cost", { cost, reason });
+  // ที่สั่งซื้อไว้แล้วแต่ยังไม่ได้รับ (PO รออนุมัติ/อนุมัติแล้ว) ของสินค้า (itemType product)
+  function productOnOrder(productId) {
+    return state.purchaseOrders.filter((p) => ["pending", "approved"].includes(p.status))
+      .reduce((t, p) => t + (p.lines || []).filter((l) => l.itemType === "product" && l.item === productId).reduce((x, l) => x + (Number(l.qty) || 0), 0), 0);
+  }
+  // สินค้าที่ใบสั่งขายที่ยังไม่ส่งต้องการ = ที่เหลือส่งของใบสั่งขาย (SO) + ใบส่งสินค้าที่ยังไม่อนุมัติ (ยังไม่ตัดสต๊อก)
+  function productDemandDocs(code) {
+    let qty = 0; const docs = new Set();
+    state.docs.forEach((d) => {
+      if (d.type === "SO" && Workflow.isLive(d) && d.status !== "completed") {
+        Workflow.remainingLines(d).forEach((l) => { if (l.code === code && l.remaining > 0.0005) { qty += l.remaining; docs.add(d.id); } });
+      } else if (d.type === "DO" && ["draft", "pending"].includes(d.status)) {
+        (d.lines || []).forEach((l) => { if (l.code === code) { qty += Number(l.qty) || 0; docs.add(d.id); } });
+      }
+    });
+    return { qty: r3(qty), docs: Array.from(docs) };
+  }
+  const productDemand = (code) => productDemandDocs(code).qty;
+  // ตำแหน่งสินค้า: ขาด = ความต้องการรวมทุกใบสั่งขายที่เปิดอยู่ − สต๊อก − ที่สั่งซื้อไว้แล้ว (เหมือนวัตถุดิบ ไม่มีลำดับก่อนหลัง)
+  function productPosition(f) {
+    const dem = productDemandDocs(f.code);
+    const stock = Number(f.stock) || 0;
+    const incoming = productOnOrder(f.id);
+    const deficit = r3(Math.max(0, dem.qty - stock));
+    const short = r3(Math.max(0, deficit - incoming));
+    return { demand: dem.qty, docs: dem.docs, stock, incoming, deficit, short, covered: r3(deficit - short) };
+  }
   // บันทึก BOM ผ่าน API ตรง ๆ (server ตรวจกฎและตอบ error ทันที) แล้วโหลดข้อมูลใหม่
   async function saveBom(rec, isNew) {
     if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
@@ -711,6 +744,7 @@ const Store = (function () {
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
     adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,
+    isBuyable, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
     MACHINE_COND, machineCond, machineUsable, machinePM, machineFit, saveMachine, setMachineCondition, logMachineMaintenance,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,

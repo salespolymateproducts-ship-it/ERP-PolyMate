@@ -126,10 +126,20 @@ public class WorkflowService {
 	// ---------- ปรับต้นทุนวัตถุดิบฉุกเฉิน (admin เท่านั้น) ----------
 	@Transactional
 	public Map<String, Object> adjustMaterialCost(AuthUser u, String id, double newCost, String reason) {
+		return adjustCost(u, "materials", "วัตถุดิบ", id, newCost, reason);
+	}
+
+	/** ปรับต้นทุนสินค้าซื้อมาขาย/สินค้าที่ตั้งเป็นซื้อได้ (admin เท่านั้น ต้องมีเหตุผล) */
+	@Transactional
+	public Map<String, Object> adjustProductCost(AuthUser u, String id, double newCost, String reason) {
+		return adjustCost(u, "finished", "สินค้า", id, newCost, reason);
+	}
+
+	private Map<String, Object> adjustCost(AuthUser u, String coll, String label, String id, double newCost, String reason) {
 		need(u, "admin");
 		if (reason == null || reason.isBlank()) throw ApiException.badRequest("ต้องระบุเหตุผลการปรับต้นทุน");
 		if (!(newCost >= 0) || Double.isInfinite(newCost)) throw ApiException.badRequest("ต้นทุนต้องเป็นตัวเลขไม่ติดลบ");
-		Map<String, Object> m = lock("materials", id, "ไม่พบวัตถุดิบ " + id);
+		Map<String, Object> m = lock(coll, id, "ไม่พบ" + label + " " + id);
 		double old = Json.num(m.get("cost")), next = r4(newCost);
 		List<Object> hist = m.get("costHistory") instanceof List<?> h ? new ArrayList<>(h) : new ArrayList<>();
 		Map<String, Object> he = new LinkedHashMap<>();
@@ -142,8 +152,8 @@ public class WorkflowService {
 		hist.add(he);
 		m.put("cost", next);
 		m.put("costHistory", hist);
-		save("materials", m, u);
-		audit.log(u, "ADJUST_COST", "วัตถุดิบ", id, old + " → " + next + " · " + reason.trim());
+		save(coll, m, u);
+		audit.log(u, "ADJUST_COST", label, id, old + " → " + next + " · " + reason.trim());
 		Map<String, Object> out = new LinkedHashMap<>();
 		out.put("id", id);
 		out.put("cost", next);
@@ -165,6 +175,7 @@ public class WorkflowService {
 		if (lines.isEmpty()) throw ApiException.unprocessable("PO_NO_LINES", poId + " ไม่มีรายการสั่งซื้อ รับของเข้าคลังไม่ได้");
 		// ขั้น 1: จับคู่วัตถุดิบให้ครบทุกบรรทัดก่อน — บรรทัดใดจับคู่ไม่ได้ให้ปฏิเสธทั้งใบ (ไม่รับเข้าบางรายการแบบเงียบ ๆ)
 		List<String> matchedIds = new ArrayList<>();
+		List<String> matchedColl = new ArrayList<>();
 		List<Double> matchedQty = new ArrayList<>();
 		List<Double> matchedPrice = new ArrayList<>();
 		int idx = 0;
@@ -175,18 +186,30 @@ public class WorkflowService {
 			double qty = Json.num(line.get("qty"));
 			String label = Json.s(line.get("name")).isBlank() ? Json.s(line.get("item")) : Json.s(line.get("name"));
 			if (!(qty > 0)) throw ApiException.unprocessable("PO_LINE_INVALID", poId + " รายการที่ " + idx + " (" + label + ") จำนวนต้องมากกว่า 0");
-			Map<String, Object> m = matchMaterial(line);
+			boolean isProduct = "product".equals(Json.s(line.get("itemType")));
+			Map<String, Object> m;
+			if (isProduct) {
+				String pid = Json.s(line.get("item")).trim();
+				m = pid.isEmpty() ? null : repo.getForUpdate("finished", pid).map(json::map).orElse(null);
+				if (m == null) {
+					throw ApiException.unprocessable("PRODUCT_NOT_FOUND", poId + " รายการที่ " + idx + " (" + label + ") ไม่พบสินค้าในทะเบียน จึงรับเข้าคลังไม่ได้ — ไม่มีการรับเข้าสต๊อกรายการใดเลย");
+				}
+			} else {
+				m = matchMaterial(line);
+			}
 			if (m == null) {
 				throw ApiException.unprocessable("MATERIAL_NOT_FOUND", poId + " รายการที่ " + idx + " (" + label + ") ไม่พบวัตถุดิบในทะเบียน จึงรับเข้าคลังไม่ได้ — ไม่มีการรับเข้าสต๊อกรายการใดเลย กรุณาแก้ไขรายการ (ยกเลิก PO แล้วออกใหม่โดยเลือกวัตถุดิบจากทะเบียน)");
 			}
 			matchedIds.add(String.valueOf(m.get("id")));
+			matchedColl.add(isProduct ? "finished" : "materials");
 			matchedQty.add(qty);
 			matchedPrice.add(Json.num(line.get("price")));
 		}
 		// ขั้น 2: เพิ่มสต๊อก + บันทึก movement (ทั้งหมดอยู่ในธุรกรรมเดียวกับการเปลี่ยนสถานะ PO)
 		for (int k = 0; k < matchedIds.size(); k++) {
 			double qty = matchedQty.get(k);
-			Map<String, Object> m = lock("materials", matchedIds.get(k), "ไม่พบวัตถุดิบ");
+			String coll = matchedColl.get(k);
+			Map<String, Object> m = lock(coll, matchedIds.get(k), "ไม่พบรายการ");
 			double oldStock = Json.num(m.get("stock")), oldCost = Json.num(m.get("cost")), price = matchedPrice.get(k);
 			m.put("stock", Json.r3(oldStock + qty));
 			// ต้นทุนถัวเฉลี่ยเคลื่อนที่ (Moving Average): คิดจากราคาใน PO (ก่อน VAT); ไม่มีราคาใน PO = ไม่เปลี่ยนต้นทุน
@@ -210,12 +233,14 @@ public class WorkflowService {
 				hist.add(he);
 				m.put("costHistory", hist);
 			}
-			save("materials", m, u);
-			logMove(u, "IN", Json.s(m.get("code")), qty, Json.s(m.get("unit")), poId, "รับเข้าจาก " + Json.s(po.get("supplierName")), extra);
+			save(coll, m, u);
+			String unit = Json.s(m.get("unit")).isBlank() ? "PCS" : Json.s(m.get("unit"));
+			logMove(u, "IN", Json.s(m.get("code")), qty, unit, poId, "รับเข้าจาก " + Json.s(po.get("supplierName")), extra);
 			Map<String, Object> r = new LinkedHashMap<>();
 			r.put("code", m.get("code"));
+			r.put("type", coll.equals("finished") ? "product" : "material");
 			r.put("qty", qty);
-			r.put("unit", m.get("unit"));
+			r.put("unit", unit);
 			if (extra != null) r.put("costAfter", extra.get("costAfter"));
 			received.add(r);
 		}
@@ -229,7 +254,7 @@ public class WorkflowService {
 			Map<String, Object> exp = new LinkedHashMap<>();
 			exp.put("id", expId);
 			exp.put("date", LocalDate.now(BKK).toString());
-			exp.put("category", "วัตถุดิบ");
+			exp.put("category", matchedColl.stream().allMatch("finished"::equals) ? "สินค้าซื้อมาขาย" : "วัตถุดิบ");
 			exp.put("vendor", po.get("supplierName"));
 			exp.put("desc", "รับของตาม " + poId + " (" + lines.size() + " รายการ)");
 			exp.put("amount", po.get("subtotal"));

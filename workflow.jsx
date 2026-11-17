@@ -404,7 +404,10 @@ const Workflow = (function () {
   function postStock(doc, sign) {
     let n = 0;
     (doc.lines || []).forEach((l) => {
-      if (!S.findStockItem(l.code)) return;
+      const it0 = S.findStockItem(l.code);
+      if (!it0) return;
+      // บันทึกต้นทุน ณ วันส่งไว้กับรายการ → ต้นทุนขายของใบกำกับภาษีไม่เปลี่ยนย้อนหลังเมื่อต้นทุนสินค้าขยับตามราคาซื้อ
+      if (sign < 0) l.unitCost = Number(it0.rec.cost) || 0;
       S.adjustStock(l.code, sign * Number(l.qty), doc.id, (sign < 0 ? "ส่งสินค้าให้ " : "คืนสต๊อก (ยกเลิกใบส่งสินค้า) ") + doc.customerName);
       n++;
     });

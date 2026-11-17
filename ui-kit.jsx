@@ -230,6 +230,19 @@ function buildNotifications(role) {
   });
   s.materials.filter((m) => m.active !== false && m.stock < m.min).forEach((m) =>
     out.push({ id: "ls" + m.id, kind: "warning", icon: "Boxes", title: `วัตถุดิบต่ำกว่าจุดสั่งซื้อ: ${m.code} เหลือ ${_fmt(m.stock)} ${m.unit} (ขั้นต่ำ ${_fmt(m.min)})`, time: "สต๊อก", page: "inventory" }));
+  // สินค้าซื้อมาขายไป: ต่ำกว่าจุดสั่งซื้อ และใบสั่งขายที่รอสินค้าเข้า
+  s.finished.filter((f) => Store.isBuyable(f) && f.active !== false).forEach((f) => {
+    const incoming = Store.productOnOrder(f.id);
+    if (f.min > 0 && f.stock < f.min) {
+      out.push({ id: "lf" + f.id, kind: "warning", icon: "Boxes", title: `สินค้าซื้อมาขายต่ำกว่าจุดสั่งซื้อ: ${f.code} เหลือ ${_fmt(f.stock)} ${f.unit || ""} (ขั้นต่ำ ${_fmt(f.min)})` + (incoming > 0 ? ` · สั่งซื้อแล้ว ${_fmt(incoming)}` : " · ยังไม่ได้สั่งซื้อ"), time: "สต๊อก", page: "inventory" });
+    }
+    const pos = Store.productPosition(f);
+    if (pos.short > 0.0005) {
+      out.push({ id: "so" + f.id, kind: "alert", icon: "Truck", title: `ใบสั่งขายรอสินค้า ${f.code}: ขาดรวม ${_fmt(Math.ceil(pos.short))} ${f.unit || ""} (ต้องส่ง ${_fmt(pos.demand)} มี ${_fmt(pos.stock)}) — ${pos.docs.join(", ")} · ยังไม่ได้สั่งซื้อ`, time: "ต้องสั่งซื้อ", page: "sales" });
+    } else if (pos.deficit > 0.0005) {
+      out.push({ id: "sw" + f.id, kind: "warning", icon: "Truck", title: `ใบสั่งขายรอสินค้า ${f.code} ตามใบสั่งซื้อที่สั่งไว้ (${_fmt(pos.incoming)} ${f.unit || ""}) — ${pos.docs.join(", ")}`, time: "รอรับของ", page: "sales" });
+    }
+  });
   (s.machines || []).filter((m) => m.condition !== "retired").forEach((m) => {
     const pm = Store.machinePM(m);
     if (m.condition === "maintenance") {
