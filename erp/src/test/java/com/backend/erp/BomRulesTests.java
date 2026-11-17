@@ -434,6 +434,37 @@ class BomRulesTests {
 		assertEquals(1, jdbc.queryForObject("select count(*)::int from erp_audit_logs where action='BOM_ADJUST' and detail like '%ปรับก่อนผลิต%'", Integer.class));
 	}
 
+	@SuppressWarnings("unchecked")
+	@Test @Order(13)
+	void productionCostRollsIntoFinishedGoodsAverage() throws Exception {
+		call("POST", "/materials", mat("T-RES", 1000, true), admin, 201);
+		call("POST", "/materials", mat("T-MB", 100, true), admin, 201);
+		call("POST", "/materials", mat("T-NOCOST", 100, true), admin, 201);
+		call("POST", "/actions/materials/T-RES/adjust-cost", Map.of("cost", 40, "reason", "ทดสอบ"), admin, 200);
+		call("POST", "/actions/materials/T-MB/adjust-cost", Map.of("cost", 100, "reason", "ทดสอบ"), admin, 200);
+		call("POST", "/finished", fg("P-COST"), admin, 201);
+		call("POST", "/boms", bom("B-COST", "P-COST", "active", List.of(resin("T-RES", 0.05), pct("T-MB", "masterbatch", 2))), prod, 201);
+		call("POST", "/workOrders", with(wo("WO-COST", "P-COST", 190), "bomId", "B-COST"), prod, 201);
+		// ล็อตแรก: ผลิต 100 (NG 10) วัตถุดิบ 5 กก.×40 + 0.1 กก.×100 = 210 บาท → ÷ ชิ้นดี 90 = 2.3333
+		Map<String, Object> r1 = call("POST", "/actions/work-orders/WO-COST/produce", Map.of("produced", 100, "ng", 10), prod, 200);
+		assertEquals(210.0, ((Number) r1.get("materialCost")).doubleValue(), 1e-6);
+		assertEquals(2.3333, ((Number) call("GET", "/finished/FG-P-COST", null, admin, 200).get("cost")).doubleValue(), 1e-4);
+		// ล็อตสอง: ผลิต 100 (ไม่มี NG) ถัวเฉลี่ยกับสต๊อกเดิม 90 ชิ้น → (90×2.3333 + 210) ÷ 190 = 2.2105
+		call("POST", "/actions/work-orders/WO-COST/produce", Map.of("produced", 100, "ng", 0), prod, 200);
+		Map<String, Object> f = call("GET", "/finished/FG-P-COST", null, admin, 200);
+		assertEquals(2.2105, ((Number) f.get("cost")).doubleValue(), 1e-3);
+		assertEquals(2, ((List<?>) f.get("costHistory")).size());
+		assertEquals(420.0, ((Number) call("GET", "/workOrders/WO-COST", null, admin, 200).get("materialCost")).doubleValue(), 1e-6);
+		// วัตถุดิบไม่มีต้นทุน: ต้นทุนสินค้าไม่เปลี่ยน และแจ้งรายการที่ไม่มีต้นทุน
+		call("POST", "/finished", fg("P-NC"), admin, 201);
+		call("POST", "/boms", bom("B-NC", "P-NC", "active", List.of(resin("T-NOCOST", 0.1))), prod, 201);
+		call("POST", "/workOrders", with(wo("WO-NC", "P-NC", 10), "bomId", "B-NC"), prod, 201);
+		Map<String, Object> r3 = call("POST", "/actions/work-orders/WO-NC/produce", Map.of("produced", 10, "ng", 0), prod, 200);
+		assertTrue(String.valueOf(r3.get("noCost")).contains("T-NOCOST"));
+		Object nc = call("GET", "/finished/FG-P-NC", null, admin, 200).get("cost");
+		assertEquals(0.0, nc == null ? 0.0 : ((Number) nc).doubleValue(), 1e-9);
+	}
+
 	static Map<String, Object> share(String item, double p) {
 		Map<String, Object> l = new LinkedHashMap<>();
 		l.put("item", item); l.put("type", "resin"); l.put("basis", "shareOfResin"); l.put("pct", p);

@@ -34,7 +34,7 @@ const Analytics = (function () {
     const exps = S.state.expenses.filter((e) => e.status !== "cancelled" && (e.date || "").slice(0, 7) === ym);
     const revenue = r2(inv.reduce((s, d) => s + d.subtotal, 0));
     const cogs = r2(inv.reduce((s, d) => s + cogsOf(d), 0));
-    const opex = r2(exps.filter((e) => e.category !== "วัตถุดิบ" && e.category !== "สีผสม").reduce((s, e) => s + (e.amount || 0), 0));
+    const opex = r2(exps.filter((e) => e.category !== "วัตถุดิบ" && e.category !== "สีผสม" && e.category !== "สินค้าซื้อมาขาย").reduce((s, e) => s + (e.amount || 0), 0));
     const salesVat = r2(inv.filter((d) => d.vatOn).reduce((s, d) => s + d.vat, 0));
     const purchaseVat = r2(exps.reduce((s, e) => s + (e.vat || 0), 0));
     return { ym, revenue, cogs, opex, gp: r2(revenue - cogs), ebit: r2(revenue - cogs - opex), salesVat, purchaseVat, invoices: inv, expenses: exps };

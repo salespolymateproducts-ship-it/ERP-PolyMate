@@ -287,6 +287,9 @@ public class WorkflowService {
 		// สูตรที่ใช้ตัดวัตถุดิบ = snapshot ของใบสั่งผลิต (ใบเก่าที่ไม่มี snapshot ใช้สูตรหลักปัจจุบันของสินค้า)
 		java.util.Optional<Map<String, Object>> snap = boms.effectiveSnapshot(wo);
 		List<Map<String, Object>> consumed = new ArrayList<>();
+		double batchCost = 0;
+		List<String> noCost = new ArrayList<>();
+		Double newFgCost = null;
 		if (snap.isPresent() && snap.get().get("lines") instanceof List<?> bl) {
 			double waste = 1 + Json.num(snap.get().get("wasteRate")) / 100d;
 			// คำนวณปริมาณที่ใช้ทุกบรรทัดก่อน แล้วล็อกวัตถุดิบเรียงตามรหัส (กัน deadlock เมื่อบันทึกผลิตพร้อมกัน)
@@ -315,6 +318,9 @@ public class WorkflowService {
 				double use = Json.r3(e.getValue());
 				m.put("stock", Json.r3(Json.num(m.get("stock")) - use));
 				save("materials", m, u);
+				// มูลค่าวัตถุดิบที่ใช้ ณ ต้นทุนถัวเฉลี่ยปัจจุบัน (รวมส่วนที่เป็น NG) — ใช้คิดต้นทุนสินค้าสำเร็จรูป
+				if (Json.num(m.get("cost")) > 0) batchCost += use * Json.num(m.get("cost"));
+				else noCost.add(Json.s(m.get("code")));
 				logMove(u, "OUT", Json.s(m.get("code")), use, Json.s(m.get("unit")), woId, "ตัดสต๊อกผลิต " + Json.s(wo.get("product")));
 				Map<String, Object> c = new LinkedHashMap<>();
 				c.put("code", m.get("code"));
@@ -326,7 +332,24 @@ public class WorkflowService {
 		List<String> fgIds = jdbc.queryForList("select id from erp_records where collection='finished' and data->>'code' = ? for update", String.class, productCode);
 		if (!fgIds.isEmpty() && good > 0) {
 			Map<String, Object> fg = lock("finished", fgIds.get(0), "ไม่พบสินค้า");
+			double oldStock = Math.max(0, Json.num(fg.get("stock"))), oldCost = Json.num(fg.get("cost"));
 			fg.put("stock", Json.num(fg.get("stock")) + good);
+			// ต้นทุนสินค้าสำเร็จรูป = ถัวเฉลี่ยถ่วงน้ำหนัก (ของเดิม + ต้นทุนวัตถุดิบจริงของล็อตนี้ ÷ ชิ้นดี) — ต้นทุนเดิม 0 = ยังไม่เคยมีต้นทุน ไม่นำมาเฉลี่ย
+			if (batchCost > 0) {
+				double baseVal = oldCost > 0 ? oldStock * oldCost : 0, baseQty = oldCost > 0 ? oldStock : 0;
+				newFgCost = r4((baseVal + batchCost) / (baseQty + good));
+				List<Object> hist = fg.get("costHistory") instanceof List<?> h ? new ArrayList<>(h) : new ArrayList<>();
+				Map<String, Object> he = new LinkedHashMap<>();
+				he.put("date", LocalDate.now(BKK).toString());
+				he.put("cost", newFgCost);
+				he.put("prev", oldCost);
+				he.put("by", u.fullName());
+				he.put("ref", woId);
+				he.put("note", "ต้นทุนผลิตจริง: วัตถุดิบ " + r4(batchCost) + " บาท ÷ ชิ้นดี " + (long) good + (noCost.isEmpty() ? "" : " (ยังไม่มีต้นทุน: " + String.join(", ", noCost) + ")"));
+				hist.add(he);
+				fg.put("cost", newFgCost);
+				fg.put("costHistory", hist);
+			}
 			save("finished", fg, u);
 			logMove(u, "IN", Json.s(fg.get("code")), good, fg.get("unit") == null ? "PCS" : Json.s(fg.get("unit")), woId, "รับเข้าสินค้าสำเร็จรูปจากการผลิต");
 		}
@@ -341,6 +364,7 @@ public class WorkflowService {
 		}
 		wo.put("produced", Json.num(wo.get("produced")) + produced);
 		wo.put("ng", Json.num(wo.get("ng")) + ng);
+		if (batchCost > 0) wo.put("materialCost", r4(Json.num(wo.get("materialCost")) + batchCost));
 		List<Object> logs = new ArrayList<>();
 		Map<String, Object> entry = new LinkedHashMap<>();
 		entry.put("at", nowStr());
@@ -371,6 +395,9 @@ public class WorkflowService {
 		out.put("consumed", consumed);
 		out.put("good", good);
 		out.put("hasBom", snap.isPresent());
+		out.put("materialCost", r4(batchCost));
+		if (newFgCost != null) out.put("unitCost", newFgCost);
+		if (!noCost.isEmpty()) out.put("noCost", noCost);
 		return out;
 	}
 }
