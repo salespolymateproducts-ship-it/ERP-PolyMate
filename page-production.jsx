@@ -1,4 +1,4 @@
-/* global React, I, WORK_ORDERS, WO_STATUS, MACHINES, MOLDS, MATERIALS, FINISHED, CUSTOMERS, BOMS, DELIVERY_STATUS, Store, useStore, Workflow, StatusBadge, PageHeader, Drawer, Tabs, baht, _fmt, runAction, printDoc, ReasonModal, DocStatusBadge, EmptyRow */
+/* global React, I, WORK_ORDERS, WO_STATUS, MACHINES, MOLDS, MATERIALS, FINISHED, CUSTOMERS, DELIVERY_STATUS, Store, useStore, Workflow, StatusBadge, PageHeader, Drawer, Tabs, baht, _fmt, runAction, printDoc, ReasonModal, DocStatusBadge, EmptyRow */
 
 function PageProduction() {
   const [tab, setTab] = useState("BOARD");
@@ -283,23 +283,15 @@ function WOMini({ k, v, unit }) {
 }
 
 // ----- Material check & reservation helpers -----
-const _RESIN_FALLBACK = { "GP-LID-RND": "RM-PE-001", "NP-CCASE-A2": "RM-ABS-001" };
-function _bomFor(productCode) {
-  const direct = Object.values(BOMS).find((b) => b.productCode === productCode);
-  if (direct) return direct;
-  const item = _RESIN_FALLBACK[productCode];
-  if (!item) return null;
-  const m = MATERIALS.find((x) => x.id === item);
-  return { estimated: true, wasteRate: 1.5, packaging: "BOX-CT-30L", lines: [{ item, name: (m ? m.name : "เม็ดพลาสติก") + " (ประเมิน 18 ก./ชิ้น)", qty: 0.018, cost: m ? m.cost : 50 }] };
-}
+// สูตรที่ใช้กับใบสั่งผลิต = snapshot ที่เก็บไว้ตอนเปิดใบสั่ง (ใบเก่าที่ไม่มี snapshot ใช้สูตรหลักปัจจุบันของสินค้า)
+function _bomOfWo(wo) { return Store.woBom(wo); }
 function _woReq(wo) {
-  const bom = _bomFor(wo.productCode);
+  const bom = _bomOfWo(wo);
   if (!bom) return [];
-  return bom.lines.map((l) => ({ item: l.item, name: l.name, perPc: l.qty, kg: wo.quantity * l.qty * (1 + bom.wasteRate / 100) }));
+  return bom.lines.map((l) => ({ item: l.item, name: l.name, perPc: l.qty, kg: wo.quantity * l.qty * (1 + (bom.wasteRate || 0) / 100) }));
 }
 // วัตถุดิบในสูตร BOM ที่ถูกปิดใช้งาน (active === false) — ใช้แจ้งเตือน ไม่บล็อกงานผลิตที่กำลังทำอยู่
-function _inactiveInBom(productCode) {
-  const bom = _bomFor(productCode);
+function _inactiveInBom(bom) {
   if (!bom) return [];
   return bom.lines.map((l) => MATERIALS.find((x) => x.id === l.item)).filter((m) => m && m.active === false);
 }
@@ -315,7 +307,7 @@ function _reservedByOthers(materialId, currentWoId) {
 }
 
 function MaterialReservation({ wo }) {
-  const bom = _bomFor(wo.productCode);
+  const bom = _bomOfWo(wo);
   const reqs = _woReq(wo).map((r) => {
     const m = MATERIALS.find((x) => x.id === r.item);
     const reservedOther = _reservedByOthers(r.item, wo.id);
@@ -639,26 +631,27 @@ function createPOFromShortage(wo, shortItems) {
   }), (ids) => `สร้างใบสั่งซื้อ ${ids.join(", ")} (รออนุมัติ) — ดูได้ที่เมนูใบสั่งซื้อ` + (skipped.length ? ` · ข้าม ${skipped.join(", ")} (ปิดใช้งาน)` : ""));
 }
 
-// ต้นทุนวัตถุดิบตามสูตร BOM (ใช้ต้นทุนวัตถุดิบในทะเบียน)
+// ต้นทุนวัตถุดิบตามสูตรของใบสั่ง (snapshot) ใช้ต้นทุนถัวเฉลี่ยปัจจุบันของวัตถุดิบในทะเบียน
 function woBomCost(wo) {
-  const bom = Object.values(BOMS).find((b) => b.productCode === wo.productCode);
+  const bom = Store.woBom(wo);
   const basis = wo.produced || wo.quantity;
   if (!bom) return { basis, lines: [], total: 0, hasBom: false };
   const waste = 1 + (bom.wasteRate || 0) / 100;
   const lines = bom.lines.map((l) => {
     const m = Store.state.materials.find((x) => x.id === l.item);
-    const cost = m ? m.cost : l.cost;
+    const cost = m ? Number(m.cost) || 0 : 0;
     const qty = l.qty * basis * waste;
     return { name: l.name, qty, unit: m ? m.unit : "KG", cost, v: qty * cost };
   });
-  return { basis, lines, total: lines.reduce((s, l) => s + l.v, 0), hasBom: true, wasteRate: bom.wasteRate };
+  return { basis, lines, total: lines.reduce((t, l) => t + l.v, 0), hasBom: true, wasteRate: bom.wasteRate, bomName: bom.name, revision: bom.revision };
 }
 
 function ProductionRecorder({ wo, onProduce }) {
   const remaining = Math.max(0, wo.quantity - (wo.produced || 0));
   const [qty, setQty] = useState("");
   const [ng, setNg] = useState("");
-  const bom = _bomFor(wo.productCode);
+  const bom = _bomOfWo(wo);
+  const [busy, setBusy] = useState(false);
   const n = parseInt(qty, 10) || 0;
   const ngN = parseInt(ng, 10) || 0;
   const good = Math.max(0, n - ngN);
@@ -669,19 +662,27 @@ function ProductionRecorder({ wo, onProduce }) {
     const use = Math.round(bl.qty * n * (1 + (bom.wasteRate || 0) / 100) * 1000) / 1000;
     return { name: m ? m.name : bl.item, code: m ? m.code : bl.item, use, unit: m ? m.unit : "KG", stock: m ? m.stock : 0, short: m ? m.stock < use : false, inactive: !!m && m.active === false };
   }) : [];
-  const inactiveBom = _inactiveInBom(wo.productCode);
+  const inactiveBom = _inactiveInBom(bom);
   const fg = FINISHED.find((f) => f.code === wo.productCode);
   const anyShort = preview.some((p) => p.short);
-  const valid = n > 0 && ngN <= n && !done;
+  const valid = n > 0 && ngN <= n && !done && !busy;
 
-  const commit = () => {
+  // server ตัดวัตถุดิบ + เพิ่มสินค้าสำเร็จรูปใน transaction เดียว; วัตถุดิบไม่พอ = ปฏิเสธทั้งหมด
+  const commit = async () => {
     if (!valid) return;
-    const r = Store.produceWO(wo.id, n, ngN);
-    setQty(""); setNg("");
-    if (r.ok) onProduce(
-      `บันทึกผลิต ${wo.id}: +${_fmt(r.good)} ชิ้นเข้าคลัง` +
-      (r.consumed.length ? ` · ตัดวัตถุดิบ ${r.consumed.length} รายการ` : "")
-    );
+    setBusy(true);
+    try {
+      const r = await Store.produceWO(wo.id, n, ngN);
+      setQty(""); setNg("");
+      if (r.ok) onProduce(
+        `บันทึกผลิต ${wo.id}: +${_fmt(r.good)} ชิ้นเข้าคลัง` +
+        (r.consumed.length ? ` · ตัดวัตถุดิบ ${r.consumed.length} รายการ` : "")
+      );
+    } catch (e) {
+      notify(e && e.message ? e.message : String(e), "error");
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -746,9 +747,9 @@ function ProductionRecorder({ wo, onProduce }) {
             )}
 
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14 }}>
-              {anyShort && <span style={{ fontSize: 12, color: "var(--danger)", display: "flex", alignItems: "center", gap: 5 }}><I.Alert size={13}/> วัตถุดิบบางรายการจะติดลบ — สต๊อกจะติดลบ</span>}
+              {anyShort && <span style={{ fontSize: 12, color: "var(--danger)", display: "flex", alignItems: "center", gap: 5 }}><I.Alert size={13}/> วัตถุดิบบางรายการไม่พอ — ระบบจะปฏิเสธการบันทึกผลิต (ไม่ตัดสต๊อกใดๆ)</span>}
               <div className="spacer"/>
-              <button type="button" className="btn btn-primary" disabled={!valid} onClick={commit}>
+              <button type="button" className="btn btn-primary" disabled={!valid || anyShort} onClick={commit}>
                 <I.Check size={14}/> บันทึก & ตัดสต๊อก
               </button>
             </div>
@@ -769,13 +770,18 @@ function AddWorkOrderForm({ onSubmit, onCancel }) {
   const [date, setDate] = useState("2026-06-06");
   const [due, setDue] = useState("");
   const [priority, setPriority] = useState("normal");
+  const [bomId, setBomId] = useState("");
 
   const product = FINISHED.find((f) => f.code === productCode);
+  const variants = productCode ? Store.bomsFor(productCode) : [];
+  const bomSel = variants.find((b) => b.id === bomId) || null;
+  const bomSnap = bomSel ? Store.bomSnapshot(bomSel) : null;
   const cust = product ? CUSTOMERS.find((c) => c.code === product.customer) : null;
 
   const onProduct = (code) => {
     setProductCode(code);
-    const bom = Object.values(BOMS).find((b) => b.productCode === code);
+    const bom = Store.bomDefaultFor(code);
+    setBomId(bom ? bom.id : "");
     if (bom && bom.mold) {
       setMold(bom.mold);
       const mo = MOLDS.find((m) => m.id === bom.mold || m.code === bom.mold);
@@ -799,6 +805,7 @@ function AddWorkOrderForm({ onSubmit, onCancel }) {
       machine: machine || "—", mold: mold || "—",
       cavities: parseInt(cavities, 10) || 1, cycleTime: parseInt(cycleTime, 10) || 20,
       status: "queued", priority,
+      ...(bomSel ? { bomId: bomSel.id, bomSnapshot: Store.bomSnapshot(bomSel) } : {}),
       deliverySchedule: due ? [{ date: due, qty, shipped: 0, status: "scheduled", note: "" }] : [],
     });
   };
@@ -814,14 +821,40 @@ function AddWorkOrderForm({ onSubmit, onCancel }) {
         {product && (
           <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)", display: "flex", gap: 14 }}>
             <span>ลูกค้า: <b style={{ color: "var(--text-primary)" }}>{cust ? cust.name : (product.customer === "—" ? "—" : product.customer)}</b></span>
-            {Object.values(BOMS).find((b) => b.productCode === productCode)
-              ? <span style={{ color: "var(--success)" }}><I.Check size={11}/> มีสูตร BOM — ตัดสต๊อกอัตโนมัติ</span>
-              : <span style={{ color: "var(--amber)" }}>⚠ ยังไม่มี BOM</span>}
+            {variants.length
+              ? <span style={{ color: "var(--success)" }}><I.Check size={11}/> มีสูตร BOM {variants.length} สูตร — ตัดสต๊อกอัตโนมัติ</span>
+              : <span style={{ color: "var(--amber)" }}>⚠ ยังไม่มี BOM ที่ใช้งาน (สร้างได้ที่หน้า สต๊อก / BOM) — จะไม่ตัดวัตถุดิบ</span>}
           </div>
         )}
-        {product && _inactiveInBom(productCode).length > 0 && (
+        {variants.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <label className="field-label">สูตรที่ใช้ผลิต (BOM) *</label>
+            <select className="select" value={bomId} onChange={(e) => setBomId(e.target.value)}>
+              {variants.map((b) => <option key={b.id} value={b.id}>{b.name}{b.color ? " · " + b.color : ""}{b.isDefault ? " (สูตรหลัก)" : ""} · rev {b.revision}</option>)}
+            </select>
+            {bomSnap && (() => {
+              const qtyN = parseInt(quantity, 10) || 0;
+              const cost = Store.bomCost(bomSnap);
+              const short = qtyN > 0 ? bomSnap.lines.filter((l) => {
+                const m = MATERIALS.find((x) => x.id === l.item);
+                return !m || (m.stock - _reservedByOthers(l.item, null)) < qtyN * l.qty * (1 + (bomSnap.wasteRate || 0) / 100);
+              }) : [];
+              return (
+                <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>
+                  {bomSnap.lines.map((l) => l.name + " " + _fmt(l.qty, 5) + " กก./ชิ้น").join(" · ")}
+                  <div style={{ marginTop: 3 }}>
+                    ต้นทุนวัสดุ ≈ <b>{cost.perPiece > 0 ? "฿" + _fmt(cost.perPiece, 4) + "/ชิ้น" : "ยังไม่มีต้นทุน"}</b>
+                    {cost.missing.length > 0 && <span style={{ color: "var(--amber)" }}> (ยังไม่มีต้นทุน: {cost.missing.join(", ")})</span>}
+                    {qtyN > 0 && (short.length ? <span style={{ color: "var(--danger)" }}> · วัตถุดิบไม่พอ {short.length} รายการ</span> : <span style={{ color: "var(--success)" }}> · วัตถุดิบพอ</span>)}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+        )}
+        {bomSnap && _inactiveInBom(bomSnap).length > 0 && (
           <div style={{ marginTop: 8, fontSize: 12, color: "var(--amber)", display: "flex", gap: 6, alignItems: "center" }}>
-            <I.Alert size={12}/> สูตรใช้วัตถุดิบที่ปิดใช้งาน: {_inactiveInBom(productCode).map((m) => m.code).join(", ")}
+            <I.Alert size={12}/> สูตรใช้วัตถุดิบที่ปิดใช้งาน: {_inactiveInBom(bomSnap).map((m) => m.code).join(", ")}
           </div>
         )}
       </div>

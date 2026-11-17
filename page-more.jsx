@@ -1,4 +1,4 @@
-/* global React, I, BOMS, MOLDS, ROLES, DOC_LABEL, Store, useStore, Analytics, exportCSV, notify, runAction, ErpModal, EmptyRow, baht, _fmt */
+/* global React, I, MOLDS, Drawer, ROLES, DOC_LABEL, Store, useStore, Analytics, exportCSV, notify, runAction, ErpModal, EmptyRow, baht, _fmt */
 
 function Step({ done, text }) {
   return (
@@ -31,53 +31,294 @@ function KPICard({ icon, tone, label, value, unit, foot }) {
 
 // ===== Audit Log =====
 
+// ===== BOM (สูตรการผลิต): สินค้าหนึ่งรหัสมีได้หลายสูตร (เม็ดคนละเบอร์ / สีต่างกัน) =====
+const BOM_TYPE_TH = { resin: "เม็ดพลาสติก", masterbatch: "มาสเตอร์แบตช์ / สี", additive: "สารเติมแต่ง", regrind: "เศษรีไซเคิล" };
+const BOM_STATUS = { draft: { th: "ร่าง", cls: "badge-neutral" }, active: { th: "ใช้งาน", cls: "badge-success" }, inactive: { th: "เลิกใช้", cls: "badge-danger" } };
+
+function bomLineText(l) {
+  if (l.pct != null && (l.basis === "pctOfResin" || l.type === "regrind")) return `${_fmt(l.pct, 2)} % ของเม็ด`;
+  return `${_fmt(l.qty, 5)} กก./ชิ้น`;
+}
+
 function BOMViewer() {
+  useStore();
+  const [q, setQ] = useState("");
+  const [showInactive, setShowInactive] = useState(false);
+  const [form, setForm] = useState(null); // { mode: "new" | "edit" | "copy", rec }
+  const [toast, setToast] = useState(null);
+  const role = Store.user() ? Store.user().role : null;
+  const canEdit = role === "admin" || role === "production";
+  const boms = Store.state.boms;
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2600); };
+
+  const list = boms.filter((b) => (showInactive || b.status !== "inactive")
+    && (!q || (b.productCode + " " + b.name + " " + (b.color || "")).toLowerCase().includes(q.toLowerCase())));
+  const byProduct = {};
+  list.forEach((b) => { (byProduct[b.productCode] = byProduct[b.productCode] || []).push(b); });
+  const withoutBom = Store.state.finished.filter((f) => f.jobType !== "trade" && !boms.some((b) => b.productCode === f.code && b.status === "active"));
+
+  const act = async (fn, okMsg) => {
+    try { await fn(); flash(okMsg); } catch (e) { notify(e && e.message ? e.message : String(e), "error"); }
+  };
+  const setStatus = (b, status) => act(() => Store.saveBom({ ...b, status }, false), status === "active" ? `ใช้งานสูตร "${b.name}" แล้ว` : `เปลี่ยนสถานะสูตร "${b.name}" แล้ว`);
+  const setDefault = (b) => act(() => Store.saveBom({ ...b, isDefault: true }, false), `ตั้ง "${b.name}" เป็นสูตรหลักแล้ว`);
+
   return (
-    <div className="grid-2">
-      {Object.entries(BOMS).map(([id, b]) => {
-        const rmTotal = b.lines.reduce((s, l) => s + l.qty * l.cost, 0);
-        const withWaste = rmTotal * (1 + b.wasteRate / 100);
+    <>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+        <input className="input" style={{ maxWidth: 260 }} placeholder="ค้นหารหัสสินค้า / ชื่อสูตร / สี" value={q} onChange={(e) => setQ(e.target.value)}/>
+        <label style={{ fontSize: 12.5, color: "var(--text-secondary)", display: "flex", gap: 6, alignItems: "center" }}>
+          <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)}/> แสดงสูตรที่เลิกใช้
+        </label>
+        <div className="spacer" style={{ flex: 1 }}/>
+        {canEdit && <button className="btn btn-primary btn-sm" onClick={() => setForm({ mode: "new" })}><I.Plus size={14}/> สร้างสูตร BOM</button>}
+      </div>
+      {!canEdit && <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 10 }}>ดูได้อย่างเดียว — แก้ BOM ได้เฉพาะผู้ดูแลระบบและฝ่ายผลิต</div>}
+
+      {withoutBom.length > 0 && (
+        <div style={{ marginBottom: 14, padding: "9px 12px", borderRadius: 8, background: "var(--amber-subtle)", color: "var(--amber)", fontSize: 12.5 }}>
+          <I.Alert size={13} style={{ verticalAlign: "middle" }}/> สินค้าที่ยังไม่มีสูตร BOM ที่ใช้งาน: {withoutBom.map((f) => f.code).join(", ")}
+        </div>
+      )}
+
+      {!list.length && <div className="card" style={{ padding: 24, textAlign: "center", color: "var(--text-tertiary)" }}>ยังไม่มีสูตร BOM{q ? " ที่ตรงกับคำค้น" : ""}</div>}
+      {Object.entries(byProduct).map(([code, items]) => {
+        const fg = Store.state.finished.find((f) => f.code === code);
         return (
-          <div key={id} className="card" style={{ padding: 0 }}>
-            <div style={{ padding: 14, borderBottom: "1px solid var(--border)", background: "var(--bg-subtle)" }}>
-              <div className="mono" style={{ fontSize: 11, color: "var(--text-secondary)" }}>{b.productCode}</div>
-              <div style={{ fontWeight: 600, fontSize: 14, marginTop: 2 }}>{b.product}</div>
-              <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginTop: 4, display: "flex", gap: 8 }}>
-                <span><I.Mold size={11} style={{ verticalAlign: "middle" }}/> {b.mold}</span>
-                <span>·</span>
-                <span><I.Package size={11} style={{ verticalAlign: "middle" }}/> {b.packaging}</span>
-              </div>
+          <div key={code} style={{ marginBottom: 18 }}>
+            <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 8 }}>
+              <span className="mono" style={{ color: "var(--text-secondary)", fontSize: 12 }}>{code}</span> {fg ? fg.name : ""}
+              <span style={{ fontWeight: 400, fontSize: 12, color: "var(--text-tertiary)", marginLeft: 8 }}>{items.length} สูตร</span>
             </div>
-            <table className="table" style={{ fontSize: 12 }}>
-              <thead>
-                <tr><th>วัตถุดิบ</th><th className="num">ต่อชิ้น</th><th className="num">ราคาทุน</th><th className="num">ต้นทุน</th></tr>
-              </thead>
-              <tbody>
-                {b.lines.map((l, i) => (
-                  <tr key={i}>
-                    <td>
-                      <div className="mono" style={{ fontSize: 10.5, color: "var(--text-secondary)" }}>{l.item}</div>
-                      <div style={{ fontSize: 12 }}>{l.name}</div>
-                    </td>
-                    <td className="num" style={{ fontSize: 11.5 }}>{_fmt(l.qty, 4)} {l.unit.replace("/PCS","")}</td>
-                    <td className="num" style={{ fontSize: 11.5 }}>{_fmt(l.cost, 2)}</td>
-                    <td className="num" style={{ fontWeight: 600 }}>{_fmt(l.qty * l.cost, 4)}</td>
-                  </tr>
-                ))}
-                <tr style={{ background: "var(--bg-subtle)" }}>
-                  <td colSpan={3} style={{ textAlign: "right", fontSize: 11, color: "var(--text-secondary)" }}>+ Waste {b.wasteRate}%</td>
-                  <td className="num" style={{ fontSize: 11, color: "var(--amber)" }}>+{_fmt((withWaste - rmTotal), 4)}</td>
-                </tr>
-                <tr style={{ background: "var(--text-primary)", color: "white" }}>
-                  <td colSpan={3} style={{ textAlign: "right", fontWeight: 600 }}>ต้นทุนวัตถุดิบ/ชิ้น</td>
-                  <td className="num" style={{ fontWeight: 700 }}>฿{_fmt(withWaste, 4)}</td>
-                </tr>
-              </tbody>
-            </table>
+            <div className="grid-2">
+              {items.map((b) => <BomCard key={b.id} b={b} canEdit={canEdit}
+                onEdit={() => setForm({ mode: "edit", rec: b })}
+                onCopy={() => setForm({ mode: "copy", rec: b })}
+                onActivate={() => setStatus(b, "active")}
+                onDeactivate={() => { if (window.confirm(`เลิกใช้สูตร "${b.name}" ?\n(ใบสั่งผลิตเดิมยังใช้ snapshot ของสูตรนี้ต่อได้ตามปกติ)`)) setStatus(b, "inactive"); }}
+                onDefault={() => setDefault(b)}/>)}
+            </div>
           </div>
         );
       })}
+
+      <Drawer open={!!form} onClose={() => setForm(null)} width={760}
+        title={form ? (form.mode === "edit" ? "แก้ไขสูตร " + form.rec.name : form.mode === "copy" ? "คัดลอกสูตร " + form.rec.name : "สร้างสูตร BOM") : ""}>
+        {form && <BomForm key={form.mode + (form.rec ? form.rec.id : "")} mode={form.mode} rec={form.rec}
+          onCancel={() => setForm(null)} onDone={(m) => { setForm(null); flash(m); }}/>}
+      </Drawer>
+
+      {toast && (
+        <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 100, background: "var(--text-primary)", color: "white", padding: "12px 18px", borderRadius: 10, boxShadow: "var(--shadow-lg)", fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 10 }}>
+          <I.Check size={16}/> {toast}
+        </div>
+      )}
+    </>
+  );
+}
+
+function BomCard({ b, canEdit, onEdit, onCopy, onActivate, onDeactivate, onDefault }) {
+  const snap = Store.bomSnapshot(b);
+  const cost = Store.bomCost(snap);
+  const st = BOM_STATUS[b.status] || BOM_STATUS.draft;
+  const openWo = Store.state.workOrders.filter((w) => w.bomId === b.id && ["queued", "setup", "running"].includes(w.status)).length;
+  return (
+    <div className="card" style={{ padding: 0, opacity: b.status === "inactive" ? 0.7 : 1 }}>
+      <div style={{ padding: 14, borderBottom: "1px solid var(--border)", background: "var(--bg-subtle)" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 600, fontSize: 14 }}>{b.name}</span>
+          {b.isDefault && b.status === "active" && <span className="badge badge-info">สูตรหลัก</span>}
+          <span className={"badge " + st.cls}>{st.th}</span>
+          <span className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>rev {b.revision || 1}</span>
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginTop: 4, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {b.color && <span>สี: {b.color}</span>}
+          {b.mold && <span>· แม่พิมพ์ {b.mold}</span>}
+          {b.packaging && <span>· {b.packaging}</span>}
+          {openWo > 0 && <span>· ใบสั่งผลิตที่เปิดอยู่ {openWo}</span>}
+        </div>
+      </div>
+      <table className="table" style={{ fontSize: 12 }}>
+        <thead><tr><th>วัตถุดิบ</th><th>ชนิด</th><th className="num">กำหนด</th><th className="num">กก./ชิ้น</th><th className="num">ต้นทุน/ชิ้น</th></tr></thead>
+        <tbody>
+          {(b.lines || []).map((l, i) => {
+            const rl = snap.lines[i] || {};
+            const m = Store.state.materials.find((x) => x.id === l.item);
+            const c = m ? Number(m.cost) || 0 : 0;
+            return (
+              <tr key={i}>
+                <td><div className="mono" style={{ fontSize: 10.5, color: "var(--text-secondary)" }}>{m ? m.code : l.item}</div><div style={{ fontSize: 12 }}>{l.name}</div></td>
+                <td style={{ fontSize: 11.5 }}>{BOM_TYPE_TH[l.type] || l.type}</td>
+                <td className="num" style={{ fontSize: 11.5 }}>{bomLineText(l)}</td>
+                <td className="num" style={{ fontSize: 11.5 }}>{_fmt(rl.qty || 0, 5)}</td>
+                <td className="num" style={{ fontWeight: 600 }}>{c > 0 ? _fmt((rl.qty || 0) * c, 4) : <span style={{ color: "var(--text-tertiary)", fontWeight: 400, fontSize: 11 }}>ไม่มีต้นทุน</span>}</td>
+              </tr>
+            );
+          })}
+          <tr style={{ background: "var(--bg-subtle)" }}>
+            <td colSpan={4} style={{ textAlign: "right", fontSize: 11, color: "var(--text-secondary)" }}>เผื่อเสีย {b.wasteRate || 0}%</td>
+            <td/>
+          </tr>
+          <tr style={{ background: "var(--text-primary)", color: "white" }}>
+            <td colSpan={4} style={{ textAlign: "right", fontWeight: 600 }}>ต้นทุนวัสดุ/ชิ้น{cost.missing.length ? " (ไม่ครบ)" : ""}</td>
+            <td className="num" style={{ fontWeight: 700 }}>{cost.perPiece > 0 ? "฿" + _fmt(cost.perPiece, 4) : "—"}</td>
+          </tr>
+        </tbody>
+      </table>
+      {cost.missing.length > 0 && <div style={{ padding: "6px 12px", fontSize: 11, color: "var(--amber)" }}>ยังไม่มีต้นทุน: {cost.missing.join(", ")}</div>}
+      {canEdit && (
+        <div style={{ display: "flex", gap: 6, padding: 10, borderTop: "1px solid var(--border)", flexWrap: "wrap" }}>
+          <button className="btn btn-outline btn-sm" onClick={onEdit}>แก้ไข</button>
+          <button className="btn btn-outline btn-sm" onClick={onCopy}>คัดลอก</button>
+          {b.status === "active" && !b.isDefault && <button className="btn btn-outline btn-sm" onClick={onDefault}>ตั้งเป็นสูตรหลัก</button>}
+          {b.status !== "active" && <button className="btn btn-outline btn-sm" onClick={onActivate}>ใช้งานสูตรนี้</button>}
+          {b.status === "active" && <button className="btn btn-outline btn-sm" style={{ color: "var(--danger)" }} onClick={onDeactivate}>เลิกใช้</button>}
+        </div>
+      )}
     </div>
+  );
+}
+
+function BomForm({ mode, rec, onCancel, onDone }) {
+  const editing = mode === "edit";
+  const toLine = (l) => ({ item: l.item, type: l.type, basis: l.type === "regrind" ? "pctOfResin" : (l.basis || "perPiece"), value: String(l.basis === "pctOfResin" || l.type === "regrind" ? l.pct : l.qty) });
+  const [f, setF] = useState(rec ? {
+    productCode: rec.productCode, name: mode === "copy" ? rec.name + " (สำเนา)" : rec.name, color: rec.color || "", mold: rec.mold || "",
+    status: mode === "copy" ? "draft" : rec.status, wasteRate: String(rec.wasteRate || 0), packaging: rec.packaging || "",
+    lines: (rec.lines || []).map(toLine),
+  } : { productCode: "", name: "", color: "", mold: "", status: "draft", wasteRate: "0", packaging: "", lines: [{ item: "", type: "resin", basis: "perPiece", value: "" }] });
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+  const setLine = (i, patch) => setF((x) => ({ ...x, lines: x.lines.map((l, idx) => idx === i ? { ...l, ...patch } : l) }));
+  const mats = Store.state.materials.filter((m) => m.active !== false);
+
+  // ตัวอย่างการคำนวณสด (ตามกติกาเดียวกับ server)
+  const draft = { lines: f.lines.filter((l) => l.item).map((l) => ({ item: l.item, name: (Store.state.materials.find((m) => m.id === l.item) || {}).name || l.item, type: l.type, basis: l.basis,
+    qty: l.basis === "perPiece" ? parseFloat(l.value) || 0 : undefined, pct: l.basis === "pctOfResin" ? parseFloat(l.value) || 0 : undefined })), wasteRate: parseFloat(f.wasteRate) || 0 };
+  const resolved = Store.bomResolve(draft);
+  const cost = Store.bomCost({ lines: resolved, wasteRate: draft.wasteRate });
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr("");
+    if (!f.productCode) return setErr("กรุณาเลือกสินค้า");
+    if (!f.name.trim()) return setErr("กรุณาตั้งชื่อสูตร");
+    if (!f.lines.length) return setErr("ต้องมีรายการวัตถุดิบอย่างน้อย 1 รายการ");
+    for (let i = 0; i < f.lines.length; i++) {
+      const l = f.lines[i];
+      if (!l.item) return setErr("รายการที่ " + (i + 1) + " ยังไม่ได้เลือกวัตถุดิบ");
+      const v = parseFloat(l.value);
+      if (!(v > 0)) return setErr("รายการที่ " + (i + 1) + " ต้องกรอกปริมาณมากกว่า 0");
+      if (l.basis === "pctOfResin" && !(v < 100)) return setErr("รายการที่ " + (i + 1) + " สัดส่วนต้องน้อยกว่า 100%");
+    }
+    const lines = f.lines.map((l) => {
+      const m = Store.state.materials.find((x) => x.id === l.item);
+      const v = parseFloat(l.value);
+      return { item: l.item, name: m ? m.name : l.item, type: l.type, basis: l.basis, ...(l.basis === "perPiece" ? { qty: v } : { pct: v }), unit: "KG/PCS" };
+    });
+    const body = { ...(editing ? rec : {}), productCode: f.productCode, name: f.name.trim(), color: f.color.trim(), mold: f.mold, status: f.status,
+      wasteRate: parseFloat(f.wasteRate) || 0, packaging: f.packaging.trim(), lines };
+    if (!editing) {
+      let n = Store.state.boms.filter((b) => b.productCode === f.productCode).length + 1;
+      while (Store.state.boms.some((b) => b.id === "BOM-" + f.productCode + "-" + n)) n++;
+      body.id = "BOM-" + f.productCode + "-" + n;
+      delete body._version;
+    }
+    setSaving(true);
+    try {
+      await Store.saveBom(body, !editing);
+      onDone(editing ? `แก้ไขสูตร "${body.name}" แล้ว` : `สร้างสูตร "${body.name}" แล้ว`);
+    } catch (e2) {
+      setErr(e2 && e2.message ? e2.message : String(e2));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} style={{ padding: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label className="field-label">สินค้า *</label>
+          <select className="select" value={f.productCode} disabled={editing} onChange={(e) => set("productCode", e.target.value)}>
+            <option value="">— เลือกสินค้าสำเร็จรูป —</option>
+            {Store.state.finished.map((p) => <option key={p.id} value={p.code}>{p.code} · {p.name}</option>)}
+          </select>
+          {editing && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>เปลี่ยนสินค้าของสูตรไม่ได้ — คัดลอกไปสร้างสูตรใหม่แทน</div>}
+        </div>
+        <div>
+          <label className="field-label">ชื่อสูตร *</label>
+          <input className="input" placeholder="เช่น สูตร ABS ดำ" value={f.name} onChange={(e) => set("name", e.target.value)}/>
+        </div>
+        <div>
+          <label className="field-label">สี</label>
+          <input className="input" placeholder="เช่น ดำ / น้ำเงิน 2925" value={f.color} onChange={(e) => set("color", e.target.value)}/>
+        </div>
+        <div>
+          <label className="field-label">สถานะ</label>
+          <select className="select" value={f.status} onChange={(e) => set("status", e.target.value)}>
+            <option value="draft">ร่าง</option>
+            <option value="active">ใช้งาน</option>
+            <option value="inactive">เลิกใช้</option>
+          </select>
+        </div>
+        <div>
+          <label className="field-label">แม่พิมพ์ตั้งต้น (ไม่บังคับ)</label>
+          <select className="select" value={f.mold} onChange={(e) => set("mold", e.target.value)}>
+            <option value="">—</option>
+            {Store.state.molds.map((m) => <option key={m.id} value={m.id}>{m.id} · {m.name}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="field-label">เผื่อเสีย (%)</label>
+          <input type="number" step="0.1" min="0" max="50" className="input num" value={f.wasteRate} onChange={(e) => set("wasteRate", e.target.value)}/>
+        </div>
+        <div>
+          <label className="field-label">บรรจุภัณฑ์</label>
+          <input className="input" placeholder="เช่น กล่อง 60 ชิ้น" value={f.packaging} onChange={(e) => set("packaging", e.target.value)}/>
+        </div>
+      </div>
+
+      <label className="field-label" style={{ marginTop: 16 }}>รายการวัตถุดิบ *</label>
+      <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginBottom: 6 }}>เม็ดพลาสติกกรอกเป็น กก./ชิ้น · มาสเตอร์แบตช์/สารเติมแต่งกรอกเป็น กก./ชิ้น หรือ % ของน้ำหนักเม็ดก็ได้ · เศษรีไซเคิลกรอกเป็น % ของเม็ด (แทนเม็ดใหม่) — ถ้าจะใช้ ให้สร้างวัตถุดิบ "เศษบด" ในคลังก่อน</div>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 90px 90px 28px", gap: 8, padding: "8px 10px", background: "var(--bg-subtle)", fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>
+          <div>วัตถุดิบ</div><div>ชนิด</div><div>กำหนดเป็น</div><div style={{ textAlign: "right" }}>ค่า</div><div style={{ textAlign: "right" }}>กก./ชิ้น</div><div/>
+        </div>
+        {f.lines.map((l, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 90px 90px 28px", gap: 8, padding: "8px 10px", borderTop: "1px solid var(--border)", alignItems: "center" }}>
+            <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.item} onChange={(e) => setLine(i, { item: e.target.value })}>
+              <option value="">— เลือกวัตถุดิบ —</option>
+              {mats.map((m) => <option key={m.id} value={m.id}>{m.code} · {m.name}</option>)}
+            </select>
+            <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.type}
+              onChange={(e) => { const t = e.target.value; setLine(i, { type: t, basis: t === "regrind" ? "pctOfResin" : t === "resin" ? "perPiece" : l.basis }); }}>
+              {Object.entries(BOM_TYPE_TH).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+            {l.type === "masterbatch" || l.type === "additive"
+              ? <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.basis} onChange={(e) => setLine(i, { basis: e.target.value })}>
+                  <option value="perPiece">กก./ชิ้น</option><option value="pctOfResin">% ของเม็ด</option>
+                </select>
+              : <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{l.type === "regrind" ? "% ของเม็ด" : "กก./ชิ้น"}</div>}
+            <input type="number" step="any" min="0" className="input num" style={{ height: 34, textAlign: "right" }} value={l.value} onChange={(e) => setLine(i, { value: e.target.value })}/>
+            <div className="num" style={{ textAlign: "right", fontSize: 12 }}>{_fmt((resolved[draft.lines.findIndex((d) => d.item === l.item && d.type === l.type)] || {}).qty || 0, 5)}</div>
+            <button type="button" className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => set("lines", f.lines.length > 1 ? f.lines.filter((_, idx) => idx !== i) : f.lines)} title="ลบ"><I.X size={13}/></button>
+          </div>
+        ))}
+      </div>
+      <button type="button" className="btn btn-outline btn-sm" style={{ marginTop: 8 }} onClick={() => set("lines", [...f.lines, { item: "", type: "masterbatch", basis: "pctOfResin", value: "" }])}><I.Plus size={13}/> เพิ่มรายการ</button>
+
+      <div style={{ marginTop: 14, background: "var(--bg-subtle)", borderRadius: 10, padding: 12, fontSize: 12.5 }}>
+        ต้นทุนวัสดุโดยประมาณ (รวมเผื่อเสีย): <b>{cost.perPiece > 0 ? "฿" + _fmt(cost.perPiece, 4) + " / ชิ้น" : "ยังไม่มีต้นทุน"}</b>
+        {cost.missing.length > 0 && <span style={{ color: "var(--amber)" }}> · ยังไม่มีต้นทุน: {cost.missing.join(", ")} (จะมีเมื่อรับ PO)</span>}
+      </div>
+
+      {err && <div style={{ marginTop: 12, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
+        <button type="button" className="btn btn-outline" onClick={onCancel}>ยกเลิก</button>
+        <button type="submit" className="btn btn-primary" disabled={saving}><I.Check size={14}/> {editing ? "บันทึกการแก้ไข" : "บันทึกสูตร"}</button>
+      </div>
+    </form>
   );
 }
 

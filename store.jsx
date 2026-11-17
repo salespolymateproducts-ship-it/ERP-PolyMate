@@ -29,6 +29,7 @@ const Store = (function () {
     employees: EMPLOYEES,
     materials: MATERIALS,
     finished: FINISHED,
+    boms: BOMS,
     qc: QC_INSPECTIONS,
     molds: MOLDS,
     machines: MACHINES,
@@ -39,7 +40,7 @@ const Store = (function () {
     counters: {}, // { "IV202611": 3, ... }
   };
   const ARRAY_KEYS = ["docs", "customers", "suppliers", "workOrders", "purchaseOrders", "expenses", "employees",
-    "materials", "finished", "qc", "molds", "machines", "stockMovements", "auditLogs", "users"];
+    "materials", "finished", "boms", "qc", "molds", "machines", "stockMovements", "auditLogs", "users"];
 
   let version = 0;
   let txDepth = 0;
@@ -393,46 +394,81 @@ const Store = (function () {
     }
   }
 
-  // บันทึกผลิต → ตัดวัตถุดิบตาม BOM, รับ FG เข้าสต๊อก, นับ shot แม่พิมพ์, สถานะเครื่อง
-  function produceWO(woId, addProduced, addNg) {
-    return tx("produceWO", () => {
-      const wo = find("workOrders", woId);
-      if (!wo) fail("ไม่พบใบสั่งผลิต " + woId);
-      if (wo.status === "cancelled") fail(`${wo.id} ถูกยกเลิกแล้ว`);
-      if (!(addProduced > 0)) fail("จำนวนผลิตต้องมากกว่า 0");
-      if ((addNg || 0) > addProduced) fail("จำนวน NG มากกว่าจำนวนผลิต");
-      const good = addProduced - (addNg || 0);
-      const bom = Object.values(BOMS).find((b) => b.productCode === wo.productCode);
-      const consumed = [];
-      if (bom) {
-        const waste = 1 + (bom.wasteRate || 0) / 100;
-        bom.lines.forEach((bl) => {
-          const m = state.materials.find((x) => x.id === bl.item);
-          if (!m) return;
-          const use = r3(bl.qty * addProduced * waste);
-          m.stock = r3(m.stock - use);
-          logMove({ type: "OUT", item: m.code, qty: use, unit: m.unit, ref: wo.id, note: "ตัดสต๊อกผลิต " + wo.product });
-          consumed.push({ code: m.code, qty: use, unit: m.unit });
-        });
-      }
-      const fg = state.finished.find((f) => f.code === wo.productCode);
-      if (fg && good > 0) {
-        fg.stock += good;
-        logMove({ type: "IN", item: fg.code, qty: good, unit: fg.unit || "PCS", ref: wo.id, note: "รับเข้าสินค้าสำเร็จรูปจากการผลิต" });
-      }
-      const mold = state.molds.find((m) => m.id === wo.mold);
-      if (mold) mold.shots = (mold.shots || 0) + Math.ceil(addProduced / Math.max(1, mold.cavities || wo.cavities || 1));
-      const mc = state.machines.find((m) => m.id === wo.machine);
-      wo.produced = (wo.produced || 0) + addProduced;
-      wo.ng = (wo.ng || 0) + (addNg || 0);
-      wo.logs = wo.logs || [];
-      wo.logs.unshift({ at: now(), by: userName(), produced: addProduced, ng: addNg || 0 });
-      if (wo.status === "queued" || wo.status === "setup") wo.status = "running";
-      if (wo.produced - wo.ng >= wo.quantity) wo.status = "done";
-      if (mc) { mc.status = wo.status === "done" ? "idle" : "running"; mc.workOrder = wo.status === "done" ? undefined : wo.id; }
-      log("PRODUCE", "ใบสั่งผลิต", wo.id, `ผลิต ${addProduced} ชิ้น (NG ${addNg || 0}) · ตัดวัตถุดิบ ${consumed.length} รายการ`);
-      return { ok: true, consumed, good, hasBom: !!bom };
+  // บันทึกผลิต → server ตัดวัตถุดิบตาม snapshot สูตรของใบสั่ง + รับสินค้าสำเร็จรูป + นับ shot แม่พิมพ์ ใน transaction เดียว
+  // วัตถุดิบไม่พอ = ปฏิเสธทั้งหมด (ไม่ตัดสต๊อกหรือบันทึกผลิตเลย) แล้วโหลดข้อมูลจริงจากเซิร์ฟเวอร์ใหม่
+  async function produceWO(woId, addProduced, addNg) {
+    if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
+    if (!(addProduced > 0)) fail("จำนวนผลิตต้องมากกว่า 0");
+    if ((addNg || 0) > addProduced) fail("จำนวน NG มากกว่าจำนวนผลิต");
+    await settleSync();
+    try {
+      const r = await api("POST", "/actions/work-orders/" + encodeURIComponent(woId) + "/produce", { produced: addProduced, ng: addNg || 0 });
+      await refresh(true);
+      return r;
+    } catch (e) {
+      try { await refresh(true); } catch (e2) { /* ignore */ }
+      throw e;
+    }
+  }
+
+  // ---------- BOM หลายสูตรต่อสินค้า ----------
+  const r6 = (v) => Math.round(v * 1e6) / 1e6;
+  // แปลงบรรทัดสูตร (กก./ชิ้น หรือ % ของเม็ด) เป็นปริมาณ กก./ชิ้น ที่ใช้จริง — ต้องตรงกับ BomService ฝั่ง server
+  function bomResolve(bom) {
+    const lines = bom.lines || [];
+    const resinTotal = lines.filter((l) => l.type === "resin").reduce((t, l) => t + (Number(l.qty) || 0), 0);
+    const regrindPct = lines.filter((l) => l.type === "regrind").reduce((t, l) => t + (Number(l.pct) || 0), 0);
+    return lines.map((l) => {
+      const pctBasis = l.type === "regrind" || l.basis === "pctOfResin";
+      let q;
+      if (l.type === "resin") q = (Number(l.qty) || 0) * (1 - regrindPct / 100);
+      else if (pctBasis) q = resinTotal * (Number(l.pct) || 0) / 100;
+      else q = Number(l.qty) || 0;
+      const out = { item: l.item, name: l.name, type: l.type, basis: l.type === "regrind" ? "pctOfResin" : l.basis, qty: r6(q), unit: "KG/PCS" };
+      if (pctBasis) out.pct = Number(l.pct) || 0;
+      return out;
     });
+  }
+  function bomSnapshot(bom) {
+    return { bomId: bom.id, name: bom.name, revision: bom.revision, color: bom.color, wasteRate: Number(bom.wasteRate) || 0, packaging: bom.packaging, lines: bomResolve(bom) };
+  }
+  function bomsFor(code, activeOnly = true) {
+    return state.boms.filter((b) => b.productCode === code && (!activeOnly || b.status === "active"))
+      .sort((a, b) => (b.isDefault ? 1 : 0) - (a.isDefault ? 1 : 0) || String(a.name).localeCompare(String(b.name)));
+  }
+  function bomDefaultFor(code) {
+    const l = bomsFor(code);
+    return l.find((b) => b.isDefault) || l[0] || null;
+  }
+  // สูตรของใบสั่งผลิต: snapshot ที่เก็บไว้ (ใบเก่าไม่มี = ใช้สูตรหลักปัจจุบัน)
+  function woBom(wo) {
+    if (wo.bomSnapshot) return wo.bomSnapshot;
+    const d = bomDefaultFor(wo.productCode);
+    return d ? bomSnapshot(d) : null;
+  }
+  // ต้นทุนวัสดุต่อชิ้น (รวมเผื่อเสีย) จากต้นทุนถัวเฉลี่ยปัจจุบันของวัตถุดิบ; missing = วัตถุดิบที่ยังไม่มีต้นทุน
+  function bomCost(snap) {
+    let sum = 0; const missing = [];
+    (snap.lines || []).forEach((l) => {
+      const m = state.materials.find((x) => x.id === l.item);
+      const c = m ? Number(m.cost) || 0 : 0;
+      if (!(c > 0)) missing.push(m ? m.code : l.item);
+      sum += l.qty * c;
+    });
+    return { perPiece: sum * (1 + (Number(snap.wasteRate) || 0) / 100), missing };
+  }
+  // บันทึก BOM ผ่าน API ตรง ๆ (server ตรวจกฎและตอบ error ทันที) แล้วโหลดข้อมูลใหม่
+  async function saveBom(rec, isNew) {
+    if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
+    await settleSync();
+    try {
+      const r = isNew ? await api("POST", "/boms", rec) : await api("PUT", "/boms/" + encodeURIComponent(rec.id), rec);
+      await refresh(true);
+      return r;
+    } catch (e) {
+      if (e.status === 409) { try { await refresh(true); } catch (e2) { /* ignore */ } }
+      throw e;
+    }
   }
 
   // ---------- ผู้ใช้ / รหัสผ่าน (จัดการที่ Backend: BCrypt, session token, ล็อกบัญชี) ----------
@@ -573,7 +609,7 @@ const Store = (function () {
     state, subscribe, getVersion: () => version,
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
-    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO,
+    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, saveBom,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,
     exportData, importData, resetAll, saveCompany,

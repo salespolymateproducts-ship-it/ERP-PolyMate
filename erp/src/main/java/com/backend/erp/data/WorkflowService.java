@@ -26,8 +26,10 @@ public class WorkflowService {
 	private final AuditService audit;
 	private final Json json;
 	private final JdbcTemplate jdbc;
+	private final BomService boms;
 
-	public WorkflowService(RecordRepository repo, AuditService audit, Json json, JdbcTemplate jdbc) {
+	public WorkflowService(RecordRepository repo, AuditService audit, Json json, JdbcTemplate jdbc, BomService boms) {
+		this.boms = boms;
 		this.repo = repo;
 		this.audit = audit;
 		this.json = json;
@@ -257,22 +259,35 @@ public class WorkflowService {
 		double good = produced - ng;
 		String productCode = Json.s(wo.get("productCode"));
 
-		Map<String, Object> bom = null;
-		for (String s : repo.list("boms", null, 5000, 0)) {
-			Map<String, Object> b = json.map(s);
-			if (productCode.equals(Json.s(b.get("productCode")))) { bom = b; break; }
-		}
+		// สูตรที่ใช้ตัดวัตถุดิบ = snapshot ของใบสั่งผลิต (ใบเก่าที่ไม่มี snapshot ใช้สูตรหลักปัจจุบันของสินค้า)
+		java.util.Optional<Map<String, Object>> snap = boms.effectiveSnapshot(wo);
 		List<Map<String, Object>> consumed = new ArrayList<>();
-		if (bom != null && bom.get("lines") instanceof List<?> bl) {
-			double waste = 1 + Json.num(bom.get("wasteRate")) / 100d;
+		if (snap.isPresent() && snap.get().get("lines") instanceof List<?> bl) {
+			double waste = 1 + Json.num(snap.get().get("wasteRate")) / 100d;
+			// คำนวณปริมาณที่ใช้ทุกบรรทัดก่อน แล้วล็อกวัตถุดิบเรียงตามรหัส (กัน deadlock เมื่อบันทึกผลิตพร้อมกัน)
+			java.util.TreeMap<String, Double> need = new java.util.TreeMap<>();
 			for (Object lo : bl) {
-				if (!(lo instanceof Map<?, ?> l)) continue;
-				Object item = l.get("item");
-				if (item == null) continue;
-				java.util.Optional<String> ms = repo.getForUpdate("materials", String.valueOf(item));
-				if (ms.isEmpty()) continue;
+				if (!(lo instanceof Map<?, ?> l) || l.get("item") == null) continue;
+				need.merge(String.valueOf(l.get("item")), Json.r3(Json.num(l.get("qty")) * produced * waste), Double::sum);
+			}
+			Map<String, Map<String, Object>> mats = new java.util.LinkedHashMap<>();
+			List<String> short_ = new ArrayList<>();
+			for (Map.Entry<String, Double> e : need.entrySet()) {
+				java.util.Optional<String> ms = repo.getForUpdate("materials", e.getKey());
+				if (ms.isEmpty()) throw ApiException.unprocessable("MATERIAL_NOT_FOUND", "ไม่พบวัตถุดิบ " + e.getKey() + " ในสูตรของ " + woId);
 				Map<String, Object> m = json.map(ms.get());
-				double use = Json.r3(Json.num(l.get("qty")) * produced * waste);
+				mats.put(e.getKey(), m);
+				double use = Json.r3(e.getValue());
+				if (Json.num(m.get("stock")) < use) {
+					short_.add(Json.s(m.get("code")) + " (ต้องใช้ " + use + " " + Json.s(m.get("unit")) + " คงเหลือ " + Json.r3(Json.num(m.get("stock"))) + ")");
+				}
+			}
+			if (!short_.isEmpty()) {
+				throw ApiException.unprocessable("INSUFFICIENT_MATERIAL", "วัตถุดิบไม่พอสำหรับผลิต " + produced + " ชิ้น: " + String.join(", ", short_) + " — ไม่มีการตัดสต๊อกหรือบันทึกผลิตใดๆ");
+			}
+			for (Map.Entry<String, Double> e : need.entrySet()) {
+				Map<String, Object> m = mats.get(e.getKey());
+				double use = Json.r3(e.getValue());
 				m.put("stock", Json.r3(Json.num(m.get("stock")) - use));
 				save("materials", m, u);
 				logMove(u, "OUT", Json.s(m.get("code")), use, Json.s(m.get("unit")), woId, "ตัดสต๊อกผลิต " + Json.s(wo.get("product")));
@@ -330,7 +345,7 @@ public class WorkflowService {
 		out.put("ok", true);
 		out.put("consumed", consumed);
 		out.put("good", good);
-		out.put("hasBom", bom != null);
+		out.put("hasBom", snap.isPresent());
 		return out;
 	}
 }

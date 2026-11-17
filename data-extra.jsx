@@ -50,24 +50,25 @@ const DEFECT_TYPES = [
   { name: "Splay Mark", desc: "ลายเงิน/น้ำตาลบนผิว" },
 ];
 
-// BOM - Bill of Materials for each FG product
-const BOMS = {
-  "FG-001": { product: "Dashboard Trim 22A", productCode: "AP-DASH-22A", mold: "MLD-001", lines: [
-    { item: "RM-ABS-001", name: "ABS Toyolac 757", qty: 0.038, unit: "KG/PCS", cost: 76 },
-    { item: "CL-BK-001", name: "Masterbatch ดำ K1 Carbon", qty: 0.0011, unit: "KG/PCS", cost: 95 },
-  ], wasteRate: 1.5, packaging: "BOX-CT-30L (60 ชิ้น/กล่อง)" },
-  "FG-002": { product: "Bottle Cap 500ml", productCode: "SH-BCAP-500", mold: "MLD-002", lines: [
-    { item: "RM-PP-001", name: "PP H1300", qty: 0.0028, unit: "KG/PCS", cost: 48.5 },
-    { item: "CL-RD-001", name: "Masterbatch แดง 485", qty: 0.00008, unit: "KG/PCS", cost: 168 },
-  ], wasteRate: 0.5, packaging: "ถุง PE 1000 ชิ้น" },
-  "FG-003": { product: "Syringe Body 10ml", productCode: "KM-SYR-10ML", mold: "MLD-003", lines: [
-    { item: "RM-PC-001", name: "Polycarbonate 1414", qty: 0.0036, unit: "KG/PCS", cost: 138 },
-  ], wasteRate: 0.3, packaging: "Cleanroom Bag (Medical)" },
-  "FG-005": { product: "Handle Grip 08", productCode: "TG-GRIP-08", mold: "MLD-005", lines: [
-    { item: "RM-PP-002", name: "PP RJ581", qty: 0.018, unit: "KG/PCS", cost: 52 },
-    { item: "CL-BL-001", name: "Masterbatch น้ำเงิน 2925", qty: 0.00054, unit: "KG/PCS", cost: 172 },
-  ], wasteRate: 1.2, packaging: "BOX-CT-30L (200 ชิ้น/กล่อง)" },
-};
+// BOM (Bill of Materials) — สินค้าหนึ่งรหัสมีได้หลายสูตร (เช่น ABS / PC, สีต่างกัน) ข้อมูลจริงมาจาก Store (collection boms)
+// ชนิดบรรทัด: resin (กก./ชิ้น) · masterbatch / additive (กก./ชิ้น หรือ % ของน้ำหนักเม็ด) · regrind (% ของน้ำหนักเม็ด)
+const BOMS = [
+  { id: "BOM-AP-DASH-22A-1", name: "สูตรมาตรฐาน", productCode: "AP-DASH-22A", color: "ดำ (Black)", mold: "MLD-001", status: "active", isDefault: true, revision: 1, wasteRate: 1.5, packaging: "BOX-CT-30L (60 ชิ้น/กล่อง)", lines: [
+    { item: "RM-ABS-001", name: "ABS Toyolac 757", type: "resin", basis: "perPiece", qty: 0.038, unit: "KG/PCS" },
+    { item: "CL-BK-001", name: "Masterbatch ดำ K1 Carbon", type: "masterbatch", basis: "perPiece", qty: 0.0011, unit: "KG/PCS" },
+  ] },
+  { id: "BOM-SH-BCAP-500-1", name: "สูตรมาตรฐาน", productCode: "SH-BCAP-500", color: "แดง Pantone 485", mold: "MLD-002", status: "active", isDefault: true, revision: 1, wasteRate: 0.5, packaging: "ถุง PE 1000 ชิ้น", lines: [
+    { item: "RM-PP-001", name: "PP H1300", type: "resin", basis: "perPiece", qty: 0.0028, unit: "KG/PCS" },
+    { item: "CL-RD-001", name: "Masterbatch แดง 485", type: "masterbatch", basis: "perPiece", qty: 0.00008, unit: "KG/PCS" },
+  ] },
+  { id: "BOM-KM-SYR-10ML-1", name: "สูตรมาตรฐาน", productCode: "KM-SYR-10ML", color: "ใส (Clear PC)", mold: "MLD-003", status: "active", isDefault: true, revision: 1, wasteRate: 0.3, packaging: "Cleanroom Bag (Medical)", lines: [
+    { item: "RM-PC-001", name: "Polycarbonate 1414", type: "resin", basis: "perPiece", qty: 0.0036, unit: "KG/PCS" },
+  ] },
+  { id: "BOM-TG-GRIP-08-1", name: "สูตรมาตรฐาน", productCode: "TG-GRIP-08", color: "น้ำเงิน 2925", mold: "MLD-005", status: "active", isDefault: true, revision: 1, wasteRate: 1.2, packaging: "BOX-CT-30L (200 ชิ้น/กล่อง)", lines: [
+    { item: "RM-PP-002", name: "PP RJ581", type: "resin", basis: "perPiece", qty: 0.018, unit: "KG/PCS" },
+    { item: "CL-BL-001", name: "Masterbatch น้ำเงิน 2925", type: "masterbatch", basis: "perPiece", qty: 0.00054, unit: "KG/PCS" },
+  ] },
+];
 
 // Audit logs
 const AUDIT_LOGS = [];  // ข้อมูลจริงมาจาก Store

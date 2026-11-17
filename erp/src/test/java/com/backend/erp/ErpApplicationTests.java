@@ -130,7 +130,8 @@ class ErpApplicationTests {
 		call("POST", "/finished", Map.of("id", "FG-1", "code", "FAN-16", "name", "Fan", "stock", 0), adminToken, 201);
 		call("POST", "/molds", Map.of("id", "MOLD-1", "cavities", 2, "shots", 0), adminToken, 201);
 		call("POST", "/machines", Map.of("id", "INJ-01", "status", "idle"), adminToken, 201);
-		call("POST", "/boms", Map.of("id", "BOM-1", "productCode", "FAN-16", "wasteRate", 0, "lines", List.of(Map.of("item", "MAT-1", "qty", 0.5))), adminToken, 201);
+		call("POST", "/boms", Map.of("id", "BOM-1", "name", "สูตร 1", "productCode", "FAN-16", "status", "active", "wasteRate", 0,
+			"lines", List.of(Map.of("item", "MAT-1", "type", "resin", "qty", 0.5))), adminToken, 201);
 		call("POST", "/suppliers", Map.of("id", "SUP-1", "code", "SUP-1", "name", "S", "status", "active"), adminToken, 201);
 		call("POST", "/purchaseOrders", Map.of("id", "PO-1", "status", "draft", "supplier", "SUP-1", "supplierName", "S",
 			"lines", List.of(Map.of("item", "MAT-1", "name", "PP", "qty", 500, "price", 2))), adminToken, 201);

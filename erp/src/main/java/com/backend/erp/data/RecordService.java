@@ -38,8 +38,10 @@ public class RecordService {
 	private final CounterService counters;
 	private final Json json;
 	private final JdbcTemplate jdbc;
+	private final BomService boms;
 
-	public RecordService(RecordRepository repo, AuditService audit, CounterService counters, Json json, JdbcTemplate jdbc) {
+	public RecordService(RecordRepository repo, AuditService audit, CounterService counters, Json json, JdbcTemplate jdbc, BomService boms) {
+		this.boms = boms;
 		this.repo = repo;
 		this.audit = audit;
 		this.counters = counters;
@@ -308,6 +310,8 @@ public class RecordService {
 		if (isSupplier(coll)) assertUniqueSupplierCode(id, body);
 		if ("materials".equals(coll)) initMaterialCost(u, body);
 		if (isPO(coll)) validatePOCreate(body);
+		if ("boms".equals(coll)) boms.prepare(u, id, body, null);
+		if ("workOrders".equals(coll)) boms.attachToNewWorkOrder(body);
 		try {
 			repo.insert(coll, id, json.str(body), u.username());
 		} catch (DuplicateKeyException e) {
@@ -347,6 +351,17 @@ public class RecordService {
 					throw ApiException.conflict("VERSION_CONFLICT", "ข้อมูลถูกแก้ไขโดยผู้อื่นแล้ว กรุณาโหลดใหม่");
 				}
 				validatePOUpdate(u, cur, body);
+			}
+		}
+		if ("boms".equals(coll) || "workOrders".equals(coll)) {
+			Optional<String> curS = repo.getForUpdate(coll, id);
+			if (curS.isPresent()) {
+				Map<String, Object> cur = json.map(curS.get());
+				Integer curVer = cur.get("_version") instanceof Number n ? n.intValue() : null;
+				if (expected != null && curVer != null && !expected.equals(curVer)) {
+					throw ApiException.conflict("VERSION_CONFLICT", "ข้อมูลถูกแก้ไขโดยผู้อื่นแล้ว กรุณาโหลดใหม่");
+				}
+				if ("boms".equals(coll)) boms.prepare(u, id, body, cur); else boms.keepWorkOrderBom(cur, body);
 			}
 		}
 		if (isStockColl(coll)) {
@@ -409,6 +424,8 @@ public class RecordService {
 			rec.put(k, v);
 		});
 		if (isPO(coll)) validatePOUpdate(u, before, rec);
+		if ("boms".equals(coll)) boms.prepare(u, id, rec, before);
+		if ("workOrders".equals(coll)) boms.keepWorkOrderBom(before, rec);
 		if (isStockColl(coll) && !normKey(rec.get("code")).equals(oldCode)) assertUniqueStockCode(coll, id, rec);
 		if (isSupplier(coll) && !normKey(rec.get("code")).equals(oldCode)) {
 			assertSupplierCodeNotReferenced(oldCodeRaw);
@@ -430,6 +447,9 @@ public class RecordService {
 		// Supplier ห้ามลบผ่าน API ทุก role — ใช้ status = inactive แทน
 		if (isSupplier(coll)) {
 			throw ApiException.conflict("DELETE_NOT_ALLOWED", "ไม่อนุญาตให้ลบ Supplier — กรุณาปิดใช้งาน (status = inactive) แทน");
+		}
+		if ("boms".equals(coll)) {
+			throw ApiException.conflict("DELETE_NOT_ALLOWED", "ไม่อนุญาตให้ลบ BOM — ใช้สถานะเลิกใช้ (inactive) แทน");
 		}
 		Optional<String> cur = repo.getForUpdate(coll, id);
 		if (cur.isEmpty()) throw ApiException.notFound("ไม่พบข้อมูล " + id);

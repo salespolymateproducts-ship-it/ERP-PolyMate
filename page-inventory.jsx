@@ -254,6 +254,8 @@ const MAT_TYPES = ["เม็ดพลาสติก", "Masterbatch", "Additive
 const MAT_UNITS = ["KG", "G", "L", "PCS", "BAG", "ROLL", "SET", "BOX"];
 const matKey = (s) => String(s == null ? "" : s).replace(/\s+/g, "").toUpperCase(); // ไม่สนตัวพิมพ์เล็ก/ใหญ่และช่องว่าง
 
+const BOM_STATUS_TH = { draft: "ร่าง", active: "ใช้งาน", inactive: "เลิกใช้" };
+
 // ประวัติราคาซื้อของวัตถุดิบ — อ่านจากบรรทัดของ PO ที่รับของแล้ว (ราคาก่อน VAT)
 function materialPurchaseStats(m) {
   const rows = [];
@@ -273,7 +275,7 @@ window.materialPurchaseStats = materialPurchaseStats;
 // วัตถุดิบนี้ถูกอ้างอิงที่ใดบ้าง (PO / BOM / Stock Movement)
 function materialRefs(m) {
   const po = Store.state.purchaseOrders.filter((p) => (p.lines || []).some((l) => l.item === m.id)).length;
-  const bom = Object.values(window.BOMS || {}).filter((b) => (b.lines || []).some((l) => l.item === m.id)).length;
+  const bom = Store.state.boms.filter((b) => (b.lines || []).some((l) => l.item === m.id)).length;
   const mv = Store.state.stockMovements.filter((x) => matKey(x.item) === matKey(m.code)).length;
   return { po, bom, mv, total: po + bom + mv };
 }
@@ -443,6 +445,16 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
                   </table>
                 </>
               )}
+            </div>
+          );
+        })()}
+        {editing && (() => {
+          const used = Store.state.boms.filter((b) => (b.lines || []).some((l) => l.item === rec.id));
+          if (!used.length) return null;
+          return (
+            <div style={{ gridColumn: "1 / -1", fontSize: 12.5, color: "var(--text-secondary)" }}>
+              <b style={{ color: "var(--text-primary)" }}>ใช้ใน BOM {used.length} สูตร:</b>{" "}
+              {used.map((b) => b.productCode + " · " + b.name + (b.status === "active" ? "" : " (" + (BOM_STATUS_TH[b.status] || b.status) + ")")).join(" | ")}
             </div>
           );
         })()}

@@ -526,7 +526,7 @@ const Workflow = (function () {
         if (fg.jobType === "trade") fail(`"${l.name}" เป็นสินค้าซื้อมาขายไป ไม่ต้องผลิต`);
         const left = r3(l.qty - woUsed(so.id, p.line));
         if (qty > left + EPS) fail(`"${l.name}": เปิดผลิตเกินจำนวนในใบสั่งขาย (คงเหลือ ${left})`);
-        const bom = Object.values(window.BOMS || {}).find((b) => b.productCode === fg.code);
+        const bom = S.bomDefaultFor(fg.code);
         const mold = bom ? S.state.molds.find((m) => m.id === bom.mold) : null;
         const n = S.nextDocNo("WO", S.today());
         const wo = {
