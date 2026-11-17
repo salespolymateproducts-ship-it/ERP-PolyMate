@@ -556,6 +556,8 @@ const Store = (function () {
   }
   const saveMachine = (rec, isNew) => isNew ? serverCall("POST", "/machines", rec) : serverCall("PUT", "/machines/" + encodeURIComponent(rec.id), rec);
   const setMachineCondition = (id, condition, reason) => serverCall("POST", "/actions/machines/" + encodeURIComponent(id) + "/condition", { condition, reason });
+  // ปรับ % มาสเตอร์แบตช์/สารเติมแต่ง/เศษรีไซเคิลของใบสั่งผลิตที่ยังไม่เริ่มผลิต (server คำนวณใหม่จากสูตรตั้งต้น)
+  const adjustWoBom = (woId, adjustments, reason) => serverCall("POST", "/actions/work-orders/" + encodeURIComponent(woId) + "/bom-adjust", { adjustments, reason });
   const logMachineMaintenance = (id, body) => serverCall("POST", "/actions/machines/" + encodeURIComponent(id) + "/maintenance", body);
 
   // ---------- สินค้าซื้อมาขายไป ----------
@@ -743,7 +745,7 @@ const Store = (function () {
     state, subscribe, getVersion: () => version,
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
-    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,
+    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, adjustWoBom, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,
     isBuyable, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
     MACHINE_COND, machineCond, machineUsable, machinePM, machineFit, saveMachine, setMachineCondition, logMachineMaintenance,
     peekDocNo, nextDocNo, canDelete,

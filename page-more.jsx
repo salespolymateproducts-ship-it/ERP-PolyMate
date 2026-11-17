@@ -46,6 +46,7 @@ function BOMViewer() {
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState(null); // { mode: "new" | "edit" | "copy", rec }
   const [toast, setToast] = useState(null);
+  const [compare, setCompare] = useState(null); // รหัสสินค้าที่กำลังเปรียบเทียบสูตร
   const role = Store.user() ? Store.user().role : null;
   const canEdit = role === "admin" || role === "production";
   const boms = Store.state.boms;
@@ -89,6 +90,7 @@ function BOMViewer() {
             <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 8 }}>
               <span className="mono" style={{ color: "var(--text-secondary)", fontSize: 12 }}>{code}</span> {fg ? fg.name : ""}
               <span style={{ fontWeight: 400, fontSize: 12, color: "var(--text-tertiary)", marginLeft: 8 }}>{items.length} สูตร</span>
+              {items.length >= 2 && <button type="button" className="btn btn-outline btn-sm" style={{ marginLeft: 10 }} onClick={() => setCompare(code)}>เปรียบเทียบสูตร</button>}
             </div>
             <div className="grid-2">
               {items.map((b) => <BomCard key={b.id} b={b} canEdit={canEdit}
@@ -108,6 +110,10 @@ function BOMViewer() {
           onCancel={() => setForm(null)} onDone={(m) => { setForm(null); flash(m); }}/>}
       </Drawer>
 
+      <Drawer open={!!compare} onClose={() => setCompare(null)} width={900} title={compare ? "เปรียบเทียบสูตร · " + compare : ""}>
+        {compare && <BomCompare productCode={compare}/>}
+      </Drawer>
+
       {toast && (
         <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 100, background: "var(--text-primary)", color: "white", padding: "12px 18px", borderRadius: 10, boxShadow: "var(--shadow-lg)", fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 10 }}>
           <I.Check size={16}/> {toast}
@@ -117,7 +123,54 @@ function BOMViewer() {
   );
 }
 
+// เปรียบเทียบสูตรของสินค้าเดียวกัน 2–3 สูตร: ปริมาณ กก./ชิ้น ต้นทุน และส่วนต่างจากสูตรแรกที่เลือก
+function BomCompare({ productCode }) {
+  useStore();
+  const all = Store.state.boms.filter((b) => b.productCode === productCode && b.status !== "inactive");
+  const [sel, setSel] = useState(() => all.slice(0, 3).map((b) => b.id));
+  const chosen = sel.map((id) => all.find((b) => b.id === id)).filter(Boolean);
+  const toggle = (id) => setSel((s) => s.includes(id) ? s.filter((x) => x !== id) : s.length >= 3 ? s : [...s, id]);
+  const snaps = chosen.map((b) => Store.bomSnapshot(b));
+  const items = [];
+  snaps.forEach((sn) => sn.lines.forEach((l) => { if (!items.some((x) => x.item === l.item)) items.push({ item: l.item, name: l.name, type: l.type }); }));
+  const costs = snaps.map((sn) => Store.bomCost(sn).perPiece);
+  const fmtDiff = (v, base, d) => (base == null || Math.abs(v - base) < 1e-9) ? null : <span style={{ color: v > base ? "var(--danger)" : "var(--success)", fontSize: 10.5 }}> {v > base ? "+" : "−"}{_fmt(Math.abs(v - base), d)}</span>;
+  return (
+    <div style={{ padding: 20 }}>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 12, fontSize: 12.5 }}>
+        {all.map((b) => (
+          <label key={b.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={sel.includes(b.id)} disabled={!sel.includes(b.id) && sel.length >= 3} onChange={() => toggle(b.id)}/> {b.name}{b.isDefault ? " (หลัก)" : ""}{b.status === "draft" ? " · ร่าง" : ""}
+          </label>
+        ))}
+        <span style={{ color: "var(--text-tertiary)" }}>เลือกได้สูงสุด 3 สูตร · ส่วนต่างเทียบกับสูตรแรก</span>
+      </div>
+      {chosen.length < 2 ? <div style={{ color: "var(--text-tertiary)", padding: 20, textAlign: "center" }}>เลือกอย่างน้อย 2 สูตร</div> : (
+        <table className="table" style={{ fontSize: 12.5 }}>
+          <thead><tr><th>วัตถุดิบ</th>{chosen.map((b) => <th key={b.id} className="num">{b.name}<div style={{ fontWeight: 400, fontSize: 10.5, color: "var(--text-tertiary)" }}>rev {b.revision || 1}{b.color ? " · " + b.color : ""}</div></th>)}</tr></thead>
+          <tbody>
+            {items.map((it) => {
+              const qs = snaps.map((sn) => { const l = sn.lines.find((x) => x.item === it.item); return l ? l : null; });
+              return (
+                <tr key={it.item}>
+                  <td><div style={{ fontWeight: 500 }}>{it.name}</div><div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{it.item} · {BOM_TYPE_TH[it.type] || it.type}</div></td>
+                  {qs.map((l, i) => (
+                    <td key={i} className="num">{l ? <>{_fmt(l.qty, 5)} <span style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>กก.</span>{l.pct != null ? <div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{_fmt(l.pct, 2)} % ของเม็ด</div> : null}{i > 0 && fmtDiff(l.qty, qs[0] ? qs[0].qty : 0, 5)}</> : <span style={{ color: "var(--text-tertiary)" }}>—</span>}</td>
+                  ))}
+                </tr>
+              );
+            })}
+            <tr style={{ background: "var(--bg-subtle)" }}><td>เผื่อเสีย</td>{chosen.map((b, i) => <td key={i} className="num">{b.wasteRate || 0} %{i > 0 && fmtDiff(Number(b.wasteRate) || 0, Number(chosen[0].wasteRate) || 0, 1)}</td>)}</tr>
+            <tr style={{ background: "var(--text-primary)", color: "white" }}><td style={{ fontWeight: 600 }}>ต้นทุนวัสดุ/ชิ้น</td>{costs.map((c, i) => <td key={i} className="num" style={{ fontWeight: 700 }}>{c > 0 ? "฿" + _fmt(c, 4) : "—"}{i > 0 && c > 0 && costs[0] > 0 && Math.abs(c - costs[0]) > 1e-9 && <span style={{ fontSize: 10.5, fontWeight: 400 }}> ({c > costs[0] ? "+" : "−"}{_fmt(Math.abs(c - costs[0]), 4)})</span>}</td>)}</tr>
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function BomCard({ b, canEdit, onEdit, onCopy, onActivate, onDeactivate, onDefault }) {
+  const [showHist, setShowHist] = useState(false);
   const snap = Store.bomSnapshot(b);
   const cost = Store.bomCost(snap);
   const st = BOM_STATUS[b.status] || BOM_STATUS.draft;
@@ -166,6 +219,18 @@ function BomCard({ b, canEdit, onEdit, onCopy, onActivate, onDeactivate, onDefau
         </tbody>
       </table>
       {cost.missing.length > 0 && <div style={{ padding: "6px 12px", fontSize: 11, color: "var(--amber)" }}>ยังไม่มีต้นทุน: {cost.missing.join(", ")}</div>}
+      {(b.history || []).length > 0 && (
+        <div style={{ borderTop: "1px solid var(--border)", padding: "8px 12px" }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowHist(!showHist)}>{showHist ? "ซ่อน" : "ดู"}ประวัติการแก้ไข ({b.history.length})</button>
+          {showHist && b.history.map((h, i) => (
+            <div key={i} style={{ marginTop: 8, padding: 8, background: "var(--bg-subtle)", borderRadius: 8, fontSize: 11.5 }}>
+              <div><b>rev {h.revision}</b> (ก่อนแก้เป็น rev {Number(h.revision) + 1}) · {h.at} · โดย {h.by}</div>
+              <div style={{ color: "var(--text-secondary)" }}>เหตุผล: {h.reason || "—"}</div>
+              <div style={{ marginTop: 4 }}>{(h.lines || []).map((l) => (l.name || l.item) + " " + bomLineText(l)).join(" · ")} · เผื่อเสีย {h.wasteRate || 0}%{h.color ? " · สี " + h.color : ""}</div>
+            </div>
+          ))}
+        </div>
+      )}
       {canEdit && (
         <div style={{ display: "flex", gap: 6, padding: 10, borderTop: "1px solid var(--border)", flexWrap: "wrap" }}>
           <button className="btn btn-outline btn-sm" onClick={onEdit}>แก้ไข</button>
@@ -189,6 +254,7 @@ function BomForm({ mode, rec, onCancel, onDone }) {
   } : { productCode: "", name: "", color: "", mold: "", status: "draft", wasteRate: "0", packaging: "", lines: [{ item: "", type: "resin", basis: "perPiece", value: "" }] });
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
+  const [changeReason, setChangeReason] = useState("");
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const setLine = (i, patch) => setF((x) => ({ ...x, lines: x.lines.map((l, idx) => idx === i ? { ...l, ...patch } : l) }));
   const mats = Store.state.materials.filter((m) => m.active !== false);
@@ -219,6 +285,7 @@ function BomForm({ mode, rec, onCancel, onDone }) {
     });
     const body = { ...(editing ? rec : {}), productCode: f.productCode, name: f.name.trim(), color: f.color.trim(), mold: f.mold, status: f.status,
       wasteRate: parseFloat(f.wasteRate) || 0, packaging: f.packaging.trim(), lines };
+    if (editing) body.changeReason = changeReason.trim();
     if (!editing) {
       let n = Store.state.boms.filter((b) => b.productCode === f.productCode).length + 1;
       while (Store.state.boms.some((b) => b.id === "BOM-" + f.productCode + "-" + n)) n++;
@@ -313,6 +380,13 @@ function BomForm({ mode, rec, onCancel, onDone }) {
         {cost.missing.length > 0 && <span style={{ color: "var(--amber)" }}> · ยังไม่มีต้นทุน: {cost.missing.join(", ")} (จะมีเมื่อรับ PO)</span>}
       </div>
 
+      {editing && (
+        <div style={{ marginTop: 14 }}>
+          <label className="field-label">เหตุผลการแก้ไข{rec.status === "active" ? " *" : ""}</label>
+          <input className="input" placeholder={rec.status === "active" ? "จำเป็นเมื่อแก้สูตรที่ใช้งานอยู่ เช่น เปลี่ยนเกรดเม็ด / ปรับเผื่อเสีย" : "ไม่บังคับ (สูตรยังไม่ใช้งาน)"} value={changeReason} onChange={(e) => setChangeReason(e.target.value)}/>
+          <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>ระบบเก็บสูตรเดิมไว้ในประวัติการแก้ไข · ใบสั่งผลิตที่เปิดไปแล้วใช้สูตรเดิมต่อ ไม่เปลี่ยนตาม</div>
+        </div>
+      )}
       {err && <div style={{ marginTop: 12, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
       <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
         <button type="button" className="btn btn-outline" onClick={onCancel}>ยกเลิก</button>

@@ -206,10 +206,11 @@ class BomRulesTests {
 		call("PUT", "/boms/B-ABS", with(cur, "packaging", "กล่อง 50 ชิ้น"), prod, 200);
 		assertEquals(1, ((Number) call("GET", "/boms/B-ABS", null, admin, 200).get("revision")).intValue());
 		cur = call("GET", "/boms/B-ABS", null, admin, 200);
-		call("PUT", "/boms/B-ABS", with(cur, "wasteRate", 2), prod, 200);
+		call("PUT", "/boms/B-ABS", with(with(cur, "wasteRate", 2), "changeReason", "ปรับเผื่อเสีย"), prod, 200);
 		assertEquals(2, ((Number) call("GET", "/boms/B-ABS", null, admin, 200).get("revision")).intValue());
 		cur = call("GET", "/boms/B-ABS", null, admin, 200);
-		call("PUT", "/boms/B-ABS", with(cur, "lines", List.of(resin("R-ABS", 0.025))), prod, 200);
+		call("PUT", "/boms/B-ABS", with(cur, "lines", List.of(resin("R-ABS", 0.025))), prod, 400);   // สูตรใช้งานอยู่ ต้องมีเหตุผล
+		call("PUT", "/boms/B-ABS", with(with(cur, "lines", List.of(resin("R-ABS", 0.025))), "changeReason", "เปลี่ยนเกรด"), prod, 200);
 		assertEquals(3, ((Number) call("GET", "/boms/B-ABS", null, admin, 200).get("revision")).intValue());
 		call("PUT", "/boms/B-ABS", with(cur, "lines", List.of(resin("R-ABS", 0.025))), proc, 403);
 		// ใช้งานซ้ำ revision ปลอมจาก client ไม่ได้
@@ -260,7 +261,7 @@ class BomRulesTests {
 		assertEquals(0.025, snapQty("WO-6", "R-ABS"), 1e-9);
 		// แก้ BOM ภายหลัง → ใบสั่งเดิมไม่เปลี่ยน
 		Map<String, Object> cur = call("GET", "/boms/B-ABS", null, admin, 200);
-		call("PUT", "/boms/B-ABS", with(cur, "lines", List.of(resin("R-ABS", 0.5))), prod, 200);
+		call("PUT", "/boms/B-ABS", with(with(cur, "lines", List.of(resin("R-ABS", 0.5))), "changeReason", "ทดสอบ"), prod, 200);
 		assertEquals(0.025, snapQty("WO-2", "R-ABS"), 1e-9);
 		assertEquals(3, ((Number) snap("WO-2").get("revision")).intValue());
 		// client แก้ bomId/snapshot ของใบสั่งเดิม → server คืนค่าเดิม (ไม่ error)
@@ -283,7 +284,7 @@ class BomRulesTests {
 
 	@Test @Order(6)
 	void produceConsumesBySnapshotAndRejectsShortage() throws Exception {
-		call("PATCH", "/boms/B-PC", Map.of("wasteRate", 10), prod, 200);   // แก้หลังเปิด WO-1 ไม่กระทบใบเดิม (waste 0)
+		call("PATCH", "/boms/B-PC", Map.of("wasteRate", 10, "changeReason", "เผื่อเสีย"), prod, 200);   // แก้หลังเปิด WO-1 ไม่กระทบใบเดิม (waste 0)
 		double pc0 = stockOf("materials", "R-PC"), fg0 = stockOf("finished", "FG-P-1");
 		int mv0 = jdbc.queryForObject("select count(*)::int from erp_records where collection='stockMovements'", Integer.class);
 		// WO-1: เม็ด PC 0.02 กก./ชิ้น ไม่เผื่อเสีย → ผลิต 100 ใช้ 2.0 กก.
@@ -352,5 +353,84 @@ class BomRulesTests {
 		assertEquals(60.0, stockOf("finished", "FG-P-C"), 1e-6);
 		assertFalse(jdbc.queryForObject("select count(*)::int from erp_records where collection='stockMovements' and data->>'item'='R-LIM'", Integer.class) != 1);
 		assertNotNull(call("GET", "/workOrders/WO-C0", null, admin, 200).get("bomSnapshot"));
+	}
+
+	@SuppressWarnings("unchecked")
+	@Test @Order(10)
+	void bomHistoryKeepsPreviousVersions() throws Exception {
+		call("POST", "/finished", fg("P-S2"), admin, 201);
+		call("POST", "/boms", bom("B-S2", "P-S2", "active", List.of(resin("R-ABS", 0.02), pct("MB-BK", "masterbatch", 2), pct("RG-1", "regrind", 10))), prod, 201);
+		Map<String, Object> cur = call("GET", "/boms/B-S2", null, admin, 200);
+		assertTrue(!cur.containsKey("history"));
+		call("PUT", "/boms/B-S2", with(cur, "wasteRate", 3), prod, 400);                                   // ไม่ใส่เหตุผล
+		call("PUT", "/boms/B-S2", with(with(cur, "wasteRate", 3), "changeReason", "ของเสียสูงขึ้น"), prod, 200);
+		cur = call("GET", "/boms/B-S2", null, admin, 200);
+		List<Map<String, Object>> h = (List<Map<String, Object>>) cur.get("history");
+		assertEquals(1, h.size());
+		assertEquals(1, ((Number) h.get(0).get("revision")).intValue());
+		assertEquals(0.0, ((Number) h.get(0).get("wasteRate")).doubleValue(), 1e-9);
+		assertEquals("ของเสียสูงขึ้น", h.get(0).get("reason"));
+		assertEquals("prod1", h.get(0).get("by"));
+		assertTrue(!cur.containsKey("changeReason"));
+		// แก้ที่ไม่เปลี่ยนสูตร (บรรจุภัณฑ์) ไม่เพิ่มประวัติ และ client ปลอมประวัติไม่ได้
+		call("PUT", "/boms/B-S2", with(with(cur, "packaging", "กล่อง"), "history", List.of()), prod, 200);
+		assertEquals(1, ((List<?>) call("GET", "/boms/B-S2", null, admin, 200).get("history")).size());
+		// แก้สายผลิตซ้ำ → ประวัติใหม่อยู่บนสุด
+		cur = call("GET", "/boms/B-S2", null, admin, 200);
+		call("PUT", "/boms/B-S2", with(with(cur, "wasteRate", 0), "changeReason", "กลับค่า"), prod, 200);
+		h = (List<Map<String, Object>>) call("GET", "/boms/B-S2", null, admin, 200).get("history");
+		assertEquals(2, h.size());
+		assertEquals(2, ((Number) h.get(0).get("revision")).intValue());
+		// ร่างแก้ได้โดยไม่ต้องมีเหตุผล
+		call("POST", "/boms", bom("B-S2D", "P-S2", "draft", List.of(resin("R-ABS", 0.02))), prod, 201);
+		cur = call("GET", "/boms/B-S2D", null, admin, 200);
+		call("PUT", "/boms/B-S2D", with(cur, "wasteRate", 1), prod, 200);
+	}
+
+	@SuppressWarnings("unchecked")
+	@Test @Order(11)
+	void workOrderBomAdjustment() throws Exception {
+		call("POST", "/workOrders", with(wo("WO-S2", "P-S2", 100), "bomId", "B-S2"), prod, 201);
+		assertEquals(0.018, snapQty("WO-S2", "R-ABS"), 1e-9);
+		List<Map<String, Object>> adj = List.of(Map.of("item", "MB-BK", "pct", 4), Map.of("item", "RG-1", "pct", 20));
+		String url = "/actions/work-orders/WO-S2/bom-adjust";
+		// ต้องมีเหตุผล / สิทธิ์ / รายการต้องถูกต้อง
+		call("POST", url, Map.of("adjustments", adj, "reason", " "), prod, 400);
+		for (String t : List.of(proc, acct)) call("POST", url, Map.of("adjustments", adj, "reason", "x"), t, 403);
+		call("POST", url, Map.of("adjustments", List.of(Map.of("item", "R-ABS", "pct", 5)), "reason", "x"), prod, 400);      // เม็ดหลักปรับไม่ได้
+		call("POST", url, Map.of("adjustments", List.of(Map.of("item", "R-PC", "pct", 5)), "reason", "x"), prod, 400);       // ไม่อยู่ในสูตร
+		call("POST", url, Map.of("adjustments", List.of(Map.of("item", "MB-BK", "pct", 100)), "reason", "x"), prod, 400);
+		call("POST", url, Map.of("adjustments", List.of(Map.of("item", "MB-BK", "pct", 0)), "reason", "x"), prod, 400);
+		call("POST", url, Map.of("adjustments", List.of(Map.of("item", "RG-1", "pct", 99.9), Map.of("item", "RG-1", "pct", 5)), "reason", "x"), prod, 400);  // ซ้ำ
+		assertEquals(0.0004, snapQty("WO-S2", "MB-BK"), 1e-9);   // ยังไม่เปลี่ยน
+		Map<String, Object> r = call("POST", url, Map.of("adjustments", adj, "reason", "ลูกค้าขอสีเข้มขึ้น"), prod, 200);
+		assertEquals(2, ((Number) r.get("adjusted")).intValue());
+		assertEquals(0.016, snapQty("WO-S2", "R-ABS"), 1e-9);     // 0.02 x (1 - 20%)
+		assertEquals(0.0008, snapQty("WO-S2", "MB-BK"), 1e-9);    // 0.02 x 4%
+		assertEquals(0.004, snapQty("WO-S2", "RG-1"), 1e-9);      // 0.02 x 20%
+		Map<String, Object> sn = snap("WO-S2");
+		assertEquals("ลูกค้าขอสีเข้มขึ้น", sn.get("adjustReason"));
+		assertEquals(2, ((List<?>) sn.get("adjustments")).size());
+		// แก้ BOM หลักภายหลังไม่กระทบใบที่ปรับแล้ว และ client ทับ snapshot ไม่ได้
+		Map<String, Object> w = call("GET", "/workOrders/WO-S2", null, admin, 200);
+		call("PUT", "/workOrders/WO-S2", with(w, "bomSnapshot", Map.of("lines", List.of())), prod, 200);
+		assertEquals(0.0008, snapQty("WO-S2", "MB-BK"), 1e-9);
+		// ปรับซ้ำคำนวณจากสูตรตั้งต้นเสมอ (ไม่ทบ) และส่งรายการว่าง = คืนค่าตามสูตร
+		call("POST", url, Map.of("adjustments", List.of(Map.of("item", "MB-BK", "pct", 3)), "reason", "ลดลง"), prod, 200);
+		assertEquals(0.018, snapQty("WO-S2", "R-ABS"), 1e-9);
+		assertEquals(0.0006, snapQty("WO-S2", "MB-BK"), 1e-9);
+		call("POST", url, Map.of("adjustments", List.of(), "reason", "คืนค่า"), prod, 200);
+		assertEquals(0.0004, snapQty("WO-S2", "MB-BK"), 1e-9);
+		assertTrue(!snap("WO-S2").containsKey("adjustments"));
+		// ตัดวัตถุดิบตามสัดส่วนที่ปรับ
+		call("POST", url, Map.of("adjustments", adj, "reason", "ปรับก่อนผลิต"), prod, 200);
+		double abs0 = stockOf("materials", "R-ABS"), mb0 = stockOf("materials", "MB-BK"), rg0 = stockOf("materials", "RG-1");
+		call("POST", "/actions/work-orders/WO-S2/produce", Map.of("produced", 50, "ng", 0), prod, 200);
+		assertEquals(abs0 - 0.8, stockOf("materials", "R-ABS"), 1e-6);
+		assertEquals(mb0 - 0.04, stockOf("materials", "MB-BK"), 1e-6);
+		assertEquals(rg0 - 0.2, stockOf("materials", "RG-1"), 1e-6);
+		// เริ่มผลิตแล้ว → ปรับไม่ได้
+		call("POST", url, Map.of("adjustments", List.of(Map.of("item", "MB-BK", "pct", 1)), "reason", "x"), prod, 409);
+		assertEquals(1, jdbc.queryForObject("select count(*)::int from erp_audit_logs where action='BOM_ADJUST' and detail like '%ปรับก่อนผลิต%'", Integer.class));
 	}
 }

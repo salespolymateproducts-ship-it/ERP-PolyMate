@@ -22,6 +22,7 @@ import com.backend.erp.data.AdminService;
 import com.backend.erp.data.AuditService;
 import com.backend.erp.data.CounterService;
 import com.backend.erp.data.RecordService;
+import com.backend.erp.data.BomService;
 import com.backend.erp.data.MachineService;
 import com.backend.erp.data.WorkflowService;
 
@@ -37,11 +38,13 @@ public class DataController {
 	private final RecordService records;
 	private final WorkflowService workflow;
 	private final MachineService machineService;
+	private final BomService bomService;
 	private final CounterService counters;
 	private final AuditService audit;
 	private final AdminService admin;
 
-	public DataController(RecordService records, WorkflowService workflow, CounterService counters, AuditService audit, AdminService admin, MachineService machineService) {
+	public DataController(RecordService records, WorkflowService workflow, CounterService counters, AuditService audit, AdminService admin, MachineService machineService, BomService bomService) {
+		this.bomService = bomService;
 		this.records = records;
 		this.workflow = workflow;
 		this.machineService = machineService;
@@ -135,6 +138,11 @@ public class DataController {
 	@PostMapping("/actions/work-orders/{id}/produce")
 	public Map<String, Object> produce(@PathVariable String id, @RequestBody Map<String, Object> b, HttpServletRequest req) {
 		return workflow.produceWO(AuthInterceptor.user(req), id, Json.num(b.get("produced")), Json.num(b.get("ng")));
+	}
+
+	@PostMapping("/actions/work-orders/{id}/bom-adjust")
+	public Map<String, Object> bomAdjust(@PathVariable String id, @RequestBody Map<String, Object> b, HttpServletRequest req) {
+		return bomService.adjustWorkOrder(AuthInterceptor.user(req), id, b.get("adjustments") instanceof java.util.List<?> l ? l : java.util.List.of(), Json.s(b.get("reason")));
 	}
 
 	@PostMapping("/actions/stock/adjust")

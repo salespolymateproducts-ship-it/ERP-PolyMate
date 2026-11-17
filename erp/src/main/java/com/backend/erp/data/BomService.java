@@ -13,6 +13,7 @@ import java.util.Set;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.backend.erp.auth.AuthUser;
 import com.backend.erp.common.ApiException;
@@ -32,11 +33,13 @@ public class BomService {
 	private final RecordRepository repo;
 	private final Json json;
 	private final JdbcTemplate jdbc;
+	private final AuditService audit;
 
-	public BomService(RecordRepository repo, Json json, JdbcTemplate jdbc) {
+	public BomService(RecordRepository repo, Json json, JdbcTemplate jdbc, AuditService audit) {
 		this.repo = repo;
 		this.json = json;
 		this.jdbc = jdbc;
+		this.audit = audit;
 	}
 
 	private static double r6(double v) { return Math.round(v * 1_000_000d) / 1_000_000d; }
@@ -103,6 +106,8 @@ public class BomService {
 		s.put("wasteRate", Json.num(bom.get("wasteRate")));
 		s.put("packaging", bom.get("packaging"));
 		s.put("lines", resolveLines(bom));
+		// สูตรตั้งต้น (ก่อนปรับสัดส่วนรายใบ) — ใช้คำนวณใหม่เมื่อปรับ % ของใบสั่งผลิต
+		s.put("baseLines", bom.get("lines"));
 		return s;
 	}
 
@@ -145,6 +150,25 @@ public class BomService {
 		}
 
 		boolean changed = cur == null || !sameJson(resolveCore(cur), resolveCore(bom));
+		// ประวัติการแก้สูตร: server เป็นเจ้าของ — เก็บสำเนาเวอร์ชันก่อนแก้ + ผู้แก้ + เหตุผล (สูตรที่ใช้งานอยู่ต้องระบุเหตุผล)
+		String why = Json.s(bom.get("changeReason")).trim();
+		bom.remove("changeReason");
+		List<Object> hist = new ArrayList<>();
+		if (cur != null && cur.get("history") instanceof List<?> oh) hist.addAll(oh);
+		if (cur != null && changed) {
+			if (wasActive && why.isEmpty()) throw ApiException.badRequest("ต้องระบุเหตุผลทุกครั้งที่แก้สูตรที่ใช้งานอยู่");
+			Map<String, Object> he = new LinkedHashMap<>();
+			he.put("revision", cur.get("revision") == null ? 1 : cur.get("revision"));
+			he.put("name", cur.get("name"));
+			he.put("color", cur.get("color"));
+			he.put("wasteRate", Json.num(cur.get("wasteRate")));
+			he.put("lines", cur.get("lines"));
+			he.put("by", u.fullName());
+			he.put("at", nowStr());
+			he.put("reason", why);
+			hist.add(0, he);
+		}
+		if (hist.isEmpty()) bom.remove("history"); else bom.put("history", hist);
 		bom.put("revision", cur == null ? 1 : (int) Json.num(cur.get("revision")) + (changed ? 1 : 0));
 		if (cur != null && Json.num(cur.get("revision")) == 0) bom.put("revision", 1);
 		bom.put("updatedBy", u.fullName());
@@ -272,6 +296,62 @@ public class BomService {
 		for (String k : List.of("bomId", "bomSnapshot")) {
 			if (cur.containsKey(k)) next.put(k, cur.get(k)); else next.remove(k);
 		}
+	}
+
+	// ---------- ปรับสัดส่วนรายใบสั่งผลิต ----------
+
+	/** ปรับ % (หรือกก./ชิ้น) ของมาสเตอร์แบตช์ / สารเติมแต่ง / เศษรีไซเคิล เฉพาะใบสั่งผลิตที่ยังไม่เริ่มผลิต — ค่าจริงคำนวณใหม่จากสูตรตั้งต้นทุกครั้ง */
+	@Transactional
+	@SuppressWarnings("unchecked")
+	public Map<String, Object> adjustWorkOrder(AuthUser u, String woId, List<?> adjustments, String reason) {
+		RecordService.requireWrite(u, RecordService.def("workOrders"));
+		String why = reason == null ? "" : reason.trim();
+		if (why.isEmpty()) throw ApiException.badRequest("ต้องระบุเหตุผลการปรับสัดส่วน");
+		Map<String, Object> wo = json.map(repo.getForUpdate("workOrders", woId).orElseThrow(() -> ApiException.notFound("ไม่พบใบสั่งผลิต " + woId)));
+		String st = Json.s(wo.get("status"));
+		if (!(st.equals("queued") || st.equals("setup")) || Json.num(wo.get("produced")) > 0)
+			throw ApiException.conflict("WO_STARTED", woId + " เริ่มผลิตแล้วหรือปิดแล้ว — ปรับสัดส่วนไม่ได้");
+		if (!(wo.get("bomSnapshot") instanceof Map<?, ?> sm)) throw ApiException.badRequest(woId + " ไม่มีสูตร BOM");
+		Map<String, Object> snap = new LinkedHashMap<>((Map<String, Object>) sm);
+		if (!(snap.get("baseLines") instanceof List<?> bl) || bl.isEmpty()) throw ApiException.badRequest(woId + " เป็นใบเก่าที่ไม่มีสูตรตั้งต้น — ปรับสัดส่วนไม่ได้");
+		List<Map<String, Object>> lines = new ArrayList<>();
+		for (Object o : bl) lines.add(new LinkedHashMap<>((Map<String, Object>) o));
+		List<Object> changes = new ArrayList<>();
+		Set<String> touched = new HashSet<>();
+		if (adjustments != null) for (Object ao : adjustments) {
+			if (!(ao instanceof Map<?, ?> a)) throw ApiException.badRequest("รายการปรับไม่ถูกต้อง");
+			String item = Json.s(a.get("item"));
+			if (!touched.add(item)) throw ApiException.badRequest("วัตถุดิบ " + item + " ซ้ำในรายการปรับ");
+			Map<String, Object> l = lines.stream().filter(x -> item.equals(Json.s(x.get("item")))).findFirst().orElseThrow(() -> ApiException.badRequest("ไม่พบวัตถุดิบ " + item + " ในสูตรของใบนี้"));
+			String type = Json.s(l.get("type"));
+			if ("resin".equals(type)) throw ApiException.badRequest("ปรับสัดส่วนเม็ดพลาสติกหลักไม่ได้ — ปรับได้เฉพาะมาสเตอร์แบตช์ สารเติมแต่ง และเศษรีไซเคิล");
+			boolean pct = "regrind".equals(type) || "pctOfResin".equals(Json.s(l.get("basis")));
+			String key = pct ? "pct" : "qty";
+			double v = Json.num(a.get(key));
+			if (!(v > 0) || Double.isInfinite(v) || (pct && v >= 100)) throw ApiException.badRequest("ค่าของ " + item + " ต้องมากกว่า 0" + (pct ? " และน้อยกว่า 100 %" : ""));
+			double from = Json.num(l.get(key));
+			if (Math.abs(from - v) < 1e-9) continue;
+			l.put(key, v);
+			Map<String, Object> c = new LinkedHashMap<>();
+			c.put("item", item); c.put("name", l.get("name")); c.put("unit", pct ? "%" : "KG/PCS"); c.put("from", from); c.put("to", v);
+			changes.add(c);
+		}
+		double rg = 0;
+		for (Map<String, Object> l : lines) if ("regrind".equals(Json.s(l.get("type")))) rg += Json.num(l.get("pct"));
+		if (rg >= 100) throw ApiException.badRequest("สัดส่วนเศษรีไซเคิลรวมต้องน้อยกว่า 100 %");
+		Map<String, Object> tmp = new LinkedHashMap<>();
+		tmp.put("lines", lines);
+		snap.put("lines", resolveLines(tmp));
+		if (changes.isEmpty()) { snap.remove("adjustments"); snap.remove("adjustReason"); snap.remove("adjustBy"); snap.remove("adjustAt"); }
+		else { snap.put("adjustments", changes); snap.put("adjustReason", why); snap.put("adjustBy", u.fullName()); snap.put("adjustAt", nowStr()); }
+		wo.put("bomSnapshot", snap);
+		wo.remove("_version");
+		repo.update("workOrders", woId, json.str(wo), null, u.username());
+		audit.log(u, "BOM_ADJUST", "ใบสั่งผลิต", woId, (changes.isEmpty() ? "คืนค่าตามสูตรตั้งต้น" : changes.size() + " รายการ") + " · " + why);
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("id", woId);
+		out.put("adjusted", changes.size());
+		return out;
 	}
 
 	/** สูตรที่ใช้ตัดวัตถุดิบ: snapshot ของใบสั่ง ถ้าไม่มี (ใบเก่า) ใช้สูตรหลักปัจจุบันของสินค้า */

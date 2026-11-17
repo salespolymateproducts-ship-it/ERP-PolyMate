@@ -490,6 +490,72 @@ function _reservedByOthers(materialId, currentWoId) {
   return Store.reservedByOthers(materialId, cur || null);
 }
 
+// ปรับสัดส่วนมาสเตอร์แบตช์/สารเติมแต่ง/เศษรีไซเคิลของใบสั่งผลิตเดียว (ก่อนเริ่มผลิต) — คำนวณใหม่จากสูตรตั้งต้นเสมอ ไม่ทบกัน
+function AdjustBomModal({ wo, onClose }) {
+  const snap = wo.bomSnapshot;
+  const base = snap.baseLines || [];
+  const adjustable = base.filter((l) => l.type !== "resin");
+  const isPct = (l) => l.type === "regrind" || l.basis === "pctOfResin";
+  const key = (l) => isPct(l) ? "pct" : "qty";
+  const cur = (l) => { const x = (snap.lines || []).find((y) => y.item === l.item); return x && x[key(l)] != null ? x[key(l)] : l[key(l)]; };
+  const [vals, setVals] = useState(() => Object.fromEntries(adjustable.map((l) => [l.item, String(cur(l))])));
+  const [reason, setReason] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const edited = base.map((l) => (l.type === "resin" || vals[l.item] === undefined || !(parseFloat(vals[l.item]) > 0)) ? l : { ...l, [key(l)]: parseFloat(vals[l.item]) });
+  const resolved = Store.bomResolve({ lines: edited });
+  const baseResolved = Store.bomResolve({ lines: base });
+  const wasteRate = Number(snap.wasteRate) || 0;
+  const costNew = Store.bomCost({ lines: resolved, wasteRate }).perPiece, costBase = Store.bomCost({ lines: baseResolved, wasteRate }).perPiece;
+  const diffs = adjustable.filter((l) => Math.abs((parseFloat(vals[l.item]) || 0) - Number(l[key(l)])) > 1e-9);
+  const hadAdj = !!(snap.adjustments && snap.adjustments.length);
+  const submit = async () => {
+    setErr("");
+    for (const l of adjustable) { const v = parseFloat(vals[l.item]); if (!(v > 0) || (isPct(l) && !(v < 100))) return setErr("ค่าของ " + (l.name || l.item) + " ต้องมากกว่า 0" + (isPct(l) ? " และน้อยกว่า 100 %" : "")); }
+    setBusy(true);
+    try {
+      await Store.adjustWoBom(wo.id, diffs.map((l) => ({ item: l.item, [key(l)]: parseFloat(vals[l.item]) })), reason.trim());
+      notify(diffs.length ? "ปรับสัดส่วนของ " + wo.id + " แล้ว" : "คืนค่าตามสูตรตั้งต้นแล้ว", "success");
+      onClose();
+    } catch (e) { setErr(e && e.message ? e.message : String(e)); setBusy(false); }
+  };
+  return (
+    <ErpModal title={"ปรับสัดส่วนสูตร · " + wo.id} onClose={onClose} width={640}
+      footer={<>
+        <button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button>
+        <button className="btn btn-primary btn-sm" disabled={busy || !reason.trim() || (!diffs.length && !hadAdj)} onClick={submit}>{diffs.length ? "บันทึกการปรับ" : "คืนค่าตามสูตร"}</button>
+      </>}>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 10 }}>ปรับเฉพาะใบสั่งผลิตนี้ — ไม่กระทบสูตรหลักและใบอื่น ปรับได้ก่อนเริ่มผลิตเท่านั้น และปรับได้เฉพาะมาสเตอร์แบตช์ สารเติมแต่ง และเศษรีไซเคิล</div>
+      <table className="table" style={{ fontSize: 12.5 }}>
+        <thead><tr><th>วัตถุดิบ</th><th className="num">ตามสูตร</th><th className="num">ใบนี้</th><th className="num">กก./ชิ้น</th></tr></thead>
+        <tbody>
+          {base.map((l, i) => {
+            const rl = resolved[i] || {};
+            const adj = l.type !== "resin";
+            return (
+              <tr key={l.item}>
+                <td><div style={{ fontWeight: 500 }}>{l.name}</div><div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{l.item} · {{ resin: "เม็ดพลาสติก", masterbatch: "มาสเตอร์แบตช์", additive: "สารเติมแต่ง", regrind: "เศษรีไซเคิล" }[l.type]}</div></td>
+                <td className="num">{adj ? _fmt(l[key(l)], 4) + (isPct(l) ? " %" : " กก.") : _fmt(l.qty, 4) + " กก."}</td>
+                <td className="num">{adj
+                  ? <input type="number" step="any" min="0" className="input num" style={{ width: 90, height: 32, textAlign: "right" }} value={vals[l.item]} onChange={(e) => setVals((v) => ({ ...v, [l.item]: e.target.value }))}/>
+                  : <span style={{ color: "var(--text-tertiary)" }}>ปรับไม่ได้</span>}</td>
+                <td className="num">{_fmt(rl.qty || 0, 5)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div style={{ marginTop: 10, padding: 10, background: "var(--bg-subtle)", borderRadius: 8, fontSize: 12.5 }}>
+        ต้นทุนวัสดุ/ชิ้น: ตามสูตร <b>{costBase > 0 ? "฿" + _fmt(costBase, 4) : "—"}</b> → ใบนี้ <b>{costNew > 0 ? "฿" + _fmt(costNew, 4) : "—"}</b>
+        {costBase > 0 && costNew > 0 && Math.abs(costNew - costBase) > 1e-9 && <span style={{ color: costNew > costBase ? "var(--danger)" : "var(--success)" }}> ({costNew > costBase ? "+" : "−"}{_fmt(Math.abs(costNew - costBase), 4)})</span>}
+      </div>
+      <label style={{ display: "block", fontSize: 12, color: "var(--text-secondary)", fontWeight: 500, marginTop: 12 }}>เหตุผล <span style={{ color: "var(--danger)" }}>*</span></label>
+      <textarea className="input" rows={2} style={{ width: "100%", marginTop: 6, height: "auto", padding: 8 }} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="เช่น ลูกค้าขอสีเข้มขึ้น / มีเศษบดเหลือมาก"/>
+      {err && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+    </ErpModal>
+  );
+}
+
 function MaterialReservation({ wo }) {
   const bom = _bomOfWo(wo);
   const reqs = _woReq(wo).map((r) => {
@@ -509,6 +575,9 @@ function MaterialReservation({ wo }) {
   const shortActive = poRows.filter((r) => !(r.m && r.m.active === false)); // สั่งซื้อได้เฉพาะวัตถุดิบที่ยังใช้งานอยู่
   const alreadyReserved = ["running", "setup", "done"].includes(wo.status);
   const reserved = !!wo.reserved || alreadyReserved;
+  const role = Store.user() ? Store.user().role : null;
+  const [adjOpen, setAdjOpen] = useState(false);
+  const canAdjust = (role === "admin" || role === "production") && ["queued", "setup"].includes(wo.status) && !(Number(wo.produced) > 0) && !!(wo.bomSnapshot && wo.bomSnapshot.baseLines);
   const setReserved = (v) => runAction(() => Store.update("workOrders", wo.id, { reserved: v }, "id", v ? "จองวัตถุดิบ" : "ยกเลิกจองวัตถุดิบ"), v ? "จองวัตถุดิบแล้ว" : "ยกเลิกการจองแล้ว");
 
   // overall status pill
@@ -528,10 +597,18 @@ function MaterialReservation({ wo }) {
           </div>
         </div>
         <div className="card-actions">
+          {canAdjust && <button className="btn btn-outline btn-sm" onClick={() => setAdjOpen(true)}><I.Edit size={13}/> ปรับสัดส่วนสูตรของใบนี้</button>}
           {inactiveReqs.length > 0 && <span className="badge badge-warning"><I.Alert size={11}/> BOM อ้างวัตถุดิบที่ปิดใช้งาน</span>}
           <span className={"badge badge-" + pill.color}><span className="b-dot"/>{pill.th}</span>
         </div>
       </div>
+      {adjOpen && <AdjustBomModal wo={wo} onClose={() => setAdjOpen(false)}/>}
+      {bom && bom.adjustments && bom.adjustments.length > 0 && (
+        <div style={{ margin: "0 18px 4px", padding: "9px 12px", borderRadius: 8, background: "var(--accent-subtle)", fontSize: 12.5 }}>
+          <b>ปรับสัดส่วนเฉพาะใบนี้</b> (ไม่กระทบสูตรหลัก): {bom.adjustments.map((a) => (a.name || a.item) + " " + _fmt(a.from, 4) + " → " + _fmt(a.to, 4) + " " + (a.unit === "%" ? "%" : "กก./ชิ้น")).join(" · ")}
+          <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginTop: 2 }}>เหตุผล: {bom.adjustReason} · โดย {bom.adjustBy} · {bom.adjustAt}</div>
+        </div>
+      )}
       <div style={{ padding: "4px 18px 16px" }}>
         {!hasData ? (
           <div style={{ textAlign: "center", padding: 24, color: "var(--text-tertiary)", fontSize: 13 }}>
