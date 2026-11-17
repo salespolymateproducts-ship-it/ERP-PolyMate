@@ -457,7 +457,23 @@ const Store = (function () {
     });
     return { perPiece: sum * (1 + (Number(snap.wasteRate) || 0) / 100), missing };
   }
-  // วัตถุดิบที่ใบสั่งผลิตยังขาด (คิดจากจำนวนที่เหลือต้องผลิต เทียบสต๊อกจริง) + จำนวนชิ้นสูงสุดที่ผลิตได้ด้วยของที่มี
+  // วัตถุดิบที่ใบสั่งผลิตที่เปิดอยู่ "ก่อนหน้า" (เปิดก่อน) จองไว้แล้ว = จำนวนที่เหลือต้องผลิต × ปริมาณต่อชิ้น (รวมเผื่อเสีย)
+  // wo = null หมายถึงใบสั่งใหม่ที่ยังไม่ได้เปิด (ใบที่เปิดอยู่ทั้งหมดอยู่ก่อนหน้า) — ลำดับสิทธิ์ใช้ของ = ลำดับเลขที่ใบสั่งผลิต
+  function reservedAhead(materialId, wo) {
+    let sum = 0;
+    state.workOrders.forEach((w) => {
+      if (wo && w.id === wo.id) return;
+      if (!["queued", "setup", "running"].includes(w.status)) return;
+      if (wo && !(String(w.id) < String(wo.id))) return;
+      const bom = woBom(w);
+      const line = bom && bom.lines.find((l) => l.item === materialId);
+      if (!line) return;
+      const remaining = Math.max(0, (Number(w.quantity) || 0) - (Number(w.produced) || 0));
+      sum += remaining * line.qty * (1 + (Number(bom.wasteRate) || 0) / 100);
+    });
+    return sum;
+  }
+  // วัตถุดิบที่ใบสั่งผลิตยังขาด: จำนวนที่เหลือต้องผลิต เทียบสต๊อกที่ "หักของที่ใบสั่งผลิตก่อนหน้าจองไว้แล้ว" + จำนวนชิ้นสูงสุดที่ผลิตได้
   function woShortage(wo) {
     const remaining = Math.max(0, (Number(wo.quantity) || 0) - (Number(wo.produced) || 0));
     const bom = woBom(wo);
@@ -468,9 +484,11 @@ const Store = (function () {
       const perPiece = l.qty * waste;
       const need = remaining * perPiece;
       const stock = m ? Number(m.stock) || 0 : 0;
-      return { item: l.item, code: m ? m.code : l.item, name: l.name, unit: m ? m.unit : "KG", m, perPiece, need, stock, short: r3(Math.max(0, need - stock)) };
+      const reserved = reservedAhead(l.item, wo);
+      const available = Math.max(0, stock - reserved); // ส่วนที่ใบนี้ใช้ได้จริง
+      return { item: l.item, code: m ? m.code : l.item, name: l.name, unit: m ? m.unit : "KG", m, perPiece, need, stock, reserved, available, short: r3(Math.max(0, need - available)) };
     });
-    const caps = rows.filter((r) => r.perPiece > 0).map((r) => Math.floor(r.stock / r.perPiece + 1e-9));
+    const caps = rows.filter((r) => r.perPiece > 0).map((r) => Math.floor(r.available / r.perPiece + 1e-9));
     const maxPieces = Math.min(remaining, caps.length ? Math.max(0, Math.min(...caps)) : remaining);
     return { hasBom: true, rows, remaining, maxPieces, anyShort: rows.some((r) => r.short > 0.0005) };
   }
@@ -626,7 +644,7 @@ const Store = (function () {
     state, subscribe, getVersion: () => version,
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
-    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, saveBom,
+    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedAhead, saveBom,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,
     exportData, importData, resetAll, saveCompany,
