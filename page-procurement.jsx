@@ -333,6 +333,14 @@ function AddPOForm({ onSubmit, onCancel }) {
               <div className="num" style={{ textAlign: "right", fontSize: 12.5, fontWeight: 500 }}>{_fmt(l.amount, 2)}</div>
               <button type="button" className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => delLine(i)} title="ลบ"><I.X size={13}/></button>
             </div>
+            {l.item && l.item !== "custom" && window.materialPurchaseStats && (() => {
+              const m = MATERIALS.find((x) => x.id === l.item);
+              const ps = m ? window.materialPurchaseStats(m) : null;
+              if (!ps || ps.last == null) return <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>ยังไม่มีประวัติซื้อ · ต้นทุนถัวเฉลี่ย ฿{_fmt(m.cost, 2)}</div>;
+              const cur = parseFloat(l.price) || 0;
+              const diff = cur && ps.last ? ((cur - ps.last) / ps.last) * 100 : 0;
+              return <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>ซื้อล่าสุด ฿{_fmt(ps.last, 2)} · ต่ำสุด–สูงสุด ฿{_fmt(ps.min, 2)}–{_fmt(ps.max, 2)} · ต้นทุนถัวเฉลี่ย ฿{_fmt(m.cost, 2)}{cur > 0 && Math.abs(diff) >= 0.5 ? <b style={{ color: diff > 0 ? "var(--danger)" : "var(--success)", marginLeft: 6 }}>({diff > 0 ? "+" : ""}{diff.toFixed(1)}% จากล่าสุด)</b> : null}</div>;
+            })()}
             {l.item === "custom" && (
               <input className="input" style={{ height: 32, marginTop: 6 }} placeholder="ระบุชื่อรายการ / บริการ (เช่น ค่าซ่อมแม่พิมพ์)" value={l.name} onChange={(e) => setLine(i, "name", e.target.value)}/>
             )}

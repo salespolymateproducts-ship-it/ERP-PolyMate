@@ -52,6 +52,10 @@ public class WorkflowService {
 	}
 
 	private void logMove(AuthUser u, String type, String item, double qty, String unit, String ref, String note) {
+		logMove(u, type, item, qty, unit, ref, note, null);
+	}
+
+	private void logMove(AuthUser u, String type, String item, double qty, String unit, String ref, String note, Map<String, Object> extra) {
 		Map<String, Object> mv = new LinkedHashMap<>();
 		mv.put("id", "MV-" + UUID.randomUUID().toString().substring(0, 12));
 		mv.put("date", nowStr().substring(0, 16));
@@ -62,8 +66,11 @@ public class WorkflowService {
 		mv.put("unit", unit);
 		mv.put("ref", ref);
 		mv.put("note", note);
+		if (extra != null) mv.putAll(extra);
 		repo.insert("stockMovements", String.valueOf(mv.get("id")), json.str(mv), u.username());
 	}
+
+	private static double r4(double v) { return Math.round(v * 10000d) / 10000d; }
 
 	private static String norm(String s) { return s == null ? "" : s.toLowerCase().replaceAll("[^a-z0-9ก-๙]", ""); }
 
@@ -130,6 +137,7 @@ public class WorkflowService {
 		// ขั้น 1: จับคู่วัตถุดิบให้ครบทุกบรรทัดก่อน — บรรทัดใดจับคู่ไม่ได้ให้ปฏิเสธทั้งใบ (ไม่รับเข้าบางรายการแบบเงียบ ๆ)
 		List<String> matchedIds = new ArrayList<>();
 		List<Double> matchedQty = new ArrayList<>();
+		List<Double> matchedPrice = new ArrayList<>();
 		int idx = 0;
 		for (Object lo : lines) {
 			idx++;
@@ -144,18 +152,42 @@ public class WorkflowService {
 			}
 			matchedIds.add(String.valueOf(m.get("id")));
 			matchedQty.add(qty);
+			matchedPrice.add(Json.num(line.get("price")));
 		}
 		// ขั้น 2: เพิ่มสต๊อก + บันทึก movement (ทั้งหมดอยู่ในธุรกรรมเดียวกับการเปลี่ยนสถานะ PO)
 		for (int k = 0; k < matchedIds.size(); k++) {
 			double qty = matchedQty.get(k);
 			Map<String, Object> m = lock("materials", matchedIds.get(k), "ไม่พบวัตถุดิบ");
-			m.put("stock", Json.r3(Json.num(m.get("stock")) + qty));
+			double oldStock = Json.num(m.get("stock")), oldCost = Json.num(m.get("cost")), price = matchedPrice.get(k);
+			m.put("stock", Json.r3(oldStock + qty));
+			// ต้นทุนถัวเฉลี่ยเคลื่อนที่ (Moving Average): คิดจากราคาใน PO (ก่อน VAT); ไม่มีราคาใน PO = ไม่เปลี่ยนต้นทุน
+			Map<String, Object> extra = null;
+			if (price > 0) {
+				double newCost = oldStock > 0 ? r4((oldStock * oldCost + qty * price) / (oldStock + qty)) : r4(price);
+				extra = new LinkedHashMap<>();
+				extra.put("unitCost", r4(price));
+				extra.put("value", Json.r3(qty * price));
+				extra.put("costBefore", oldCost);
+				extra.put("costAfter", newCost);
+				m.put("cost", newCost);
+				List<Object> hist = m.get("costHistory") instanceof List<?> h ? new ArrayList<>(h) : new ArrayList<>();
+				Map<String, Object> he = new LinkedHashMap<>();
+				he.put("date", LocalDate.now(BKK).toString());
+				he.put("cost", newCost);
+				he.put("prev", oldCost);
+				he.put("by", u.fullName());
+				he.put("ref", poId);
+				he.put("note", "ถัวเฉลี่ยจากรับ " + poId + " @ " + r4(price));
+				hist.add(he);
+				m.put("costHistory", hist);
+			}
 			save("materials", m, u);
-			logMove(u, "IN", Json.s(m.get("code")), qty, Json.s(m.get("unit")), poId, "รับเข้าจาก " + Json.s(po.get("supplierName")));
+			logMove(u, "IN", Json.s(m.get("code")), qty, Json.s(m.get("unit")), poId, "รับเข้าจาก " + Json.s(po.get("supplierName")), extra);
 			Map<String, Object> r = new LinkedHashMap<>();
 			r.put("code", m.get("code"));
 			r.put("qty", qty);
 			r.put("unit", m.get("unit"));
+			if (extra != null) r.put("costAfter", extra.get("costAfter"));
 			received.add(r);
 		}
 		po.put("status", "received");

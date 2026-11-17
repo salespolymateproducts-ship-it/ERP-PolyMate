@@ -254,6 +254,22 @@ const MAT_TYPES = ["เม็ดพลาสติก", "Masterbatch", "Additive
 const MAT_UNITS = ["KG", "G", "L", "PCS", "BAG", "ROLL", "SET", "BOX"];
 const matKey = (s) => String(s == null ? "" : s).replace(/\s+/g, "").toUpperCase(); // ไม่สนตัวพิมพ์เล็ก/ใหญ่และช่องว่าง
 
+// ประวัติราคาซื้อของวัตถุดิบ — อ่านจากบรรทัดของ PO ที่รับของแล้ว (ราคาก่อน VAT)
+function materialPurchaseStats(m) {
+  const rows = [];
+  Store.state.purchaseOrders.filter((p) => p.status === "received").forEach((p) => {
+    (p.lines || []).forEach((l) => {
+      if (l.item === m.id && l.price > 0) rows.push({ po: p.id, date: String(p.receivedAt || p.date || "").slice(0, 10), supplier: p.supplierName, qty: l.qty, unit: l.unit, price: l.price });
+    });
+  });
+  rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.po < b.po ? 1 : -1));
+  if (!rows.length) return { rows, last: null, avg: null, min: null, max: null };
+  const totQty = rows.reduce((s, r) => s + r.qty, 0);
+  const avg = totQty > 0 ? rows.reduce((s, r) => s + r.qty * r.price, 0) / totQty : null;
+  return { rows, last: rows[0].price, avg, min: Math.min(...rows.map((r) => r.price)), max: Math.max(...rows.map((r) => r.price)) };
+}
+window.materialPurchaseStats = materialPurchaseStats;
+
 // วัตถุดิบนี้ถูกอ้างอิงที่ใดบ้าง (PO / BOM / Stock Movement)
 function materialRefs(m) {
   const po = Store.state.purchaseOrders.filter((p) => (p.lines || []).some((l) => l.item === m.id)).length;
@@ -376,7 +392,31 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
         <div>
           <label className="field-label">ราคาทุน / หน่วย (บาท) *</label>
           <input type="number" step="0.01" min="0" className="input num" placeholder="0.00" value={form.cost} onChange={(e) => set("cost", e.target.value)}/>
+          {editing && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>ระบบถัวเฉลี่ยต้นทุนให้อัตโนมัติทุกครั้งที่รับของตาม PO</div>}
         </div>
+        {editing && (() => {
+          const ps = materialPurchaseStats(rec);
+          return (
+            <div style={{ gridColumn: "1 / -1", background: "var(--bg-subtle)", borderRadius: 10, padding: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>ประวัติราคาซื้อ (จาก PO ที่รับของแล้ว)</div>
+              {!ps.rows.length ? <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>ยังไม่มีประวัติการซื้อ</div> : (
+                <>
+                  <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12, marginBottom: 8 }}>
+                    <span>ล่าสุด <b className="num">{_fmt(ps.last, 2)}</b></span>
+                    <span>เฉลี่ยถ่วงน้ำหนัก <b className="num">{_fmt(ps.avg, 2)}</b></span>
+                    <span>ต่ำสุด <b className="num">{_fmt(ps.min, 2)}</b></span>
+                    <span>สูงสุด <b className="num">{_fmt(ps.max, 2)}</b></span>
+                    <span>ต้นทุนถัวเฉลี่ยปัจจุบัน <b className="num">{_fmt(rec.cost, 2)}</b></span>
+                  </div>
+                  <table className="table" style={{ fontSize: 12 }}>
+                    <thead><tr><th>วันที่</th><th>PO</th><th>Supplier</th><th className="num">จำนวน</th><th className="num">ราคา/หน่วย</th></tr></thead>
+                    <tbody>{ps.rows.slice(0, 8).map((r, i) => <tr key={i}><td>{r.date}</td><td>{r.po}</td><td>{r.supplier}</td><td className="num">{_fmt(r.qty, 2)} {r.unit}</td><td className="num">{_fmt(r.price, 2)}</td></tr>)}</tbody>
+                  </table>
+                </>
+              )}
+            </div>
+          );
+        })()}
         <div>
           <label className="field-label">Min (จุดสั่งซื้อ) *</label>
           <input type="number" step="any" min="0" className="input num" placeholder="0" value={form.min} onChange={(e) => set("min", e.target.value)}/>
