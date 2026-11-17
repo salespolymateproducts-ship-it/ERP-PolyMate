@@ -100,14 +100,22 @@ const DOC_STATUS = {
 };
 
 // Production orders
+// เครื่องฉีด — ตัวเลขขนาด (ระยะห่างเสา / ช่วงความหนาแม่พิมพ์) เป็นข้อมูลตัวอย่าง ให้แก้ตามสเปกเครื่องจริงที่หน้า สถานะเครื่องจักร
+// condition = สภาพเครื่อง (ready / due / maintenance / retired) ส่วน status (idle / running) ระบบผลิตเป็นผู้ตั้ง
 const MACHINES = [
-  { id: "INJ-01", name: "เครื่อง #1 — JSW J280", tonnage: 280, status: "idle" },
-  { id: "INJ-02", name: "เครื่อง #2 — Haitian MA2500", tonnage: 250, status: "idle" },
-  { id: "INJ-03", name: "เครื่อง #3 — Toshiba EC180", tonnage: 180, status: "idle" },
-  { id: "INJ-04", name: "เครื่อง #4 — JSW J180", tonnage: 180, status: "idle" },
-  { id: "INJ-05", name: "เครื่อง #5 — Sumitomo SE350", tonnage: 350, status: "idle" },
-  { id: "INJ-06", name: "เครื่อง #6 — Haitian VE160", tonnage: 160, status: "maintenance" },
+  { id: "INJ-01", name: "เครื่อง #1 — JSW J280", tonnage: 280, tieBarW: 680, tieBarL: 680, thkMin: 200, thkMax: 600, pmIntervalDays: 90, lastMaint: "2026-10-05", location: "โรงงาน 1", note: "ข้อมูลตัวอย่าง — แก้ตามสเปกเครื่องจริง", condition: "ready", status: "idle" },
+  { id: "INJ-02", name: "เครื่อง #2 — Haitian MA2500", tonnage: 250, tieBarW: 580, tieBarL: 580, thkMin: 180, thkMax: 550, pmIntervalDays: 90, lastMaint: "2026-08-20", location: "โรงงาน 1", note: "ข้อมูลตัวอย่าง — แก้ตามสเปกเครื่องจริง", condition: "ready", status: "idle" },
+  { id: "INJ-03", name: "เครื่อง #3 — Toshiba EC180", tonnage: 180, tieBarW: 510, tieBarL: 510, thkMin: 150, thkMax: 500, pmIntervalDays: 90, lastMaint: "2026-07-15", location: "โรงงาน 1", note: "ข้อมูลตัวอย่าง — แก้ตามสเปกเครื่องจริง", condition: "ready", status: "idle" },
+  { id: "INJ-04", name: "เครื่อง #4 — JSW J180", tonnage: 180, tieBarW: 510, tieBarL: 510, thkMin: 150, thkMax: 500, pmIntervalDays: 90, lastMaint: "2026-10-20", location: "โรงงาน 1", note: "ข้อมูลตัวอย่าง — แก้ตามสเปกเครื่องจริง", condition: "ready", status: "idle" },
+  { id: "INJ-05", name: "เครื่อง #5 — Sumitomo SE350", tonnage: 350, tieBarW: 730, tieBarL: 730, thkMin: 250, thkMax: 700, pmIntervalDays: 90, lastMaint: "2026-09-10", location: "โรงงาน 1", note: "ข้อมูลตัวอย่าง — แก้ตามสเปกเครื่องจริง", condition: "ready", status: "idle" },
+  { id: "INJ-06", name: "เครื่อง #6 — Haitian VE160", tonnage: 160, tieBarW: 450, tieBarL: 450, thkMin: 130, thkMax: 420, pmIntervalDays: 90, lastMaint: "2026-11-10", location: "โรงงาน 1", note: "ข้อมูลตัวอย่าง — แก้ตามสเปกเครื่องจริง", condition: "maintenance", conditionReason: "ตัวอย่าง: ซ่อม Hot Runner", status: "idle" },
 ];
+
+// ขนาดแม่พิมพ์แบบตัวเลข (กว้าง × ยาว × หนา มม.) แปลงจากข้อความขนาดเดิม — ใช้เตือนเมื่อเลือกคู่เครื่องกับแม่พิมพ์ที่ไม่เข้ากัน
+MOLDS.forEach((m) => {
+  const x = /(\d+)\s*[×x*]\s*(\d+)\s*[×x*]\s*(\d+)/.exec(m.size || "");
+  if (x && m.moldW == null) { m.moldW = +x[1]; m.moldL = +x[2]; m.moldT = +x[3]; }
+});
 
 const WORK_ORDERS = [];  // ข้อมูลจริงมาจาก Store
 

@@ -83,13 +83,13 @@ function PageDashboard({ role }) {
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)", gap: 14, marginTop: 14 }}>
         <div className="card">
           <div className="card-head"><div><div className="card-title">สถานะเครื่องจักร</div>
-            <div className="card-sub">{S.machines.length} เครื่อง · {S.machines.filter((m) => m.status === "running").length} กำลังผลิต · {S.machines.filter((m) => m.status === "maintenance").length} บำรุงรักษา</div></div></div>
+            <div className="card-sub">{S.machines.filter((m) => m.condition !== "retired").length} เครื่อง · {S.machines.filter((m) => m.status === "running").length} กำลังผลิต · {S.machines.filter((m) => m.condition === "maintenance").length} ซ่อมบำรุง · {S.machines.filter((m) => m.condition === "due").length} ควรซ่อมบำรุง</div></div></div>
           <div className="grid-3" style={{ padding: 14 }}>
-            {S.machines.map((m) => {
+            {S.machines.filter((m) => m.condition !== "retired").map((m) => {
               const wo = S.workOrders.find((w) => w.machine === m.id && ["running", "setup"].includes(w.status)) || S.workOrders.find((w) => w.id === m.workOrder);
               const pct = wo ? Math.min(100, Math.round(((wo.produced - wo.ng) / wo.quantity) * 100)) : 0;
               const meta = ({ running: { tone: "var(--success)", label: "กำลังผลิต" }, setup: { tone: "var(--amber)", label: "ตั้งเครื่อง" },
-                idle: { tone: "var(--text-tertiary)", label: "ว่าง" }, maintenance: { tone: "var(--danger)", label: "บำรุงรักษา" } })[m.status] || { tone: "var(--text-tertiary)", label: m.status };
+                idle: { tone: "var(--text-tertiary)", label: "ว่าง" }, maintenance: { tone: "var(--danger)", label: "ซ่อมบำรุง" }, due: { tone: "var(--amber)", label: "ควรซ่อมบำรุง" } })[m.condition === "maintenance" ? "maintenance" : (m.condition === "due" && m.status !== "running") ? "due" : m.status] || { tone: "var(--text-tertiary)", label: m.status };
               return (
                 <div key={m.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

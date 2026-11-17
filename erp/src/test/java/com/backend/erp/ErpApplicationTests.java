@@ -129,7 +129,7 @@ class ErpApplicationTests {
 		call("POST", "/materials", Map.of("id", "MAT-1", "code", "PP-H350", "name", "PP H350", "unit", "KG", "stock", 0), adminToken, 201);
 		call("POST", "/finished", Map.of("id", "FG-1", "code", "FAN-16", "name", "Fan", "stock", 0), adminToken, 201);
 		call("POST", "/molds", Map.of("id", "MOLD-1", "cavities", 2, "shots", 0), adminToken, 201);
-		call("POST", "/machines", Map.of("id", "INJ-01", "status", "idle"), adminToken, 201);
+		call("POST", "/machines", Map.of("id", "INJ-01", "name", "เครื่อง 1", "tonnage", 180), adminToken, 201);
 		call("POST", "/boms", Map.of("id", "BOM-1", "name", "สูตร 1", "productCode", "FAN-16", "status", "active", "wasteRate", 0,
 			"lines", List.of(Map.of("item", "MAT-1", "type", "resin", "qty", 0.5))), adminToken, 201);
 		call("POST", "/suppliers", Map.of("id", "SUP-1", "code", "SUP-1", "name", "S", "status", "active"), adminToken, 201);

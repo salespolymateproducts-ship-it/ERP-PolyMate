@@ -645,7 +645,7 @@ function PageReports() {
   const sinceISO = since.toISOString().slice(0, 10);
   const byMc = {};
   S.workOrders.forEach((w) => (w.logs || []).forEach((l) => { if (String(l.at).slice(0, 10) >= sinceISO) byMc[w.machine] = (byMc[w.machine] || 0) + l.produced; }));
-  const mcRows = S.machines.map((m) => [m.id, byMc[m.id] ? _fmt(byMc[m.id]) + " ชิ้น" : null, m.status]);
+  const mcRows = S.machines.map((m) => [m.id, byMc[m.id] ? _fmt(byMc[m.id]) + " ชิ้น" : null, m.condition === "maintenance" ? "maintenance" : m.status]);
   // สินค้าขายดี (มูลค่าใบกำกับภาษี)
   const prod = {};
   Analytics.invoices().forEach((d) => (d.lines || []).forEach((l) => { prod[l.code] = (prod[l.code] || 0) + Workflow.lineAmount(l); }));

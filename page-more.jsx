@@ -395,6 +395,11 @@ function MaintenanceCalendar() {
     events.push({ date: due < today ? today : due, mold: m, overdue: due < today, kind: "PM", text: `PM ${m.code}` });
     (m.maintLog || []).forEach((x) => events.push({ date: x.date, mold: m, done: true, text: `ซ่อม ${m.code}: ${x.note}` }));
   });
+  (Store.state.machines || []).filter((m) => m.condition !== "retired").forEach((m) => {
+    const pm = Store.machinePM(m);
+    if (pm.next) events.push({ date: pm.next < today ? today : pm.next, overdue: pm.overdue, kind: "PM", text: `PM เครื่อง ${m.id}` });
+    (m.maintLog || []).forEach((x) => events.push({ date: x.date, done: true, text: `${x.kind === "PM" ? "PM" : "ซ่อม"} เครื่อง ${m.id}: ${x.note}` }));
+  });
   const weeks = [];
   for (let w = 0; w < 6; w++) {
     const days = [];
@@ -405,7 +410,7 @@ function MaintenanceCalendar() {
   return (
     <div className="card">
       <div className="card-head">
-        <div><div className="card-title">ปฏิทินซ่อมบำรุง · {TH[first.getMonth()]} {first.getFullYear()}</div>
+        <div><div className="card-title">ปฏิทินซ่อมบำรุง (แม่พิมพ์ + เครื่องจักร) · {TH[first.getMonth()]} {first.getFullYear()}</div>
           <div className="card-sub">กำหนด PM ทุก {MOLD_PM_DAYS} วันนับจากซ่อมครั้งล่าสุด · สีแดง = เลยกำหนด · สีเขียว = ซ่อมแล้ว</div></div>
         <div className="card-actions">
           <button className="btn btn-ghost btn-sm" aria-label="เดือนก่อน" onClick={() => setOffset((o) => o - 1)}><I.ChevronLeft size={13}/></button>

@@ -506,6 +506,58 @@ const Store = (function () {
     const orders = state.purchaseOrders.filter((p) => ["pending", "approved"].includes(p.status) && (p.lines || []).some((l) => items.has(l.item))).map((p) => p.id);
     return { hasBom: true, rows, remaining, maxPieces, anyShort, anyWait, orders };
   }
+  // ---------- เครื่องจักร ----------
+  // สภาพเครื่อง (ผู้ใช้ตั้งพร้อมเหตุผล): ready / due / maintenance / retired  ·  สถานะเดินเครื่อง (idle / running) ระบบผลิตเป็นผู้ตั้ง
+  const MACHINE_COND = {
+    ready: { th: "พร้อมใช้งาน", tone: "var(--success)", bg: "var(--success-subtle)" },
+    due: { th: "ควรซ่อมบำรุง", tone: "var(--amber)", bg: "var(--amber-subtle)" },
+    maintenance: { th: "อยู่ระหว่างซ่อมบำรุง", tone: "var(--danger)", bg: "var(--danger-subtle)" },
+    retired: { th: "เลิกใช้", tone: "var(--text-tertiary)", bg: "var(--bg-subtle)" },
+  };
+  const machineCond = (m) => MACHINE_COND[m.condition] || MACHINE_COND.ready;
+  // เปิดใบสั่งผลิตใหม่บนเครื่องนี้ได้ไหม (ควรซ่อมบำรุงยังเลือกได้ พร้อมเตือน)
+  const machineUsable = (m) => m.condition !== "maintenance" && m.condition !== "retired";
+  function machinePM(m) {
+    const days = Number(m.pmIntervalDays) || 90;
+    if (!m.lastMaint) return { none: true, next: null, daysLeft: null, overdue: false, soon: false }; // ยังไม่มีบันทึกบำรุง → ไม่นับรอบ/ไม่เตือน
+    const base = new Date(m.lastMaint + "T00:00:00");
+    const next = new Date(base); next.setDate(next.getDate() + days);
+    const p2 = (n) => String(n).padStart(2, "0");
+    const nextISO = next.getFullYear() + "-" + p2(next.getMonth() + 1) + "-" + p2(next.getDate());
+    const left = Math.round((new Date(nextISO + "T00:00:00") - new Date(today() + "T00:00:00")) / 86400000);
+    return { next: nextISO, daysLeft: left, overdue: left < 0, soon: left >= 0 && left <= 7 };
+  }
+  // เตือนเมื่อเครื่องกับแม่พิมพ์ไม่เข้ากัน (เตือนอย่างเดียว ไม่บล็อก — แม่พิมพ์ตัวเดียวขึ้นได้หลายเครื่อง)
+  function machineFit(machine, mold) {
+    const w = [];
+    if (!machine || !mold) return w;
+    const ton = Number(machine.tonnage) || 0;
+    if (mold.machineMin > 0 && ton < mold.machineMin) w.push(`เครื่อง ${ton} ตัน ต่ำกว่าที่แม่พิมพ์ต้องการ (ขั้นต่ำ ${mold.machineMin} ตัน)`);
+    if (mold.machineMax > 0 && ton > mold.machineMax) w.push(`เครื่อง ${ton} ตัน เกินช่วงที่แม่พิมพ์แนะนำ (สูงสุด ${mold.machineMax} ตัน)`);
+    const A = Number(machine.tieBarW) || 0, B = Number(machine.tieBarL) || 0, mw = Number(mold.moldW) || 0, ml = Number(mold.moldL) || 0, mt = Number(mold.moldT) || 0;
+    if (A && B && mw && ml && !((mw <= A && ml <= B) || (mw <= B && ml <= A))) w.push(`แม่พิมพ์ ${mw}×${ml} มม. ใหญ่กว่าระยะห่างเสาของเครื่อง ${A}×${B} มม.`);
+    const tmin = Number(machine.thkMin) || 0, tmax = Number(machine.thkMax) || 0;
+    if (tmin && tmax && mt && mt < tmin) w.push(`แม่พิมพ์หนา ${mt} มม. บางกว่าที่เครื่องหนีบได้ (ต่ำสุด ${tmin} มม.)`);
+    if (tmin && tmax && mt && mt > tmax) w.push(`แม่พิมพ์หนา ${mt} มม. หนากว่าที่เครื่องหนีบได้ (สูงสุด ${tmax} มม.)`);
+    return w;
+  }
+  // เรียก server ตรง ๆ (ตรวจกฎและตอบ error ทันที) แล้วโหลดข้อมูลใหม่
+  async function serverCall(method, path, body) {
+    if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
+    await settleSync();
+    try {
+      const r = await api(method, path, body);
+      await refresh(true);
+      return r;
+    } catch (e) {
+      if (e.status === 409) { try { await refresh(true); } catch (e2) { /* ignore */ } }
+      throw e;
+    }
+  }
+  const saveMachine = (rec, isNew) => isNew ? serverCall("POST", "/machines", rec) : serverCall("PUT", "/machines/" + encodeURIComponent(rec.id), rec);
+  const setMachineCondition = (id, condition, reason) => serverCall("POST", "/actions/machines/" + encodeURIComponent(id) + "/condition", { condition, reason });
+  const logMachineMaintenance = (id, body) => serverCall("POST", "/actions/machines/" + encodeURIComponent(id) + "/maintenance", body);
+
   // บันทึก BOM ผ่าน API ตรง ๆ (server ตรวจกฎและตอบ error ทันที) แล้วโหลดข้อมูลใหม่
   async function saveBom(rec, isNew) {
     if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
@@ -659,6 +711,7 @@ const Store = (function () {
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
     adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,
+    MACHINE_COND, machineCond, machineUsable, machinePM, machineFit, saveMachine, setMachineCondition, logMachineMaintenance,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,
     exportData, importData, resetAll, saveCompany,

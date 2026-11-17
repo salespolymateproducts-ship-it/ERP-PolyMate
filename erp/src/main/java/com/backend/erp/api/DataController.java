@@ -22,6 +22,7 @@ import com.backend.erp.data.AdminService;
 import com.backend.erp.data.AuditService;
 import com.backend.erp.data.CounterService;
 import com.backend.erp.data.RecordService;
+import com.backend.erp.data.MachineService;
 import com.backend.erp.data.WorkflowService;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -35,13 +36,15 @@ import jakarta.servlet.http.HttpServletRequest;
 public class DataController {
 	private final RecordService records;
 	private final WorkflowService workflow;
+	private final MachineService machineService;
 	private final CounterService counters;
 	private final AuditService audit;
 	private final AdminService admin;
 
-	public DataController(RecordService records, WorkflowService workflow, CounterService counters, AuditService audit, AdminService admin) {
+	public DataController(RecordService records, WorkflowService workflow, CounterService counters, AuditService audit, AdminService admin, MachineService machineService) {
 		this.records = records;
 		this.workflow = workflow;
+		this.machineService = machineService;
 		this.counters = counters;
 		this.audit = audit;
 		this.admin = admin;
@@ -143,6 +146,16 @@ public class DataController {
 	@PostMapping("/actions/materials/{id}/adjust-cost")
 	public Map<String, Object> adjustMaterialCost(@PathVariable String id, @RequestBody Map<String, Object> b, HttpServletRequest req) {
 		return workflow.adjustMaterialCost(AuthInterceptor.user(req), id, Json.num(b.get("cost")), Json.s(b.get("reason")));
+	}
+
+	@PostMapping("/actions/machines/{id}/condition")
+	public Map<String, Object> machineCondition(@PathVariable String id, @RequestBody Map<String, Object> b, HttpServletRequest req) {
+		return machineService.setCondition(AuthInterceptor.user(req), id, Json.s(b.get("condition")), Json.s(b.get("reason")));
+	}
+
+	@PostMapping("/actions/machines/{id}/maintenance")
+	public Map<String, Object> machineMaintenance(@PathVariable String id, @RequestBody Map<String, Object> b, HttpServletRequest req) {
+		return machineService.logMaintenance(AuthInterceptor.user(req), id, b);
 	}
 
 	// ---------- Bootstrap / backup ----------

@@ -230,6 +230,18 @@ function buildNotifications(role) {
   });
   s.materials.filter((m) => m.active !== false && m.stock < m.min).forEach((m) =>
     out.push({ id: "ls" + m.id, kind: "warning", icon: "Boxes", title: `วัตถุดิบต่ำกว่าจุดสั่งซื้อ: ${m.code} เหลือ ${_fmt(m.stock)} ${m.unit} (ขั้นต่ำ ${_fmt(m.min)})`, time: "สต๊อก", page: "inventory" }));
+  (s.machines || []).filter((m) => m.condition !== "retired").forEach((m) => {
+    const pm = Store.machinePM(m);
+    if (m.condition === "maintenance") {
+      out.push({ id: "mm" + m.id, kind: "warning", icon: "Wrench", title: `เครื่อง ${m.id} อยู่ระหว่างซ่อมบำรุง${m.conditionReason ? ": " + m.conditionReason : ""} — รับงานไม่ได้`, time: "เครื่องจักร", page: "production" });
+    } else if (m.condition === "due") {
+      out.push({ id: "mc" + m.id, kind: "alert", icon: "Wrench", title: `เครื่อง ${m.id} ควรซ่อมบำรุง${m.conditionReason ? ": " + m.conditionReason : ""}`, time: "เครื่องจักร", page: "production" });
+    } else if (pm.overdue) {
+      out.push({ id: "mp" + m.id, kind: "alert", icon: "Wrench", title: `เครื่อง ${m.id} เลยรอบ PM ${-pm.daysLeft} วัน (ครบกำหนด ${pm.next})`, time: "เครื่องจักร", page: "production" });
+    } else if (pm.soon) {
+      out.push({ id: "mp" + m.id, kind: "warning", icon: "Wrench", title: `เครื่อง ${m.id} ใกล้ครบรอบ PM อีก ${pm.daysLeft} วัน (${pm.next})`, time: "เครื่องจักร", page: "production" });
+    }
+  });
   s.molds.filter(_maintDue).forEach((m) =>
     out.push({ id: "md" + m.id, kind: "alert", icon: "Wrench", title: `แม่พิมพ์ ${m.code} ต้องซ่อมบำรุง (${_fmt(m.shots)}/${_fmt(m.life)} shots)`, time: "แม่พิมพ์", page: "molds" }));
   s.workOrders.filter((w) => !["done", "cancelled"].includes(w.status) && w.due && w.due !== "—" && w.due < today).forEach((w) =>

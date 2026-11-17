@@ -215,63 +215,252 @@ function WorkOrderList({ onOpen }) {
 }
 
 function MachineGrid() {
+  useStore();
+  const role = Store.user() ? Store.user().role : null;
+  const canEdit = role === "admin" || role === "production";
+  const [form, setForm] = useState(null);   // { mode: "new" | "edit", rec }
+  const [condM, setCondM] = useState(null); // เครื่องที่จะเปลี่ยนสภาพ
+  const [maintM, setMaintM] = useState(null); // เครื่องที่จะบันทึกซ่อมบำรุง
+  const [histM, setHistM] = useState(null); // รหัสเครื่องที่ดูประวัติ
+  const [showRetired, setShowRetired] = useState(false);
+  const [toast, setToast] = useState(null);
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2600); };
+  const list = MACHINES.filter((m) => showRetired || m.condition !== "retired");
+  const retiredCount = MACHINES.filter((m) => m.condition === "retired").length;
+  const histRec = histM ? MACHINES.find((m) => m.id === histM) : null;
   return (
-    <div className="grid-3">
-      {MACHINES.map((m) => {
-        const wo = WORK_ORDERS.find((w) => w.id === m.workOrder);
-        const pct = wo ? Math.round((wo.produced / wo.quantity) * 100) : 0;
-        const meta = ({
-          running: { tone: "var(--success)", b: "var(--success-subtle)", label: "กำลังผลิต" },
-          setup: { tone: "var(--amber)", b: "var(--amber-subtle)", label: "ตั้งเครื่อง" },
-          idle: { tone: "var(--text-secondary)", b: "var(--bg-subtle)", label: "ว่าง" },
-          maintenance: { tone: "var(--danger)", b: "var(--danger-subtle)", label: "บำรุงรักษา" },
-        })[m.status];
-        return (
-          <div key={m.id} className="card" style={{ padding: 0 }}>
-            <div style={{ padding: 16, display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border)" }}>
-              <div style={{ width: 44, height: 44, borderRadius: 10, background: meta.b, color: meta.tone, display: "grid", placeItems: "center" }}>
-                <I.Factory size={20}/>
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <b style={{ fontSize: 14 }}>{m.id}</b>
-                  <span className="badge" style={{ background: meta.b, color: meta.tone }}><span className="b-dot"/>{meta.label}</span>
+    <>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+        {retiredCount > 0 && <label style={{ fontSize: 12.5, color: "var(--text-secondary)", display: "flex", gap: 6, alignItems: "center" }}>
+          <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)}/> แสดงเครื่องที่เลิกใช้ ({retiredCount})
+        </label>}
+        <div style={{ flex: 1 }}/>
+        {canEdit ? <button className="btn btn-primary btn-sm" onClick={() => setForm({ mode: "new" })}><I.Plus size={14}/> เพิ่มเครื่อง</button>
+          : <span style={{ fontSize: 12, color: "var(--text-tertiary)" }}>ดูได้อย่างเดียว — เพิ่ม/แก้เครื่องได้เฉพาะผู้ดูแลระบบและฝ่ายผลิต</span>}
+      </div>
+      <div className="grid-3">
+        {list.map((m) => {
+          const wo = WORK_ORDERS.find((w) => w.id === m.workOrder);
+          const pct = wo ? Math.round((wo.produced / wo.quantity) * 100) : 0;
+          const cd = Store.machineCond(m);
+          const pm = Store.machinePM(m);
+          const retired = m.condition === "retired";
+          const meta = ({
+            running: { tone: "var(--success)", b: "var(--success-subtle)", label: "กำลังผลิต" },
+            setup: { tone: "var(--amber)", b: "var(--amber-subtle)", label: "ตั้งเครื่อง" },
+            idle: { tone: "var(--text-secondary)", b: "var(--bg-subtle)", label: "ว่าง" },
+          })[m.status] || { tone: "var(--text-secondary)", b: "var(--bg-subtle)", label: "ว่าง" };
+          const specs = [];
+          if (m.tieBarW && m.tieBarL) specs.push("ระยะห่างเสา " + m.tieBarW + "×" + m.tieBarL + " มม.");
+          if (m.thkMin && m.thkMax) specs.push("ความหนาแม่พิมพ์ " + m.thkMin + "–" + m.thkMax + " มม.");
+          if (m.location) specs.push(m.location);
+          return (
+            <div key={m.id} className="card" style={{ padding: 0, opacity: retired ? 0.65 : 1 }}>
+              <div style={{ padding: 16, display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid var(--border)" }}>
+                <div style={{ width: 44, height: 44, borderRadius: 10, background: cd.bg, color: cd.tone, display: "grid", placeItems: "center" }}>
+                  <I.Factory size={20}/>
                 </div>
-                <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
-                  {m.name.split("—")[1] ? m.name.split("—")[1].trim() : m.name} · {m.tonnage} ตัน
-                </div>
-              </div>
-            </div>
-            <div style={{ padding: 16 }}>
-              {wo ? (
-                <>
-                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>กำลังผลิต</div>
-                  <div style={{ fontSize: 13, fontWeight: 600, marginTop: 3 }}>{wo.product}</div>
-                  <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{wo.id} · {wo.customerName}</div>
-                  <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-                    <WOMini k="ผลิต" v={_fmt(wo.produced)} unit="ชิ้น"/>
-                    <WOMini k="เป้า" v={_fmt(wo.quantity)} unit="ชิ้น"/>
-                    <WOMini k="NG" v={_fmt(wo.ng)} unit="ชิ้น"/>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <b style={{ fontSize: 14 }}>{m.id}</b>
+                    <span className="badge" style={{ background: cd.bg, color: cd.tone }}><span className="b-dot"/>{cd.th}</span>
+                    {m.status === "running" && <span className="badge badge-success">กำลังผลิต</span>}
                   </div>
-                  <div style={{ marginTop: 12 }}>
-                    <div style={{ height: 8, background: "var(--bg-subtle)", borderRadius: 99, overflow: "hidden" }}>
-                      <div style={{ width: pct + "%", height: "100%", background: meta.tone }} />
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
+                    {m.name.split("—")[1] ? m.name.split("—")[1].trim() : m.name} · {m.tonnage} ตัน
+                  </div>
+                </div>
+              </div>
+              <div style={{ padding: 16 }}>
+                {specs.length > 0 && <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 8 }}>{specs.join(" · ")}</div>}
+                {m.condition && m.condition !== "ready" && m.conditionReason && (
+                  <div style={{ fontSize: 12, padding: "6px 10px", borderRadius: 8, background: cd.bg, color: cd.tone, marginBottom: 8 }}>เหตุผล: {m.conditionReason}</div>
+                )}
+                {!retired && (
+                  <div style={{ fontSize: 11.5, marginBottom: 10, color: pm.overdue ? "var(--danger)" : pm.soon ? "var(--amber)" : "var(--text-secondary)" }}>
+                    <I.Wrench size={11} style={{ verticalAlign: "middle" }}/> บำรุงล่าสุด {m.lastMaint || "—"} ·{" "}
+                    {pm.none ? "ยังไม่มีบันทึก — บันทึกซ่อมบำรุงเพื่อเริ่มนับรอบ PM" : pm.overdue ? "เลยรอบ PM " + (-pm.daysLeft) + " วัน (ครบ " + pm.next + ")" : pm.soon ? "ใกล้ครบรอบ PM อีก " + pm.daysLeft + " วัน" : "PM ถัดไป " + pm.next}
+                  </div>
+                )}
+                {wo ? (
+                  <>
+                    <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>กำลังผลิต</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, marginTop: 3 }}>{wo.product}</div>
+                    <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{wo.id} · {wo.customerName}</div>
+                    <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
+                      <WOMini k="ผลิต" v={_fmt(wo.produced)} unit="ชิ้น"/>
+                      <WOMini k="เป้า" v={_fmt(wo.quantity)} unit="ชิ้น"/>
+                      <WOMini k="NG" v={_fmt(wo.ng)} unit="ชิ้น"/>
                     </div>
-                    <div className="num" style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4, textAlign: "right" }}>{pct}% · เหลือ ~{Math.ceil((wo.quantity - wo.produced) * wo.cycleTime / wo.cavities / 3600 * 10) / 10} ชม.</div>
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ height: 8, background: "var(--bg-subtle)", borderRadius: 99, overflow: "hidden" }}>
+                        <div style={{ width: pct + "%", height: "100%", background: meta.tone }} />
+                      </div>
+                      <div className="num" style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4, textAlign: "right" }}>{pct}% · เหลือ ~{Math.ceil((wo.quantity - wo.produced) * wo.cycleTime / wo.cavities / 3600 * 10) / 10} ชม.</div>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ textAlign: "center", padding: "10px 0", color: "var(--text-secondary)", fontSize: 12.5 }}>
+                    {retired ? "เลิกใช้แล้ว" : m.condition === "maintenance" ? "อยู่ระหว่างซ่อมบำรุง — รับงานไม่ได้" : "พร้อมรับงาน · รอแผนผลิต"}
                   </div>
-                </>
-              ) : (
-                <div style={{ textAlign: "center", padding: "20px 0", color: "var(--text-secondary)", fontSize: 12.5 }}>
-                  {m.status === "setup" && <>เปลี่ยนแม่พิมพ์ → MLD-001<br/><span style={{ fontSize: 11 }}>คาดเสร็จใน ~45 นาที</span></>}
-                  {m.status === "maintenance" && <>ซ่อม Hot Runner<br/><span style={{ fontSize: 11 }}>คาดกลับมาใช้ได้ พรุ่งนี้</span></>}
-                  {m.status === "idle" && <>พร้อมรับงาน · รอแผนผลิต</>}
-                </div>
-              )}
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 6, padding: 10, borderTop: "1px solid var(--border)", flexWrap: "wrap" }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => setHistM(m.id)}>ประวัติ</button>
+                {canEdit && <>
+                  <button className="btn btn-outline btn-sm" onClick={() => setForm({ mode: "edit", rec: m })}>แก้ไข</button>
+                  <button className="btn btn-outline btn-sm" onClick={() => setCondM(m)}>เปลี่ยนสภาพ</button>
+                  {!retired && <button className="btn btn-outline btn-sm" onClick={() => setMaintM(m)}><I.Wrench size={12}/> บันทึกซ่อมบำรุง</button>}
+                </>}
+              </div>
             </div>
-          </div>
-        );
-      })}
-    </div>
+          );
+        })}
+      </div>
+
+      {form && <MachineForm key={form.mode + (form.rec ? form.rec.id : "")} mode={form.mode} rec={form.rec} onClose={() => setForm(null)} onDone={(m) => { setForm(null); flash(m); }}/>}
+      {condM && <MachineConditionModal m={MACHINES.find((x) => x.id === condM.id) || condM} onClose={() => setCondM(null)} onDone={(m) => { setCondM(null); flash(m); }}/>}
+      {maintM && <MachineMaintModal m={MACHINES.find((x) => x.id === maintM.id) || maintM} onClose={() => setMaintM(null)} onDone={(m) => { setMaintM(null); flash(m); }}/>}
+      {histRec && <MachineHistoryModal m={histRec} onClose={() => setHistM(null)}/>}
+      {toast && (
+        <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 1100, background: "var(--text-primary)", color: "white", padding: "12px 18px", borderRadius: 10, boxShadow: "var(--shadow-lg)", fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 10 }}>
+          <I.Check size={16}/> {toast}
+        </div>
+      )}
+    </>
+  );
+}
+
+function MachineForm({ mode, rec, onClose, onDone }) {
+  const editing = mode === "edit";
+  const str = (v) => (v == null ? "" : String(v));
+  const [f, setF] = useState(rec ? {
+    id: rec.id, name: rec.name, tonnage: str(rec.tonnage), tieBarW: str(rec.tieBarW), tieBarL: str(rec.tieBarL), thkMin: str(rec.thkMin), thkMax: str(rec.thkMax),
+    pmIntervalDays: str(rec.pmIntervalDays || 90), location: rec.location || "", note: rec.note || "", lastMaint: rec.lastMaint || "",
+  } : { id: "", name: "", tonnage: "", tieBarW: "", tieBarL: "", thkMin: "", thkMax: "", pmIntervalDays: "90", location: "", note: "", lastMaint: Store.today() });
+  const [err, setErr] = useState("");
+  const [saving, setSaving] = useState(false);
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const num = (v) => (String(v).trim() === "" ? null : Number(v));
+  const submit = async () => {
+    setErr("");
+    if (!f.id.trim() && !editing) return setErr("กรุณาระบุรหัสเครื่อง");
+    if (!f.name.trim()) return setErr("กรุณาระบุชื่อ/ยี่ห้อรุ่น");
+    if (!(num(f.tonnage) > 0)) return setErr("กรุณาระบุขนาดตัน (มากกว่า 0)");
+    if ((num(f.tieBarW) == null) !== (num(f.tieBarL) == null)) return setErr("ระยะห่างเสาต้องกรอกทั้งกว้างและยาว (หรือเว้นว่างทั้งคู่)");
+    if ((num(f.thkMin) == null) !== (num(f.thkMax) == null)) return setErr("ช่วงความหนาแม่พิมพ์ต้องกรอกทั้งต่ำสุดและสูงสุด (หรือเว้นว่างทั้งคู่)");
+    if (num(f.thkMin) != null && num(f.thkMin) > num(f.thkMax)) return setErr("ความหนาต่ำสุดต้องไม่เกินสูงสุด");
+    const body = { ...(editing ? rec : {}), id: editing ? rec.id : f.id.trim(), name: f.name.trim(), tonnage: num(f.tonnage),
+      tieBarW: num(f.tieBarW), tieBarL: num(f.tieBarL), thkMin: num(f.thkMin), thkMax: num(f.thkMax),
+      pmIntervalDays: num(f.pmIntervalDays) || 90, location: f.location.trim(), note: f.note.trim() };
+    if (!editing) body.lastMaint = f.lastMaint || Store.today();
+    setSaving(true);
+    try {
+      await Store.saveMachine(body, !editing);
+      onDone(editing ? "แก้ไขเครื่อง " + body.id + " แล้ว" : "เพิ่มเครื่อง " + body.id + " แล้ว");
+    } catch (e) { setErr(e && e.message ? e.message : String(e)); setSaving(false); }
+  };
+  const fld = (k, label, type = "text", ph) => <div><label className="field-label">{label}</label><input className="input" type={type} step="any" min={type === "number" ? "0" : undefined} placeholder={ph} value={f[k]} onChange={set(k)}/></div>;
+  return (
+    <ErpModal title={editing ? "แก้ไขเครื่อง " + rec.id : "เพิ่มเครื่องจักร"} width={640} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={saving} onClick={submit}>บันทึก</button></>}>
+      <div className="grid-2" style={{ gap: 10 }}>
+        <div><label className="field-label">รหัสเครื่อง *</label><input className="input" style={{ fontFamily: "var(--font-mono)" }} placeholder="เช่น INJ-07" disabled={editing} value={f.id} onChange={set("id")}/></div>
+        {fld("name", "ชื่อ / ยี่ห้อรุ่น *", "text", "เช่น เครื่อง #7 — JSW J220")}
+        {fld("tonnage", "ขนาด (ตัน) *", "number")}
+        {fld("pmIntervalDays", "รอบบำรุงรักษา PM (วัน)", "number")}
+        {fld("tieBarW", "ระยะห่างเสา กว้าง (มม.)", "number")}{fld("tieBarL", "ระยะห่างเสา ยาว (มม.)", "number")}
+        {fld("thkMin", "ความหนาแม่พิมพ์ต่ำสุด (มม.)", "number")}{fld("thkMax", "ความหนาแม่พิมพ์สูงสุด (มม.)", "number")}
+        {fld("location", "ตำแหน่งติดตั้ง", "text", "เช่น โรงงาน 1 แถว A")}
+        {!editing ? fld("lastMaint", "บำรุงรักษาล่าสุด", "date") : <div/>}
+        <div style={{ gridColumn: "1 / -1" }}><label className="field-label">หมายเหตุ</label><input className="input" value={f.note} onChange={set("note")}/></div>
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginTop: 8 }}>ระยะห่างเสาและช่วงความหนาใช้เตือนเมื่อเลือกแม่พิมพ์ที่ไม่เข้ากับเครื่อง (เว้นว่างได้ = ไม่ตรวจ) · สภาพเครื่องเปลี่ยนที่ปุ่ม "เปลี่ยนสภาพ" พร้อมเหตุผล</div>
+      {err && <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+    </ErpModal>
+  );
+}
+
+function MachineConditionModal({ m, onClose, onDone }) {
+  const [cond, setCond] = useState(m.condition || "ready");
+  const [reason, setReason] = useState(m.condition && m.condition !== "ready" ? (m.conditionReason || "") : "");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const need = cond !== "ready";
+  const go = async () => {
+    setErr("");
+    if (need && !reason.trim()) return setErr("กรุณากรอกเหตุผล");
+    setBusy(true);
+    try { await Store.setMachineCondition(m.id, cond, reason.trim()); onDone("เปลี่ยนสภาพเครื่อง " + m.id + " เป็น " + Store.MACHINE_COND[cond].th + " แล้ว"); }
+    catch (e) { setErr(e && e.message ? e.message : String(e)); setBusy(false); }
+  };
+  return (
+    <ErpModal title={"เปลี่ยนสภาพเครื่อง " + m.id} width={500} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={go}>บันทึก</button></>}>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 10 }}>สภาพปัจจุบัน: <b>{Store.machineCond(m).th}</b>{m.conditionReason ? " — " + m.conditionReason : ""}</div>
+      <label className="field-label">สภาพเครื่อง</label>
+      <select className="select" value={cond} onChange={(e) => setCond(e.target.value)}>
+        {Object.entries(Store.MACHINE_COND).map(([k, v]) => <option key={k} value={k}>{v.th}</option>)}
+      </select>
+      <label className="field-label" style={{ marginTop: 10 }}>เหตุผล {need && <span style={{ color: "var(--danger)" }}>*</span>}</label>
+      <textarea className="input" rows={3} style={{ width: "100%", height: "auto", padding: 8 }} placeholder={need ? "เช่น เสียงดังผิดปกติที่ชุดฉีด / เปลี่ยนซีลกระบอกฉีด / ขายทิ้ง" : "ไม่บังคับ"} value={reason} onChange={(e) => setReason(e.target.value)}/>
+      <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginTop: 6 }}>อยู่ระหว่างซ่อมบำรุง / เลิกใช้ ตั้งไม่ได้ถ้ายังมีใบสั่งผลิตที่เปิดอยู่ใช้เครื่องนี้ · บันทึกผู้ทำและเวลาอัตโนมัติ</div>
+      {err && <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+    </ErpModal>
+  );
+}
+
+function MachineMaintModal({ m, onClose, onDone }) {
+  const [f, setF] = useState({ kind: "repair", date: Store.today(), note: "", cost: "", downtimeHrs: "", finish: true });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+  const go = async () => {
+    setErr("");
+    if (!f.note.trim()) return setErr("กรุณากรอกรายละเอียดการซ่อมบำรุง");
+    setBusy(true);
+    try {
+      await Store.logMachineMaintenance(m.id, { kind: f.kind, date: f.date, note: f.note.trim(), cost: Number(f.cost) || 0, downtimeHrs: Number(f.downtimeHrs) || 0, finish: f.finish });
+      onDone("บันทึกซ่อมบำรุง " + m.id + " แล้ว");
+    } catch (e) { setErr(e && e.message ? e.message : String(e)); setBusy(false); }
+  };
+  return (
+    <ErpModal title={"บันทึกซ่อมบำรุง " + m.id} width={540} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={go}>บันทึก</button></>}>
+      <div className="grid-2" style={{ gap: 10 }}>
+        <div><label className="field-label">ประเภท</label><select className="select" value={f.kind} onChange={set("kind")}><option value="repair">ซ่อม</option><option value="PM">PM ตามรอบ</option></select></div>
+        <div><label className="field-label">วันที่ทำ</label><input className="input" type="date" value={f.date} max={Store.today()} onChange={set("date")}/></div>
+        <div style={{ gridColumn: "1 / -1" }}><label className="field-label">รายละเอียด *</label><textarea className="input" rows={3} style={{ width: "100%", height: "auto", padding: 8 }} value={f.note} onChange={set("note")}/></div>
+        <div><label className="field-label">ค่าใช้จ่าย (บาท)</label><input className="input num" type="number" min="0" value={f.cost} onChange={set("cost")}/></div>
+        <div><label className="field-label">เวลาที่เครื่องหยุด (ชม.)</label><input className="input num" type="number" min="0" step="any" value={f.downtimeHrs} onChange={set("downtimeHrs")}/></div>
+      </div>
+      <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12, fontSize: 12.5 }}>
+        <input type="checkbox" checked={f.finish} onChange={set("finish")}/> ซ่อมบำรุงเสร็จแล้ว — อัปเดตวันบำรุงล่าสุดและกลับเป็น "พร้อมใช้งาน"
+      </label>
+      {err && <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+    </ErpModal>
+  );
+}
+
+function MachineHistoryModal({ m, onClose }) {
+  const ml = m.maintLog || [], cl = m.conditionLog || [];
+  return (
+    <ErpModal title={"ประวัติเครื่อง " + m.id} width={760} onClose={onClose} footer={<button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button>}>
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>ประวัติซ่อมบำรุง ({ml.length})</div>
+      {!ml.length ? <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 14 }}>ยังไม่มีบันทึก</div> : (
+        <table className="table" style={{ fontSize: 12, marginBottom: 16 }}>
+          <thead><tr><th>วันที่</th><th>ประเภท</th><th>รายละเอียด</th><th className="num">ค่าใช้จ่าย</th><th className="num">หยุด (ชม.)</th><th>โดย</th></tr></thead>
+          <tbody>{ml.map((x, i) => <tr key={i}><td>{x.date}</td><td>{x.kind === "PM" ? "PM" : "ซ่อม"}</td><td>{x.note}</td><td className="num">{_fmt(x.cost || 0)}</td><td className="num">{_fmt(x.downtimeHrs || 0, 1)}</td><td>{x.by}</td></tr>)}</tbody>
+        </table>
+      )}
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>ประวัติการเปลี่ยนสภาพ ({cl.length})</div>
+      {!cl.length ? <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>ยังไม่มีบันทึก</div> : (
+        <table className="table" style={{ fontSize: 12 }}>
+          <thead><tr><th>เวลา</th><th>เปลี่ยน</th><th>เหตุผล</th><th>โดย</th></tr></thead>
+          <tbody>{cl.map((x, i) => <tr key={i}><td>{String(x.at).slice(0, 16)}</td><td>{(Store.MACHINE_COND[x.from] || { th: x.from }).th} → <b>{(Store.MACHINE_COND[x.to] || { th: x.to }).th}</b></td><td>{x.reason}</td><td>{x.by}</td></tr>)}</tbody>
+        </table>
+      )}
+    </ErpModal>
   );
 }
 function WOMini({ k, v, unit }) {
@@ -910,7 +1099,7 @@ function AddWorkOrderForm({ onSubmit, onCancel }) {
           <label className="field-label">เครื่องฉีด *</label>
           <select className="select" value={machine} onChange={(e) => setMachine(e.target.value)}>
             <option value="">— เลือกเครื่อง —</option>
-            {MACHINES.map((m) => <option key={m.id} value={m.id}>{m.id} · {m.tonnage} ตัน</option>)}
+            {MACHINES.filter((m) => Store.machineUsable(m)).map((m) => <option key={m.id} value={m.id}>{m.id} · {m.tonnage} ตัน{m.condition === "due" ? " (ควรซ่อมบำรุง)" : ""}</option>)}
           </select>
         </div>
         <div>
@@ -938,6 +1127,18 @@ function AddWorkOrderForm({ onSubmit, onCancel }) {
         </div>
       </div>
 
+      {(() => {
+        const mc = MACHINES.find((x) => x.id === machine), mo = MOLDS.find((x) => x.id === mold);
+        const warns = Store.machineFit(mc, mo);
+        if (mc && mc.condition === "due") warns.unshift("เครื่อง " + mc.id + " ควรซ่อมบำรุง" + (mc.conditionReason ? ": " + mc.conditionReason : ""));
+        if (!warns.length) return null;
+        return (
+          <div style={{ marginTop: 14, padding: "9px 12px", borderRadius: 8, background: "var(--amber-subtle)", color: "var(--amber)", fontSize: 12.5 }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}><I.Alert size={13} style={{ verticalAlign: "middle" }}/> คำเตือน (เปิดใบสั่งผลิตต่อได้)</div>
+            {warns.map((w, i) => <div key={i}>• {w}</div>)}
+          </div>
+        );
+      })()}
       <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
         <button type="button" className="btn btn-outline" onClick={onCancel}>ยกเลิก</button>
         <button type="submit" className="btn btn-primary" disabled={!valid}><I.Check size={14}/> เปิดใบสั่งผลิต</button>

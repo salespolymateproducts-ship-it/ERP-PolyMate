@@ -108,13 +108,15 @@ function PageMolds() {
 const MOLD_STATUS_TH = { available: "พร้อมใช้", "in-use": "ใช้งานอยู่", maintenance: "ซ่อมบำรุง", alert: "ต้องตรวจสอบ" };
 // เพิ่มแม่พิมพ์
 function MoldForm({ onClose }) {
-  const [f, setF] = useState({ code: "", name: "", customer: "", cavities: 1, size: "", weight: 0, machineMin: 0, machineMax: 0, life: 500000, location: "" });
+  const [f, setF] = useState({ code: "", name: "", customer: "", cavities: 1, size: "", moldW: 0, moldL: 0, moldT: 0, weight: 0, machineMin: 0, machineMax: 0, life: 500000, location: "" });
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "number" ? Number(e.target.value) : e.target.value });
   function save() {
     const ok = runAction(() => {
       if (!f.code.trim() || !f.name.trim()) Store.fail("กรุณาระบุรหัสและชื่อแม่พิมพ์");
       if (MOLDS.some((m) => m.code === f.code.trim())) Store.fail("รหัสแม่พิมพ์ซ้ำ");
       if (!(f.cavities > 0)) Store.fail("จำนวน cavity ต้องมากกว่า 0");
+      // ขนาดตัวเลขใช้เตือนเมื่อเลือกคู่เครื่องกับแม่พิมพ์ไม่เข้ากัน; ไม่กรอกขนาดข้อความ = สร้างจากตัวเลข
+      if (!f.size.trim() && f.moldW > 0 && f.moldL > 0 && f.moldT > 0) f.size = `${f.moldW}×${f.moldL}×${f.moldT} mm`;
       const n = MOLDS.reduce((mx, m) => Math.max(mx, parseInt(String(m.id).replace(/\D/g, ""), 10) || 0), 0) + 1;
       const rec = { ...f, code: f.code.trim(), id: "MLD-" + String(n).padStart(3, "0"), shots: 0, lastMaint: Store.today(), status: "available", maintLog: [] };
       Store.add("molds", rec, rec.code);
@@ -129,7 +131,9 @@ function MoldForm({ onClose }) {
       <div className="grid-2" style={{ gap: 10 }}>
         {fld("code", "รหัสแม่พิมพ์ *")}{fld("name", "ชื่อ *")}
         <div><label className="field-label">ลูกค้า</label><select className="input" value={f.customer} onChange={set("customer")}><option value="">— ของบริษัท —</option>{Store.state.customers.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}</select></div>
-        {fld("cavities", "จำนวน Cavity", "number")}{fld("size", "ขนาด")}{fld("weight", "น้ำหนัก (kg)", "number")}
+        {fld("cavities", "จำนวน Cavity", "number")}{fld("weight", "น้ำหนัก (kg)", "number")}
+        {fld("moldW", "ความกว้างแม่พิมพ์ (มม.)", "number")}{fld("moldL", "ความยาวแม่พิมพ์ (มม.)", "number")}
+        {fld("moldT", "ความหนาแม่พิมพ์ (มม.)", "number")}{fld("size", "ขนาด (ข้อความ ไม่บังคับ)")}
         {fld("machineMin", "เครื่องขั้นต่ำ (ตัน)", "number")}{fld("machineMax", "เครื่องสูงสุด (ตัน)", "number")}
         {fld("life", "อายุการใช้งาน (shots)", "number")}{fld("location", "ที่เก็บ")}
       </div>
