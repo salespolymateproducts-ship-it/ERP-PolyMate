@@ -206,18 +206,21 @@ function buildNotifications(role) {
   const out = [];
   s.docs.filter((d) => d.status === "pending" && Workflow.canApproveType(d.type)).forEach((d) =>
     out.push({ id: "ap" + d.id, kind: "info", icon: "FileText", title: `รออนุมัติ: ${DOC_LABEL[d.type].th} ${d.id} · ${d.customerName}`, time: d.updatedAt, page: d.type === "CPO" ? "customer-po" : "sales", focus: { doc: d.id } }));
-  // ใบสั่งผลิตที่เปิดอยู่แต่วัตถุดิบไม่พอ → แจ้งทั้งฝ่ายผลิตและฝ่ายจัดซื้อ (ผลิตไม่ได้จนกว่าจะมีของ)
+  // ใบสั่งผลิตที่เปิดอยู่แต่วัตถุดิบไม่พอ → แจ้งทั้งฝ่ายผลิตและฝ่ายจัดซื้อ (ยอดรวมทุกใบสั่งผลิตที่เปิดอยู่ − สต๊อก − ที่สั่งซื้อไว้แล้ว)
   const woPage = can("production") ? "production" : "procurement";
   s.workOrders.filter((w) => ["queued", "setup", "running"].includes(w.status)).forEach((w) => {
     const sh = Store.woShortage(w);
     if (!sh.hasBom) return;
-    const openPOs = s.purchaseOrders.filter((p) => p.ref === w.id && !["received", "cancelled"].includes(p.status));
     if (sh.anyShort) {
-      const items = sh.rows.filter((r) => r.short > 0.0005).map((r) => `${r.code} ขาด ${_fmt(Math.ceil(r.short), 0)} ${r.unit}`).join(", ");
-      out.push({ id: "ws" + w.id, kind: openPOs.length ? "warning" : "alert", icon: "Boxes",
-        title: `ใบสั่งผลิต ${w.id} ขาดวัตถุดิบ: ${items} — ผลิตได้สูงสุด ${_fmt(sh.maxPieces)} จาก ${_fmt(sh.remaining)} ชิ้น` + (openPOs.length ? ` · สั่งซื้อแล้ว (${openPOs.map((p) => p.id).join(", ")}) รอรับของ` : " · ยังไม่ได้สั่งซื้อ"),
+      const items = sh.rows.filter((r) => r.short > 0.0005).map((r) => `${r.code} ขาดรวม ${_fmt(Math.ceil(r.short), 0)} ${r.unit}`).join(", ");
+      out.push({ id: "ws" + w.id, kind: "alert", icon: "Boxes",
+        title: `ใบสั่งผลิต ${w.id} ขาดวัตถุดิบ: ${items} (รวมทุกใบสั่งผลิตที่เปิดอยู่) — ผลิตได้ก่อน ${_fmt(sh.maxPieces)} จาก ${_fmt(sh.remaining)} ชิ้น · ยังไม่ได้สั่งซื้อ` + (sh.orders.length ? ` (มีใบสั่งซื้อ ${sh.orders.join(", ")} แต่ยังไม่พอ)` : ""),
         time: "ต้องเพิ่มสต๊อก", page: woPage, focus: { wo: w.id } });
-    } else if (["queued", "setup"].includes(w.status) && s.purchaseOrders.some((p) => p.ref === w.id && p.status === "received")) {
+    } else if (sh.anyWait) {
+      out.push({ id: "ww" + w.id, kind: "warning", icon: "Truck",
+        title: `ใบสั่งผลิต ${w.id} รอรับวัตถุดิบตามใบสั่งซื้อ ${sh.orders.join(", ")} — ผลิตได้ก่อน ${_fmt(sh.maxPieces)} จาก ${_fmt(sh.remaining)} ชิ้น`,
+        time: "รอรับของ", page: woPage, focus: { wo: w.id } });
+    } else if (["queued", "setup"].includes(w.status) && s.purchaseOrders.some((p) => p.status === "received" && (p.ref === w.id || (p.forWo || []).includes(w.id)))) {
       out.push({ id: "wr" + w.id, kind: "info", icon: "Factory", title: `ใบสั่งผลิต ${w.id} พร้อมผลิตแล้ว — วัตถุดิบครบหลังรับของตามใบสั่งซื้อ`, time: "พร้อมผลิต", page: woPage, focus: { wo: w.id } });
     }
   });

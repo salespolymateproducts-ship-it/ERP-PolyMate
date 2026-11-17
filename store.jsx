@@ -457,40 +457,54 @@ const Store = (function () {
     });
     return { perPiece: sum * (1 + (Number(snap.wasteRate) || 0) / 100), missing };
   }
-  // วัตถุดิบที่ใบสั่งผลิตที่เปิดอยู่ "ก่อนหน้า" (เปิดก่อน) จองไว้แล้ว = จำนวนที่เหลือต้องผลิต × ปริมาณต่อชิ้น (รวมเผื่อเสีย)
-  // wo = null หมายถึงใบสั่งใหม่ที่ยังไม่ได้เปิด (ใบที่เปิดอยู่ทั้งหมดอยู่ก่อนหน้า) — ลำดับสิทธิ์ใช้ของ = ลำดับเลขที่ใบสั่งผลิต
-  function reservedAhead(materialId, wo) {
-    let sum = 0;
-    state.workOrders.forEach((w) => {
-      if (wo && w.id === wo.id) return;
-      if (!["queued", "setup", "running"].includes(w.status)) return;
-      if (wo && !(String(w.id) < String(wo.id))) return;
-      const bom = woBom(w);
-      const line = bom && bom.lines.find((l) => l.item === materialId);
-      if (!line) return;
-      const remaining = Math.max(0, (Number(w.quantity) || 0) - (Number(w.produced) || 0));
-      sum += remaining * line.qty * (1 + (Number(bom.wasteRate) || 0) / 100);
-    });
-    return sum;
+  // ---------- ตำแหน่งวัตถุดิบ (ไม่มีลำดับสิทธิ์ตามเลขที่ใบ — ใบไหนจะผลิตก่อนก็ได้ตามหน้างาน) ----------
+  const OPEN_WO = ["queued", "setup", "running"];
+  // ปริมาณที่ใบสั่งผลิตหนึ่งใบยังต้องใช้ของวัตถุดิบตัวนี้ (จำนวนที่เหลือต้องผลิต × ปริมาณต่อชิ้น รวมเผื่อเสีย)
+  function woNeed(w, materialId) {
+    const bom = woBom(w);
+    const line = bom && bom.lines.find((l) => l.item === materialId);
+    if (!line) return 0;
+    const remaining = Math.max(0, (Number(w.quantity) || 0) - (Number(w.produced) || 0));
+    return remaining * line.qty * (1 + (Number(bom.wasteRate) || 0) / 100);
   }
-  // วัตถุดิบที่ใบสั่งผลิตยังขาด: จำนวนที่เหลือต้องผลิต เทียบสต๊อกที่ "หักของที่ใบสั่งผลิตก่อนหน้าจองไว้แล้ว" + จำนวนชิ้นสูงสุดที่ผลิตได้
+  // ที่ใบสั่งผลิตอื่นที่เปิดอยู่ต้องใช้รวมกัน (wo = null: ใบใหม่ที่ยังไม่ได้เปิด → ทุกใบที่เปิดอยู่)
+  function reservedByOthers(materialId, wo) {
+    return state.workOrders.reduce((t, w) => (wo && w.id === wo.id) || !OPEN_WO.includes(w.status) ? t : t + woNeed(w, materialId), 0);
+  }
+  // ที่สั่งซื้อไว้แล้วแต่ยังไม่ได้รับ (ใบสั่งซื้อรออนุมัติ/อนุมัติแล้ว)
+  function onOrder(materialId) {
+    return state.purchaseOrders.filter((p) => ["pending", "approved"].includes(p.status))
+      .reduce((t, p) => t + (p.lines || []).filter((l) => l.item === materialId).reduce((x, l) => x + (Number(l.qty) || 0), 0), 0);
+  }
+  // วัตถุดิบของใบสั่งผลิต: ยอดรวมระดับวัตถุดิบ = ที่ทุกใบสั่งผลิตที่เปิดอยู่ต้องใช้รวมกัน − สต๊อก − ที่สั่งซื้อไว้แล้ว
+  //   deficit = ขาดเทียบสต๊อก · short = ขาดที่ยังไม่มีใบสั่งซื้อรองรับ · covered = ส่วนที่มีใบสั่งซื้อรองรับ (รอรับของ)
+  // maxPieces = ผลิตได้สูงสุดด้วยสต๊อกจริงที่มี (ไม่หักของใบอื่น — ยืดหยุ่นตามหน้างาน)
   function woShortage(wo) {
     const remaining = Math.max(0, (Number(wo.quantity) || 0) - (Number(wo.produced) || 0));
     const bom = woBom(wo);
-    if (!bom) return { hasBom: false, rows: [], remaining, maxPieces: remaining, anyShort: false };
+    if (!bom) return { hasBom: false, rows: [], remaining, maxPieces: remaining, anyShort: false, anyWait: false, orders: [] };
     const waste = 1 + (Number(bom.wasteRate) || 0) / 100;
     const rows = bom.lines.map((l) => {
       const m = state.materials.find((x) => x.id === l.item);
       const perPiece = l.qty * waste;
       const need = remaining * perPiece;
       const stock = m ? Number(m.stock) || 0 : 0;
-      const reserved = reservedAhead(l.item, wo);
-      const available = Math.max(0, stock - reserved); // ส่วนที่ใบนี้ใช้ได้จริง
-      return { item: l.item, code: m ? m.code : l.item, name: l.name, unit: m ? m.unit : "KG", m, perPiece, need, stock, reserved, available, short: r3(Math.max(0, need - available)) };
+      const others = reservedByOthers(l.item, wo);
+      const committed = need + others;
+      const incoming = onOrder(l.item);
+      // เตือนเฉพาะใบสั่งผลิตที่ยังต้องใช้วัตถุดิบตัวนี้จริง (ใบที่ผลิตครบแล้วไม่ถูกเตือนจากยอดรวมของใบอื่น)
+      const mine = need > 0.0005;
+      const deficit = mine ? r3(Math.max(0, committed - stock)) : 0;
+      const short = mine ? r3(Math.max(0, deficit - incoming)) : 0;
+      return { item: l.item, code: m ? m.code : l.item, name: l.name, unit: m ? m.unit : "KG", m, perPiece, need, others, committed, stock, incoming, deficit, short, covered: r3(deficit - short) };
     });
-    const caps = rows.filter((r) => r.perPiece > 0).map((r) => Math.floor(r.available / r.perPiece + 1e-9));
+    const caps = rows.filter((r) => r.perPiece > 0).map((r) => Math.floor(r.stock / r.perPiece + 1e-9));
     const maxPieces = Math.min(remaining, caps.length ? Math.max(0, Math.min(...caps)) : remaining);
-    return { hasBom: true, rows, remaining, maxPieces, anyShort: rows.some((r) => r.short > 0.0005) };
+    const anyShort = rows.some((r) => r.short > 0.0005);
+    const anyWait = !anyShort && rows.some((r) => r.deficit > 0.0005);
+    const items = new Set(rows.map((r) => r.item));
+    const orders = state.purchaseOrders.filter((p) => ["pending", "approved"].includes(p.status) && (p.lines || []).some((l) => items.has(l.item))).map((p) => p.id);
+    return { hasBom: true, rows, remaining, maxPieces, anyShort, anyWait, orders };
   }
   // บันทึก BOM ผ่าน API ตรง ๆ (server ตรวจกฎและตอบ error ทันที) แล้วโหลดข้อมูลใหม่
   async function saveBom(rec, isNew) {
@@ -644,7 +658,7 @@ const Store = (function () {
     state, subscribe, getVersion: () => version,
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
-    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedAhead, saveBom,
+    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,
     exportData, importData, resetAll, saveCompany,

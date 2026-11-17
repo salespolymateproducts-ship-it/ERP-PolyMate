@@ -115,7 +115,7 @@ function KanbanBoard({ onOpen }) {
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span className="mono" style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 600 }}>{w.id}</span>
                       <span className="spacer" />
-                      {["queued", "setup", "running"].includes(w.status) && Store.woShortage(w).anyShort && <span className="badge badge-danger" title="วัตถุดิบไม่พอ ผลิตไม่ได้จนกว่าจะเพิ่มสต๊อก">ขาดวัตถุดิบ</span>}
+                      {["queued", "setup", "running"].includes(w.status) && (() => { const x = Store.woShortage(w); return x.anyShort ? <span className="badge badge-danger" title="วัตถุดิบรวมทุกใบสั่งผลิตไม่พอ ต้องเพิ่มสต๊อก">ขาดวัตถุดิบ</span> : x.anyWait ? <span className="badge badge-warning" title="สั่งซื้อแล้ว รอรับของ">รอรับวัตถุดิบ</span> : null; })()}
                       {w.priority === "high" && <span className="badge badge-danger">ด่วน</span>}
                     </div>
                     <div style={{ fontSize: 13, fontWeight: 600, marginTop: 6, lineHeight: 1.3 }}>{w.product}</div>
@@ -180,7 +180,7 @@ function WorkOrderList({ onOpen }) {
               const ngPct = w.produced ? (w.ng / w.produced) * 100 : 0;
               return (
                 <tr key={w.id} onClick={() => onOpen(w)} style={{ cursor: "pointer" }}>
-                  <td className="mono"><b style={{ color: "var(--text-primary)" }}>{w.id}</b>{["queued", "setup", "running"].includes(w.status) && Store.woShortage(w).anyShort && <span className="badge badge-danger" style={{ marginLeft: 6 }}>ขาดวัตถุดิบ</span>}{w.priority === "high" && <span className="badge badge-danger" style={{ marginLeft: 6 }}>ด่วน</span>}</td>
+                  <td className="mono"><b style={{ color: "var(--text-primary)" }}>{w.id}</b>{["queued", "setup", "running"].includes(w.status) && (() => { const x = Store.woShortage(w); return x.anyShort ? <span className="badge badge-danger" style={{ marginLeft: 6 }}>ขาดวัตถุดิบ</span> : x.anyWait ? <span className="badge badge-warning" style={{ marginLeft: 6 }}>รอรับวัตถุดิบ</span> : null; })()}{w.priority === "high" && <span className="badge badge-danger" style={{ marginLeft: 6 }}>ด่วน</span>}</td>
                   <td>
                     <div style={{ fontSize: 13, fontWeight: 500 }}>{w.product}</div>
                     <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{w.customerName}</div>
@@ -298,7 +298,7 @@ function _inactiveInBom(bom) {
 }
 function _reservedByOthers(materialId, currentWoId) {
   const cur = currentWoId ? Store.state.workOrders.find((w) => w.id === currentWoId) : null;
-  return Store.reservedAhead(materialId, cur || null);
+  return Store.reservedByOthers(materialId, cur || null);
 }
 
 function MaterialReservation({ wo }) {
@@ -314,7 +314,10 @@ function MaterialReservation({ wo }) {
   const allOk = hasData && reqs.every((r) => r.ok);
   const shortItems = reqs.filter((r) => !r.ok);
   const inactiveReqs = reqs.filter((r) => r.m && r.m.active === false);
-  const shortActive = shortItems.filter((r) => !(r.m && r.m.active === false)); // สั่งซื้อได้เฉพาะวัตถุดิบที่ยังใช้งานอยู่
+  // ปุ่มสั่งซื้อใช้ยอดขาดรวมทุกใบสั่งผลิต (หักที่สั่งซื้อไว้แล้ว) — กันสั่งซ้ำ
+  const sh = Store.woShortage(wo);
+  const poRows = sh.rows.filter((r) => r.short > 0.0005).map((r) => ({ m: r.m, kg: r.short, available: 0 }));
+  const shortActive = poRows.filter((r) => !(r.m && r.m.active === false)); // สั่งซื้อได้เฉพาะวัตถุดิบที่ยังใช้งานอยู่
   const alreadyReserved = ["running", "setup", "done"].includes(wo.status);
   const reserved = !!wo.reserved || alreadyReserved;
   const setReserved = (v) => runAction(() => Store.update("workOrders", wo.id, { reserved: v }, "id", v ? "จองวัตถุดิบ" : "ยกเลิกจองวัตถุดิบ"), v ? "จองวัตถุดิบแล้ว" : "ยกเลิกการจองแล้ว");
@@ -411,8 +414,9 @@ function MaterialReservation({ wo }) {
                 )}
               </div>
               {!allOk ? (
-                <button className="btn btn-outline btn-sm" disabled={shortActive.length === 0} title={shortActive.length === 0 ? "วัตถุดิบที่ขาดปิดใช้งานอยู่ — เปิดใช้งานก่อนจึงจะสั่งซื้อได้" : undefined}
-                  onClick={() => createPOFromShortage(wo, shortItems)}><I.Boxes size={13}/> สร้างใบสั่งซื้อวัตถุดิบที่ขาด</button>
+                <button className="btn btn-outline btn-sm" disabled={shortActive.length === 0}
+                  title={shortActive.length === 0 ? (poRows.length ? "วัตถุดิบที่ขาดปิดใช้งานอยู่ — เปิดใช้งานก่อนจึงจะสั่งซื้อได้" : "สั่งซื้อไว้แล้ว" + (sh.orders.length ? " (" + sh.orders.join(", ") + ")" : "") + " รอรับของ") : undefined}
+                  onClick={() => createPOFromShortage(wo, poRows)}><I.Boxes size={13}/> สร้างใบสั่งซื้อวัตถุดิบที่ขาด</button>
               ) : reserved ? (
                 <button className="btn btn-outline btn-sm" onClick={() => setReserved(false)}>ยกเลิกจอง</button>
               ) : (
@@ -616,7 +620,8 @@ function createPOFromShortage(wo, shortItems) {
       const vat = Math.round(subtotal * 7) / 100;
       const po = { id: n.docNo, seq: n.seq, counterKey: n.counterKey, date: Store.today(), supplier: sup ? sup.code : supName, supplierName: sup ? sup.name : supName,
         items: lines.length, subtotal, vat, whtRate: 0, total: Math.round((subtotal + vat) * 100) / 100, expectedDate: "—", status: "pending",
-        createdBy: Store.userName(), lines, ref: wo.id };
+        createdBy: Store.userName(), lines, ref: wo.id,
+        forWo: Store.state.workOrders.filter((w) => ["queued", "setup", "running"].includes(w.status) && Store.woShortage(w).rows.some((r) => r.need > 0.0005 && lines.some((pl) => pl.item === r.item))).map((w) => w.id) };
       Store.state.purchaseOrders.unshift(po);
       Store.log("CREATE", "ใบสั่งซื้อ", po.id, `สร้างจากวัตถุดิบไม่พอของ ${wo.id}`);
       return po.id;
@@ -648,7 +653,6 @@ function ProductionRecorder({ wo, onProduce }) {
   const bom = _bomOfWo(wo);
   const [busy, setBusy] = useState(false);
   const sh = Store.woShortage(wo);
-  const openPOs = Store.state.purchaseOrders.filter((p) => p.ref === wo.id && !["received", "cancelled"].includes(p.status));
   const n = parseInt(qty, 10) || 0;
   const ngN = parseInt(ng, 10) || 0;
   const good = Math.max(0, n - ngN);
@@ -706,30 +710,40 @@ function ProductionRecorder({ wo, onProduce }) {
                 <span>สูตรนี้ใช้วัตถุดิบที่<b>ปิดใช้งาน</b>: <b>{inactiveBom.map((m) => m.code).join(", ")}</b> — บันทึกผลิตและตัดสต๊อกต่อได้ตามปกติ แต่ควรเปิดใช้งานวัตถุดิบหรือตรวจสอบสูตร</span>
               </div>
             )}
-            {sh.anyShort && (
-              <div style={{ marginBottom: 12, border: "1px solid var(--danger)", borderRadius: 10, overflow: "hidden" }}>
-                <div style={{ padding: "9px 12px", background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5, fontWeight: 600, display: "flex", gap: 8, alignItems: "center" }}>
-                  <I.Alert size={14}/> วัตถุดิบไม่พอสำหรับที่เหลือ {_fmt(sh.remaining)} ชิ้น — ผลิตได้สูงสุด {_fmt(sh.maxPieces)} ชิ้นจากของที่มี (หักของที่ใบสั่งผลิตก่อนหน้าจองไว้แล้ว) ต้องเพิ่มสต๊อก
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px 100px 90px", gap: 8, padding: "6px 12px", background: "var(--bg-subtle)", fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>
-                  <div>วัตถุดิบที่ขาด</div><div style={{ textAlign: "right" }}>ต้องใช้</div><div style={{ textAlign: "right" }}>มีอยู่</div><div style={{ textAlign: "right" }}>จองโดยงานอื่น</div><div style={{ textAlign: "right" }}>ขาด</div>
-                </div>
-                {sh.rows.filter((r) => r.short > 0.0005).map((r, i) => (
-                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 90px 90px 100px 90px", gap: 8, padding: "6px 12px", borderTop: "1px solid var(--border)", fontSize: 12.5 }}>
-                    <div><b style={{ fontWeight: 500 }}>{r.name}</b> <span className="mono" style={{ fontSize: 10.5, color: "var(--text-secondary)" }}>{r.code}</span></div>
-                    <div className="num" style={{ textAlign: "right" }}>{_fmt(r.need, 1)} {r.unit}</div>
-                    <div className="num" style={{ textAlign: "right" }}>{_fmt(r.stock, 1)}</div>
-                    <div className="num" style={{ textAlign: "right", color: r.reserved > 0 ? "var(--amber)" : "var(--text-tertiary)" }}>{r.reserved > 0 ? "−" + _fmt(r.reserved, 1) : "—"}</div>
-                    <div className="num" style={{ textAlign: "right", color: "var(--danger)", fontWeight: 600 }}>{_fmt(r.short, 1)}</div>
+            {(sh.anyShort || sh.anyWait) && (() => {
+              const bad = sh.anyShort;
+              const color = bad ? "var(--danger)" : "var(--amber)";
+              const list = sh.rows.filter((r) => r.deficit > 0.0005);
+              const cols = "1fr 78px 82px 78px 82px 78px";
+              return (
+                <div style={{ marginBottom: 12, border: "1px solid " + color, borderRadius: 10, overflow: "hidden" }}>
+                  <div style={{ padding: "9px 12px", background: bad ? "var(--danger-subtle, #fee2e2)" : "var(--amber-subtle)", color, fontSize: 12.5, fontWeight: 600, display: "flex", gap: 8, alignItems: "center" }}>
+                    <I.Alert size={14}/> {bad
+                      ? "วัตถุดิบไม่พอสำหรับใบสั่งผลิตที่เปิดอยู่ทั้งหมด — ต้องเพิ่มสต๊อก"
+                      : "สั่งซื้อวัตถุดิบแล้ว รอรับของ (" + sh.orders.join(", ") + ")"}
+                    {" · "}ผลิตได้ก่อน {_fmt(sh.maxPieces)} จาก {_fmt(sh.remaining)} ชิ้นด้วยสต๊อกที่มี
                   </div>
-                ))}
-                <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: "1px solid var(--border)", flexWrap: "wrap", alignItems: "center" }}>
-                  <button type="button" className="btn btn-primary btn-sm" onClick={() => createPOFromShortage(wo, sh.rows.filter((r) => r.short > 0.0005).map((r) => ({ m: r.m, kg: r.need, available: r.available })))}><I.Boxes size={13}/> สร้างใบสั่งซื้อวัตถุดิบที่ขาด</button>
-                  {sh.maxPieces > 0 && <button type="button" className="btn btn-outline btn-sm" onClick={() => setQty(String(sh.maxPieces))}>ผลิตเท่าที่ทำได้ ({_fmt(sh.maxPieces)} ชิ้น)</button>}
-                  {openPOs.length > 0 && <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>สั่งซื้อแล้ว: {openPOs.map((p) => p.id).join(", ")} (รอรับของ)</span>}
+                  <div style={{ display: "grid", gridTemplateColumns: cols, gap: 8, padding: "6px 12px", background: "var(--bg-subtle)", fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>
+                    <div>วัตถุดิบ</div><div style={{ textAlign: "right" }}>ใบนี้ใช้</div><div style={{ textAlign: "right" }}>ทุกใบรวม</div><div style={{ textAlign: "right" }}>สต๊อก</div><div style={{ textAlign: "right" }}>สั่งไว้แล้ว</div><div style={{ textAlign: "right" }}>ขาด</div>
+                  </div>
+                  {list.map((r, i) => (
+                    <div key={i} style={{ display: "grid", gridTemplateColumns: cols, gap: 8, padding: "6px 12px", borderTop: "1px solid var(--border)", fontSize: 12.5 }}>
+                      <div><b style={{ fontWeight: 500 }}>{r.name}</b> <span className="mono" style={{ fontSize: 10.5, color: "var(--text-secondary)" }}>{r.code}</span></div>
+                      <div className="num" style={{ textAlign: "right" }}>{_fmt(r.need, 1)}</div>
+                      <div className="num" style={{ textAlign: "right" }}>{_fmt(r.committed, 1)}</div>
+                      <div className="num" style={{ textAlign: "right" }}>{_fmt(r.stock, 1)}</div>
+                      <div className="num" style={{ textAlign: "right", color: r.incoming > 0 ? "var(--info, #2563eb)" : "var(--text-tertiary)" }}>{r.incoming > 0 ? _fmt(r.incoming, 1) : "—"}</div>
+                      <div className="num" style={{ textAlign: "right", color: r.short > 0.0005 ? "var(--danger)" : "var(--text-tertiary)", fontWeight: 600 }}>{r.short > 0.0005 ? _fmt(r.short, 1) : "0"}</div>
+                    </div>
+                  ))}
+                  <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: "1px solid var(--border)", flexWrap: "wrap", alignItems: "center" }}>
+                    {bad && <button type="button" className="btn btn-primary btn-sm" onClick={() => createPOFromShortage(wo, sh.rows.filter((r) => r.short > 0.0005).map((r) => ({ m: r.m, kg: r.short, available: 0 })))}><I.Boxes size={13}/> สร้างใบสั่งซื้อวัตถุดิบที่ขาด</button>}
+                    {sh.maxPieces > 0 && <button type="button" className="btn btn-outline btn-sm" onClick={() => setQty(String(sh.maxPieces))}>ผลิตเท่าที่ทำได้ ({_fmt(sh.maxPieces)} ชิ้น)</button>}
+                    <span style={{ fontSize: 11.5, color: "var(--text-tertiary)" }}>ตัวเลข "ขาด" คิดรวมทุกใบสั่งผลิตที่เปิดอยู่ ไม่มีลำดับก่อนหลัง</span>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
             <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
               <div style={{ width: 150 }}>
                 <label className="field-label">จำนวนที่ผลิต (ชิ้น)</label>
