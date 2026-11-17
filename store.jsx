@@ -457,6 +457,23 @@ const Store = (function () {
     });
     return { perPiece: sum * (1 + (Number(snap.wasteRate) || 0) / 100), missing };
   }
+  // วัตถุดิบที่ใบสั่งผลิตยังขาด (คิดจากจำนวนที่เหลือต้องผลิต เทียบสต๊อกจริง) + จำนวนชิ้นสูงสุดที่ผลิตได้ด้วยของที่มี
+  function woShortage(wo) {
+    const remaining = Math.max(0, (Number(wo.quantity) || 0) - (Number(wo.produced) || 0));
+    const bom = woBom(wo);
+    if (!bom) return { hasBom: false, rows: [], remaining, maxPieces: remaining, anyShort: false };
+    const waste = 1 + (Number(bom.wasteRate) || 0) / 100;
+    const rows = bom.lines.map((l) => {
+      const m = state.materials.find((x) => x.id === l.item);
+      const perPiece = l.qty * waste;
+      const need = remaining * perPiece;
+      const stock = m ? Number(m.stock) || 0 : 0;
+      return { item: l.item, code: m ? m.code : l.item, name: l.name, unit: m ? m.unit : "KG", m, perPiece, need, stock, short: r3(Math.max(0, need - stock)) };
+    });
+    const caps = rows.filter((r) => r.perPiece > 0).map((r) => Math.floor(r.stock / r.perPiece + 1e-9));
+    const maxPieces = Math.min(remaining, caps.length ? Math.max(0, Math.min(...caps)) : remaining);
+    return { hasBom: true, rows, remaining, maxPieces, anyShort: rows.some((r) => r.short > 0.0005) };
+  }
   // บันทึก BOM ผ่าน API ตรง ๆ (server ตรวจกฎและตอบ error ทันที) แล้วโหลดข้อมูลใหม่
   async function saveBom(rec, isNew) {
     if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
@@ -609,7 +626,7 @@ const Store = (function () {
     state, subscribe, getVersion: () => version,
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
-    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, saveBom,
+    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, saveBom,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,
     exportData, importData, resetAll, saveCompany,

@@ -115,6 +115,7 @@ function KanbanBoard({ onOpen }) {
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span className="mono" style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 600 }}>{w.id}</span>
                       <span className="spacer" />
+                      {["queued", "setup", "running"].includes(w.status) && Store.woShortage(w).anyShort && <span className="badge badge-danger" title="วัตถุดิบไม่พอ ผลิตไม่ได้จนกว่าจะเพิ่มสต๊อก">ขาดวัตถุดิบ</span>}
                       {w.priority === "high" && <span className="badge badge-danger">ด่วน</span>}
                     </div>
                     <div style={{ fontSize: 13, fontWeight: 600, marginTop: 6, lineHeight: 1.3 }}>{w.product}</div>
@@ -179,7 +180,7 @@ function WorkOrderList({ onOpen }) {
               const ngPct = w.produced ? (w.ng / w.produced) * 100 : 0;
               return (
                 <tr key={w.id} onClick={() => onOpen(w)} style={{ cursor: "pointer" }}>
-                  <td className="mono"><b style={{ color: "var(--text-primary)" }}>{w.id}</b>{w.priority === "high" && <span className="badge badge-danger" style={{ marginLeft: 6 }}>ด่วน</span>}</td>
+                  <td className="mono"><b style={{ color: "var(--text-primary)" }}>{w.id}</b>{["queued", "setup", "running"].includes(w.status) && Store.woShortage(w).anyShort && <span className="badge badge-danger" style={{ marginLeft: 6 }}>ขาดวัตถุดิบ</span>}{w.priority === "high" && <span className="badge badge-danger" style={{ marginLeft: 6 }}>ด่วน</span>}</td>
                   <td>
                     <div style={{ fontSize: 13, fontWeight: 500 }}>{w.product}</div>
                     <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{w.customerName}</div>
@@ -652,6 +653,8 @@ function ProductionRecorder({ wo, onProduce }) {
   const [ng, setNg] = useState("");
   const bom = _bomOfWo(wo);
   const [busy, setBusy] = useState(false);
+  const sh = Store.woShortage(wo);
+  const openPOs = Store.state.purchaseOrders.filter((p) => p.ref === wo.id && !["received", "cancelled"].includes(p.status));
   const n = parseInt(qty, 10) || 0;
   const ngN = parseInt(ng, 10) || 0;
   const good = Math.max(0, n - ngN);
@@ -707,6 +710,29 @@ function ProductionRecorder({ wo, onProduce }) {
               <div style={{ marginBottom: 12, padding: "9px 12px", borderRadius: 8, background: "var(--amber-subtle)", color: "var(--amber)", fontSize: 12.5, display: "flex", gap: 8, alignItems: "flex-start" }}>
                 <I.Alert size={14}/>
                 <span>สูตรนี้ใช้วัตถุดิบที่<b>ปิดใช้งาน</b>: <b>{inactiveBom.map((m) => m.code).join(", ")}</b> — บันทึกผลิตและตัดสต๊อกต่อได้ตามปกติ แต่ควรเปิดใช้งานวัตถุดิบหรือตรวจสอบสูตร</span>
+              </div>
+            )}
+            {sh.anyShort && (
+              <div style={{ marginBottom: 12, border: "1px solid var(--danger)", borderRadius: 10, overflow: "hidden" }}>
+                <div style={{ padding: "9px 12px", background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5, fontWeight: 600, display: "flex", gap: 8, alignItems: "center" }}>
+                  <I.Alert size={14}/> วัตถุดิบไม่พอสำหรับที่เหลือ {_fmt(sh.remaining)} ชิ้น — ผลิตได้สูงสุด {_fmt(sh.maxPieces)} ชิ้นจากของที่มี ต้องเพิ่มสต๊อก
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 100px 100px", gap: 8, padding: "6px 12px", background: "var(--bg-subtle)", fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>
+                  <div>วัตถุดิบที่ขาด</div><div style={{ textAlign: "right" }}>ต้องใช้</div><div style={{ textAlign: "right" }}>มีอยู่</div><div style={{ textAlign: "right" }}>ขาด</div>
+                </div>
+                {sh.rows.filter((r) => r.short > 0.0005).map((r, i) => (
+                  <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 100px 100px 100px", gap: 8, padding: "6px 12px", borderTop: "1px solid var(--border)", fontSize: 12.5 }}>
+                    <div><b style={{ fontWeight: 500 }}>{r.name}</b> <span className="mono" style={{ fontSize: 10.5, color: "var(--text-secondary)" }}>{r.code}</span></div>
+                    <div className="num" style={{ textAlign: "right" }}>{_fmt(r.need, 1)} {r.unit}</div>
+                    <div className="num" style={{ textAlign: "right" }}>{_fmt(r.stock, 1)}</div>
+                    <div className="num" style={{ textAlign: "right", color: "var(--danger)", fontWeight: 600 }}>{_fmt(r.short, 1)}</div>
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: "1px solid var(--border)", flexWrap: "wrap", alignItems: "center" }}>
+                  <button type="button" className="btn btn-primary btn-sm" onClick={() => createPOFromShortage(wo, sh.rows.filter((r) => r.short > 0.0005).map((r) => ({ m: r.m, kg: r.need, available: r.stock })))}><I.Boxes size={13}/> สร้างใบสั่งซื้อวัตถุดิบที่ขาด</button>
+                  {sh.maxPieces > 0 && <button type="button" className="btn btn-outline btn-sm" onClick={() => setQty(String(sh.maxPieces))}>ผลิตเท่าที่ทำได้ ({_fmt(sh.maxPieces)} ชิ้น)</button>}
+                  {openPOs.length > 0 && <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>สั่งซื้อแล้ว: {openPOs.map((p) => p.id).join(", ")} (รอรับของ)</span>}
+                </div>
               </div>
             )}
             <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
