@@ -672,3 +672,11 @@ a { color: inherit; text-decoration: none; }
 .erp-search-item:hover, .erp-search-item.sel { background: var(--bg-subtle); }
 /* องค์ประกอบที่แสดงเฉพาะบนกระดาษ (เช่น หัวกระดาษบริษัทในใบสั่งผลิต / ใบตรวจ QC) */
 @media screen { .print-only { display: none !important; } }
+
+/* ฟอร์มเอกสารขาย (ใบเสนอราคา … ใบเสร็จ) = กระดาษ A4 210 × 297 mm · ช่องลายเซ็น (.sig-block) อยู่ล่างสุดของกระดาษ */
+.a4-form { box-sizing: border-box; width: 210mm; min-height: 297mm; margin: 0 auto; display: flex; flex-direction: column; }
+@media print {
+  /* พื้นที่พิมพ์ = 297 − (12 + 14) mm ขอบกระดาษ ≈ 271 mm (เผื่อเล็กน้อยกันล้นไปหน้าที่ 2 เปล่า) */
+  #print-root .print-sheet.a4-form { display: flex !important; flex-direction: column; min-height: 268mm; }
+  #print-root .a4-form .sig-block { margin-top: auto !important; }
+}

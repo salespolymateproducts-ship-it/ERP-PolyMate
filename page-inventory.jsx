@@ -153,6 +153,10 @@ function StockAdjustModal({ onClose }) {
 function ProductEditModal({ f, onClose, onDone }) {
   const managed0 = Store.isBuyable(f);
   const isAdmin = Store.user() && Store.user().role === "admin";
+  const [pname, setPname] = useState(f.name || "");
+  const [customer, setCustomer] = useState(f.customer && f.customer !== "—" ? f.customer : "");
+  const [color, setColor] = useState(f.color || "");
+  const [weight, setWeight] = useState(f.weight == null ? "" : String(f.weight));
   const [price, setPrice] = useState(String(f.price == null ? "" : f.price));
   const [cost, setCost] = useState(String(f.cost == null ? "" : f.cost));
   const [buyable, setBuyable] = useState(f.buyable === true);
@@ -169,7 +173,8 @@ function ProductEditModal({ f, onClose, onDone }) {
     setErr("");
     if (!(Number(price) >= 0)) return setErr("ราคาขายต้องไม่ติดลบ");
     if (!managed && !(Number(cost) >= 0)) return setErr("ต้นทุนต้องไม่ติดลบ");
-    const body = { ...f, price: Number(price), buyable: f.jobType === "trade" ? undefined : buyable };
+    if (!pname.trim()) return setErr("ต้องระบุชื่อสินค้า");
+    const body = { ...f, name: pname.trim(), customer: customer || "—", color: color.trim(), weight: String(weight).trim() === "" ? null : Number(weight), price: Number(price), buyable: f.jobType === "trade" ? undefined : buyable };
     if (!managed0 && !managed) body.cost = Number(cost);
     if (managed && !managed0) body.cost = Number(cost) || 0; // เพิ่งเปิดธงซื้อได้: ค่านี้เป็นต้นทุนยกมา
     body.supplier = supplier || undefined; body.min = num(min); body.leadDays = num(leadDays);
@@ -181,6 +186,14 @@ function ProductEditModal({ f, onClose, onDone }) {
     <ErpModal title={"แก้ไขสินค้า " + f.code} width={640} onClose={onClose}
       footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={save}>บันทึก</button></>}>
       <div className="grid-2" style={{ gap: 10 }}>
+        <div style={{ gridColumn: "1 / -1" }}><label className="field-label">ชื่อสินค้า</label><input className="input" value={pname} onChange={(e) => setPname(e.target.value)}/></div>
+        <div><label className="field-label">ลูกค้า (รหัส)</label>
+          <select className="select" value={customer} onChange={(e) => setCustomer(e.target.value)}>
+            <option value="">— ไม่ระบุ —</option>
+            {CUSTOMERS.map((c) => <option key={c.id} value={c.code}>{c.code} · {c.name}</option>)}
+          </select></div>
+        <div><label className="field-label">สี</label><input className="input" value={color} onChange={(e) => setColor(e.target.value)}/></div>
+        <div><label className="field-label">น้ำหนัก (g)</label><input className="input num" type="number" min="0" step="any" value={weight} onChange={(e) => setWeight(e.target.value)}/></div>
         <div><label className="field-label">ราคาขาย / หน่วย (ค่าเริ่มต้นในเอกสารขาย)</label><input className="input num" type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)}/></div>
         {!managed ? (
           <div><label className="field-label">ต้นทุนมาตรฐาน / หน่วย</label><input className="input num" type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)}/></div>
@@ -345,7 +358,9 @@ function MaterialTable({ canManage, onAdd, onEdit }) {
                   </td>
                   <td><TypeBadge type={m.type}/></td>
                   <td className="mono" style={{ fontSize: 12 }}>{m.location}</td>
-                  <td className="num"><b>{_fmt(m.stock)}</b> <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{m.unit}</span></td>
+                  <td className="num"><b>{_fmt(m.stock)}</b> <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{m.unit}</span>
+                    {(() => { const rsv = Store.reservedByOthers(m.id, null); return rsv > 0.0005 ? <div style={{ fontSize: 10.5, color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>จองโดยใบสั่งผลิต {_fmt(rsv, 1)} · พร้อมใช้ <b style={{ color: m.stock - rsv < 0 ? "var(--danger)" : "inherit" }}>{_fmt(m.stock - rsv, 1)}</b></div> : null; })()}
+                  </td>
                   <td style={{ minWidth: 160 }}>
                     <StockBar min={m.min} max={m.max} stock={m.stock}/>
                     {low && <div style={{ fontSize: 11, color: danger ? "var(--danger)" : "var(--amber)", marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
@@ -753,7 +768,7 @@ function FinishedTable({ onAdd }) {
                 <td className="num">{baht(f.price, 2)}</td>
                 <td className="num" style={{ color: margin > 40 ? "var(--success)" : "var(--text-primary)", fontWeight: 500 }}>{_fmt(margin, 1)}%</td>
                 <td style={{ whiteSpace: "nowrap" }}>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setPe(f)}><I.Edit size={13}/> {buy ? "แก้ไข" : "ราคา"}</button>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setPe(f)}><I.Edit size={13}/> แก้ไข</button>
                   {buy && canBuy && <button className="btn btn-outline btn-sm" style={{ marginLeft: 4 }} onClick={() => setPo({ ...f, onOrder: Store.productOnOrder(f.id), demandOpen: Store.productDemand ? Store.productDemand(f.code) : 0 })}>สั่งซื้อ</button>}
                 </td>
               </tr>

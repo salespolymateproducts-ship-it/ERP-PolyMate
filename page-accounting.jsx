@@ -397,7 +397,7 @@ function ExpenseForm({ existing, onClose, onSave }) {
       </>}
     >
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Field label="วันที่" error={err.date}><input type="date" style={inputStyle} value={f.date} onChange={set("date")}/></Field>
+        <Field label="วันที่" error={err.date}><DateInput style={inputStyle} value={f.date} onChange={set("date")}/></Field>
         <Field label="หมวด">
           <select style={inputStyle} value={f.category} onChange={set("category")}>
             {EXPENSE_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
@@ -621,7 +621,7 @@ function EmployeeForm({ existing, onClose, onSave }) {
           <datalist id="dept-list">{depts.map((d) => <option key={d} value={d}/>)}</datalist>
         </Field>
         <Field label="โทรศัพท์"><input style={inputStyle} value={f.phone} onChange={set("phone")}/></Field>
-        <Field label="เริ่มงาน"><input type="date" style={inputStyle} value={f.joined} onChange={set("joined")}/></Field>
+        <Field label="เริ่มงาน"><DateInput style={inputStyle} value={f.joined} onChange={set("joined")}/></Field>
         <Field label="เงินเดือน (บาท)" error={err.salary}><input type="number" min="0" style={inputStyle} value={f.salary} onChange={set("salary")}/></Field>
       </div>
     </Modal>

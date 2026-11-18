@@ -3,7 +3,7 @@
 /*
   PolyMate ERP — Document Workflow Engine
   ------------------------------------------------------------
-  สายเอกสาร:  PO ลูกค้า / ใบเสนอราคา → ใบสั่งขาย → ใบส่งสินค้า → ใบวางบิล → ใบกำกับภาษี → ใบเสร็จรับเงิน → รับชำระเงิน
+  สายเอกสาร:  PO ลูกค้า / ใบเสนอราคา → ใบสั่งขาย → ใบส่งสินค้า → ใบกำกับภาษี → (ใบวางบิลรวมหลายใบกำกับ ตอนสิ้นเดือน) → ใบเสร็จรับเงิน → รับชำระเงิน
               (ใบส่งสินค้า → ใบกำกับภาษี ได้โดยตรง เมื่อไม่ต้องวางบิล)
   หลักการ
   • เอกสารปลายทางอ้างอิงต้นทางระดับ "รายการ" (line.src = { doc, line }) → ออกบางส่วนได้ และกันออกเกินจำนวน
@@ -14,7 +14,7 @@
 const Workflow = (function () {
   const S = Store;
   const PREFIX = { CPO: "CPO", QT: "QT", SO: "SO", DO: "DO", BN: "BL", INV: "IV", RC: "RE", PAY: "RV" };
-  const NEXT = { CPO: ["SO"], QT: ["SO"], SO: ["DO"], DO: ["BN", "INV"], BN: ["INV"], INV: ["RC"], RC: ["PAY"], PAY: [] };
+  const NEXT = { CPO: ["SO"], QT: ["SO"], SO: ["DO"], DO: ["INV"], INV: ["BN", "RC"], BN: ["RC"], RC: ["PAY"], PAY: [] };
   const TYPES = Object.keys(DOC_LABEL);
   const VAT_RATE = 7;
   const DUE_BY_CREDIT = ["BN", "INV"]; // กำหนดชำระ = วันที่ + เครดิตลูกค้า
@@ -24,9 +24,9 @@ const Workflow = (function () {
     CPO: { partial: "เปิด SO บางส่วน", completed: "เปิด SO ครบแล้ว" },
     QT: { partial: "เปิด SO บางส่วน", completed: "เปิด SO ครบแล้ว" },
     SO: { partial: "ส่งของบางส่วน", completed: "ส่งของครบแล้ว" },
-    DO: { partial: "วางบิลบางส่วน", completed: "วางบิล / ออกใบกำกับแล้ว" },
-    BN: { partial: "ออกใบกำกับบางส่วน", completed: "ออกใบกำกับภาษีแล้ว" },
-    INV: { partial: "ออกใบเสร็จบางส่วน", completed: "ออกใบเสร็จแล้ว" },
+    DO: { partial: "ออกใบกำกับบางส่วน", completed: "ออกใบกำกับภาษีแล้ว" },
+    INV: { partial: "วางบิล/ออกใบเสร็จบางส่วน", completed: "วางบิล/ออกใบเสร็จแล้ว" },
+    BN: { partial: "ออกใบเสร็จบางส่วน", completed: "ออกใบเสร็จแล้ว" },
     RC: { partial: "รับชำระบางส่วน", completed: "รับชำระครบแล้ว" },
     PAY: { completed: "รับเงินแล้ว" },
   };
@@ -106,11 +106,22 @@ const Workflow = (function () {
   function paymentInfo(inv) {
     if (!inv || inv.type !== "INV") return null;
     let paid = 0, receipted = 0;
-    children(inv.id).filter((c) => c.type === "RC").forEach((rc) => {
-      const part = (rc.lines || []).filter((l) => l.src && l.src.doc === inv.id).reduce((s, l) => s + lineAmount(l), 0);
+    const addRc = (rc, part) => {
       const share = rc.gross > 0 ? part / rc.gross : 0;
       receipted += rc.net * share;
       if (isLive(rc)) paid += rcAmounts(rc).paid * share;
+    };
+    // ใบเสร็จที่ออกจากใบกำกับโดยตรง
+    children(inv.id).filter((c) => c.type === "RC").forEach((rc) => {
+      addRc(rc, (rc.lines || []).filter((l) => l.src && l.src.doc === inv.id).reduce((s, l) => s + lineAmount(l), 0));
+    });
+    // ใบเสร็จที่ออกจากใบวางบิล (รวมหลายใบกำกับ): นับเฉพาะรายการที่มาจากใบกำกับใบนี้
+    children(inv.id).filter((c) => c.type === "BN").forEach((bn) => {
+      children(bn.id).filter((c) => c.type === "RC").forEach((rc) => {
+        const part = (rc.lines || []).filter((l) => l.src && l.src.doc === bn.id && (bn.lines || [])[l.src.line] && (bn.lines[l.src.line].src || {}).doc === inv.id)
+          .reduce((s, l) => s + lineAmount(l), 0);
+        addRc(rc, part);
+      });
     });
     paid = r2(paid);
     const outstanding = isLive(inv) ? Math.max(0, r2(inv.net - paid)) : 0;
@@ -527,8 +538,9 @@ const Workflow = (function () {
         const fg = S.state.finished.find((f) => f.code === l.code);
         if (!fg) fail(`"${l.name}" ไม่มีรหัสสินค้าสำเร็จรูปในระบบ (${l.code}) — เพิ่มสินค้าในคลังก่อน`);
         if (fg.jobType === "trade") fail(`"${l.name}" เป็นสินค้าซื้อมาขายไป ไม่ต้องผลิต`);
+        // ผลิตเกินจำนวนในใบสั่งขายได้ (เช่น ผลิตเก็บเข้าสต๊อกเพิ่ม) — ส่วนที่เกินเข้าสต๊อกสินค้าสำเร็จรูปตามปกติ
         const left = r3(l.qty - woUsed(so.id, p.line));
-        if (qty > left + EPS) fail(`"${l.name}": เปิดผลิตเกินจำนวนในใบสั่งขาย (คงเหลือ ${left})`);
+        const extra = qty > left + EPS ? ` · ผลิตเกินใบสั่งขาย ${r3(qty - Math.max(0, left))} (เก็บเข้าสต๊อก)` : "";
         const bom = S.bomDefaultFor(fg.code);
         const mold = bom ? S.state.molds.find((m) => m.id === bom.mold) : null;
         const n = S.nextDocNo("WO", S.today());
@@ -541,7 +553,7 @@ const Workflow = (function () {
         };
         S.state.workOrders.unshift(wo);
         made.push(wo);
-        S.log("CREATE", "ใบสั่งผลิต", wo.id, `เปิดจาก ${so.id} · ${fg.code} × ${qty}`);
+        S.log("CREATE", "ใบสั่งผลิต", wo.id, `เปิดจาก ${so.id} · ${fg.code} × ${qty}${extra}`);
       });
       if (!made.length) fail("ไม่ได้ระบุจำนวนที่จะผลิต");
       pushHistory(so, "wo", so.status, so.status, "เปิดใบสั่งผลิต " + made.map((w) => w.id).join(", "));

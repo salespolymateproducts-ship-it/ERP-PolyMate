@@ -129,10 +129,17 @@ function printDoc(docId, opts) {
       head.innerHTML = '<div><b></b><div class="prh-sub"></div></div><div class="prh-meta"></div>';
       head.querySelector("b").textContent = title;
       head.querySelector(".prh-sub").textContent = company;
-      head.querySelector(".prh-meta").textContent = "พิมพ์เมื่อ " + new Date().toLocaleString("th-TH") + " · โดย " + (Store.userName ? Store.userName() : "");
+      head.querySelector(".prh-meta").textContent = "พิมพ์เมื่อ " + fmtDateTime(new Date()) +" · โดย " + (Store.userName ? Store.userName() : "");
       root.appendChild(head);
     }
     root.appendChild(sheet);
+    // เอกสารที่ต้องมีสำเนา (data-copies="2"): พิมพ์ต้นฉบับ แล้วตามด้วยสำเนาในหน้าใหม่ ป้ายมุมขวาบนเปลี่ยนเป็น "สำเนา"
+    if (!isReport && sheet.dataset.copies === "2") {
+      const copy = sheet.cloneNode(true);
+      copy.querySelectorAll(".copy-mark").forEach((m) => { m.textContent = "สำเนา"; });
+      copy.style.breakBefore = "page"; copy.style.pageBreakBefore = "always";
+      root.appendChild(copy);
+    }
 
     // ขนาดกระดาษ A4 + หัว/ท้ายกระดาษ (เลขที่เอกสาร · เลขหน้า) — กำหนดใหม่ทุกครั้งตามแนวกระดาษ
     let st = document.getElementById("print-page-style");
@@ -184,7 +191,7 @@ function _maintDue(m) { return m.status === "maintenance" || m.status === "alert
 function navCount(id) {
   const s = Store.state;
   const n = (v, alert) => (v ? { v, alert: !!alert } : null);
-  const salesTypes = ["QT", "SO", "DO", "BN", "INV", "RC", "PAY"];
+  const salesTypes = ["QT", "SO", "DO", "INV", "BN", "RC", "PAY"];
   switch (id) {
     case "sales": return n(s.docs.filter((d) => salesTypes.includes(d.type) && d.status === "pending").length, true);
     case "customer-po": return n(s.docs.filter((d) => d.type === "CPO" && ["pending", "approved", "partial"].includes(d.status)).length);
@@ -241,6 +248,15 @@ function buildNotifications(role) {
       out.push({ id: "so" + f.id, kind: "alert", icon: "Truck", title: `ใบสั่งขายรอสินค้า ${f.code}: ขาดรวม ${_fmt(Math.ceil(pos.short))} ${f.unit || ""} (ต้องส่ง ${_fmt(pos.demand)} มี ${_fmt(pos.stock)}) — ${pos.docs.join(", ")} · ยังไม่ได้สั่งซื้อ`, time: "ต้องสั่งซื้อ", page: "sales" });
     } else if (pos.deficit > 0.0005) {
       out.push({ id: "sw" + f.id, kind: "warning", icon: "Truck", title: `ใบสั่งขายรอสินค้า ${f.code} ตามใบสั่งซื้อที่สั่งไว้ (${_fmt(pos.incoming)} ${f.unit || ""}) — ${pos.docs.join(", ")}`, time: "รอรับของ", page: "sales" });
+    }
+  });
+  // สินค้าผลิตเอง (เช่น OEM): ใบสั่งขายที่รอสินค้า แต่สต๊อกไม่พอ/ยังไม่มีใบสั่งผลิตรองรับ
+  s.finished.filter((f) => !Store.isBuyable(f) && f.active !== false).forEach((f) => {
+    const pos = Store.productPosition(f);
+    if (pos.short > 0.0005) {
+      out.push({ id: "so" + f.id, kind: "alert", icon: "Factory", title: `ใบสั่งขายรอสินค้า ${f.code}: ขาดรวม ${_fmt(Math.ceil(pos.short))} ${f.unit || ""} (ต้องส่ง ${_fmt(pos.demand)} มี ${_fmt(pos.stock)}) — ${pos.docs.join(", ")} · ยังไม่มีใบสั่งผลิตรองรับ`, time: "ต้องเปิดใบสั่งผลิต", page: "sales", focus: { doc: pos.docs.find((x) => String(x).startsWith("SO")) || pos.docs[0] } });
+    } else if (pos.deficit > 0.0005) {
+      out.push({ id: "sw" + f.id, kind: "warning", icon: "Factory", title: `ใบสั่งขายรอสินค้า ${f.code} ตามใบสั่งผลิตที่เปิดไว้ (${_fmt(pos.incoming)} ${f.unit || ""}) — ${pos.docs.join(", ")}`, time: "รอผลิต", page: "sales", focus: { doc: pos.docs.find((x) => String(x).startsWith("SO")) || pos.docs[0] } });
     }
   });
   (s.machines || []).filter((m) => m.condition !== "retired").forEach((m) => {
@@ -358,3 +374,77 @@ class PageErrorBoundary extends React.Component {
   }
 }
 window.PageErrorBoundary = PageErrorBoundary;
+
+// ---------- รูปแบบวันที่ทั้งระบบ: วัน/เดือน/ปี (dd/mm/yyyy, ค.ศ.) ----------
+// ข้อมูลภายในและใน API ยังเก็บเป็น yyyy-mm-dd (เรียงลำดับ/เทียบวันที่ได้) — เปลี่ยนเฉพาะที่แสดงและที่กรอก
+function fmtDate(v) {
+  if (v instanceof Date) { const p = (n) => String(n).padStart(2, "0"); return p(v.getDate()) + "/" + p(v.getMonth() + 1) + "/" + v.getFullYear(); }
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v == null ? "" : v));
+  return m ? m[3] + "/" + m[2] + "/" + m[1] : (v == null || v === "—" ? "" : String(v));
+}
+function fmtDateTime(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return fmtDate(d) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+}
+// แปลง yyyy-mm-dd ที่ปรากฏเป็นข้อความบนหน้าจอ (ตาราง ป้าย ประวัติ ใบเอกสาร ที่พิมพ์) ให้เป็น dd/mm/yyyy อัตโนมัติ
+(function installDateDisplay() {
+  const RX = /(?<![\d-])((?:19|20)\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?![\d-])/g;
+  const SKIP = "script,style,textarea,input,pre,code,select,option,[data-raw-date]";
+  const fix = (n) => {
+    if (n.nodeType === 3) {
+      const t = n.nodeValue;
+      if (t && t.length >= 10 && RX.test(t)) { RX.lastIndex = 0; if (!(n.parentElement && n.parentElement.closest(SKIP))) n.nodeValue = t.replace(RX, "$3/$2/$1"); }
+      RX.lastIndex = 0;
+    } else if (n.nodeType === 1 && !n.matches(SKIP)) {
+      const w = document.createTreeWalker(n, NodeFilter.SHOW_TEXT);
+      let c; while ((c = w.nextNode())) fix(c);
+    }
+  };
+  const start = () => {
+    fix(document.body);
+    new MutationObserver((muts) => muts.forEach((m) => {
+      if (m.type === "characterData") fix(m.target);
+      else m.addedNodes.forEach(fix);
+    })).observe(document.body, { childList: true, subtree: true, characterData: true });
+  };
+  if (document.body) start(); else document.addEventListener("DOMContentLoaded", start);
+})();
+
+// ช่องกรอกวันที่ dd/mm/yyyy (แทน <input type="date"> ที่รูปแบบขึ้นกับเบราว์เซอร์) — ใช้ props เดิม: value / onChange(e.target.value) เป็น yyyy-mm-dd
+// (ไม่ใช้ ...rest ใน destructuring: Babel จะสร้างตัวแปร _excluded ระดับไฟล์ซึ่งชนกับไฟล์อื่นในสโคปรวมของหน้านี้)
+function DateInput(props) {
+  const { value, onChange, min, max, className, style, placeholder, disabled, id } = props;
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(value || "") ? value : "";
+  const [txt, setTxt] = React.useState(fmtDate(iso));
+  const native = React.useRef(null);
+  React.useEffect(() => { setTxt(fmtDate(iso)); }, [iso]);
+  const emit = (v) => onChange && onChange({ target: { value: v } });
+  const parse = (t) => {
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t); if (!m) return null;
+    const d = new Date(+m[3], +m[2] - 1, +m[1]);
+    if (d.getFullYear() !== +m[3] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[1]) return null;
+    const v = m[3] + "-" + m[2] + "-" + m[1];
+    return (min && v < min) || (max && v > max) ? null : v;
+  };
+  const type = (e) => {
+    const digits = e.target.value.replace(/\D/g, "").slice(0, 8);
+    let t = digits; if (digits.length > 4) t = digits.slice(0, 2) + "/" + digits.slice(2, 4) + "/" + digits.slice(4); else if (digits.length > 2) t = digits.slice(0, 2) + "/" + digits.slice(2);
+    setTxt(t);
+    if (t.length === 10) { const v = parse(t); if (v) emit(v); }
+  };
+  const blur = () => {
+    if (txt === "") { if (iso) emit(""); return; }
+    const v = parse(txt); if (v) { if (v !== iso) emit(v); } else setTxt(fmtDate(iso));
+  };
+  return (
+    <span data-raw-date style={{ position: "relative", display: "block" }}>
+      <input id={id} className={className} style={{ ...style, paddingRight: 34, width: "100%" }} type="text" inputMode="numeric" autoComplete="off"
+        placeholder={placeholder || "วว/ดด/ปปปป"} value={txt} disabled={disabled} onChange={type} onBlur={blur}/>
+      <button type="button" tabIndex={-1} disabled={disabled} aria-label="เลือกวันที่จากปฏิทิน" onClick={() => { const n = native.current; if (n && n.showPicker) n.showPicker(); }}
+        style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", border: 0, background: "none", cursor: "pointer", color: "var(--text-tertiary)", padding: 2, display: "flex" }}><I.Calendar size={15}/></button>
+      <input ref={native} type="date" tabIndex={-1} aria-hidden="true" value={iso} min={min} max={max} onChange={(e) => { if (e.target.value) emit(e.target.value); }}
+        style={{ position: "absolute", right: 6, bottom: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}/>
+    </span>
+  );
+}
+Object.assign(window, { fmtDate, fmtDateTime, DateInput });

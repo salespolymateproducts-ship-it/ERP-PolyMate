@@ -83,8 +83,8 @@ const DOC_LABEL = {
   QT: { th: "ใบเสนอราคา", short: "Quotation", color: "info" },
   SO: { th: "ใบสั่งขาย", short: "Sales Order", color: "info" },
   DO: { th: "ใบส่งสินค้า", short: "Delivery Note", color: "neutral" },
-  BN: { th: "ใบวางบิล", short: "Billing Note", color: "warning" },
   INV: { th: "ใบกำกับภาษี", short: "Tax Invoice", color: "violet" },
+  BN: { th: "ใบวางบิล", short: "Billing Note", color: "warning" },
   RC: { th: "ใบเสร็จรับเงิน", short: "Receipt", color: "success" },
   PAY: { th: "รับชำระเงิน", short: "Payment", color: "success" },
 };

@@ -7,7 +7,7 @@
   PageCustomerPO : CPO (PO จากลูกค้า → เปิดใบสั่งขาย)
 */
 
-const SALES_TYPES = ["QT", "SO", "DO", "BN", "INV", "RC", "PAY"];
+const SALES_TYPES = ["QT", "SO", "DO", "INV", "BN", "RC", "PAY"];
 const PAY_METHODS = ["โอนเงิน", "เงินสด", "เช็ค", "บัตรเครดิต"];
 const STATUS_FILTERS = [
   { id: "all", label: "ทั้งหมด", test: () => true },
@@ -262,33 +262,43 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
 function TradeStockBanner({ doc }) {
   const [order, setOrder] = useState(null);
   const [toast, setToast] = useState(null);
+  const [woOpen, setWoOpen] = useState(false);
+  const canMake = Store.user() && ["admin", "production", "sales"].includes(Store.user().role);
   const canBuy = Store.user() && ["admin", "procurement"].includes(Store.user().role);
   const rows = [];
   const seen = new Set();
   Workflow.remainingLines(doc).forEach((l) => {
     if (l.remaining <= 0.0005 || seen.has(l.code)) return;
     const f = Store.state.finished.find((x) => x.code === l.code);
-    if (!f || !Store.isBuyable(f)) return;
+    if (!f) return;
     seen.add(l.code);
     const pos = Store.productPosition(f);
     if (pos.deficit > 0.0005) rows.push({ f, pos, need: l.remaining });
   });
   if (!rows.length) return null;
   const anyShort = rows.some((r) => r.pos.short > 0.0005);
+  const hasMade = rows.some((r) => !Store.isBuyable(r.f));
+  const hasBuy = rows.some((r) => Store.isBuyable(r.f));
   return (
     <div style={{ margin: "12px 18px 0", border: "1px solid " + (anyShort ? "var(--danger)" : "var(--amber)"), borderRadius: 10, overflow: "hidden" }}>
       <div style={{ padding: "9px 12px", background: anyShort ? "var(--danger-subtle, #fee2e2)" : "var(--amber-subtle)", color: anyShort ? "var(--danger)" : "var(--amber)", fontSize: 12.5, fontWeight: 600 }}>
-        <I.Alert size={14} style={{ verticalAlign: "middle" }}/> {anyShort ? "สินค้าซื้อมาขายสต๊อกไม่พอสำหรับใบสั่งขายที่เปิดอยู่ — ต้องสั่งซื้อ" : "สินค้าซื้อมาขายรอรับของตามใบสั่งซื้อที่สั่งไว้แล้ว"}
+        <I.Alert size={14} style={{ verticalAlign: "middle" }}/> {anyShort ? (hasMade && !hasBuy ? "สินค้าสต๊อกไม่พอสำหรับใบสั่งขายที่เปิดอยู่ — ต้องเปิดใบสั่งผลิต" : hasMade ? "สินค้าสต๊อกไม่พอสำหรับใบสั่งขายที่เปิดอยู่ — ต้องสั่งซื้อ / เปิดใบสั่งผลิต" : "สินค้าซื้อมาขายสต๊อกไม่พอสำหรับใบสั่งขายที่เปิดอยู่ — ต้องสั่งซื้อ") : (hasMade && !hasBuy ? "สินค้ากำลังผลิตตามใบสั่งผลิตที่เปิดไว้แล้ว" : "สินค้ารอรับของ/รอผลิตตามที่เปิดไว้แล้ว")}
       </div>
       {rows.map(({ f, pos, need }) => (
         <div key={f.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", borderTop: "1px solid var(--border)", fontSize: 12.5, flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 220 }}>
             <b>{f.code}</b> {f.name}
-            <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>ใบนี้ต้องส่ง {_fmt(need)} · ทุกใบสั่งขายรวม {_fmt(pos.demand)} · สต๊อก {_fmt(pos.stock)} · สั่งไว้แล้ว {_fmt(pos.incoming)} · <b style={{ color: pos.short > 0.0005 ? "var(--danger)" : "var(--amber)" }}>{pos.short > 0.0005 ? "ขาด " + _fmt(Math.ceil(pos.short)) : "รอรับของ"}</b></div>
+            <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>ใบนี้ต้องส่ง {_fmt(need)} · ทุกใบสั่งขายรวม {_fmt(pos.demand)} · สต๊อก {_fmt(pos.stock)} · {Store.isBuyable(f) ? "สั่งไว้แล้ว" : "กำลังผลิต"} {_fmt(pos.incoming)} · <b style={{ color: pos.short > 0.0005 ? "var(--danger)" : "var(--amber)" }}>{pos.short > 0.0005 ? "ขาด " + _fmt(Math.ceil(pos.short)) : Store.isBuyable(f) ? "รอรับของ" : "รอผลิต"}</b></div>
           </div>
-          {canBuy && pos.short > 0.0005 && <button className="btn btn-primary btn-sm" onClick={() => setOrder({ ...f, onOrder: pos.incoming, demandOpen: pos.demand, suggestQty: Math.ceil(pos.short) })}>สั่งซื้อ</button>}
+          {canBuy && Store.isBuyable(f) && pos.short > 0.0005 && <button className="btn btn-primary btn-sm" onClick={() => setOrder({ ...f, onOrder: pos.incoming, demandOpen: pos.demand, suggestQty: Math.ceil(pos.short) })}>สั่งซื้อ</button>}
         </div>
       ))}
+      {canMake && rows.some((r) => !Store.isBuyable(r.f) && r.pos.short > 0.0005) && (
+        <div style={{ padding: "8px 12px", borderTop: "1px solid var(--border)" }}>
+          <button className="btn btn-primary btn-sm" onClick={() => setWoOpen(true)}><I.Factory size={13}/> เปิดใบสั่งผลิต</button>
+        </div>
+      )}
+      {woOpen && <WOModal so={doc} onClose={() => setWoOpen(false)}/>}
       {order && <ProductOrderModal f={order} onClose={() => setOrder(null)} onDone={(m) => { setOrder(null); setToast(m); setTimeout(() => setToast(null), 2800); }}/>}
       {toast && <div style={{ padding: "8px 12px", borderTop: "1px solid var(--border)", fontSize: 12.5, color: "var(--success)" }}><I.Check size={13}/> {toast}</div>}
     </div>
@@ -419,9 +429,11 @@ function DocPaper({ doc }) {
   const muted = { color: "#5B6478" };
   const th = { padding: "8px 10px", fontWeight: 600, fontSize: 11 };
   const pay = doc.type === "INV" ? Workflow.paymentInfo(doc) : null;
+  // ใบส่งสินค้า / ใบกำกับภาษี / ใบวางบิล: พิมพ์ออกมา 2 ฉบับ — ต้นฉบับ + สำเนา (เอกสารอื่นพิมพ์ฉบับเดียว)
+  const hasCopies = ["DO", "INV", "BN"].includes(doc.type);
   return (
-    <div style={{ padding: 18, background: "var(--bg)" }}>
-      <div className="print-area" style={{ background: "white", color: "#0B1220", borderRadius: 8, padding: "28px 32px", boxShadow: "0 2px 10px rgba(0,0,0,0.06)", fontFamily: "var(--font-thai)", fontSize: 12, position: "relative" }}>
+    <div style={{ padding: 18, background: "var(--bg)", overflowX: "auto" }}>
+      <div className="print-area a4-form" data-copies={hasCopies ? "2" : undefined} style={{ background: "white", color: "#0B1220", borderRadius: 8, padding: "28px 32px", boxShadow: "0 2px 10px rgba(0,0,0,0.06)", fontFamily: "var(--font-thai)", fontSize: 12, position: "relative" }}>
         {doc.status === "cancelled" && <div style={{ position: "absolute", top: 110, left: "50%", transform: "translateX(-50%) rotate(-14deg)", border: "4px solid #DC2626", color: "#DC2626", fontSize: 44, fontWeight: 800, padding: "4px 28px", borderRadius: 10, opacity: 0.32, pointerEvents: "none" }}>ยกเลิก</div>}
         {(doc.status === "draft" || doc.status === "pending") && <div style={{ position: "absolute", top: 110, left: "50%", transform: "translateX(-50%) rotate(-14deg)", border: "4px solid #94A3B8", color: "#94A3B8", fontSize: 40, fontWeight: 800, padding: "4px 28px", borderRadius: 10, opacity: 0.35, pointerEvents: "none" }}>ฉบับร่าง</div>}
         <div style={{ display: "flex", gap: 16, borderBottom: "2px solid #0B1220", paddingBottom: 14 }}>
@@ -437,7 +449,8 @@ function DocPaper({ doc }) {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 20, fontWeight: 700 }}>{meta.th}</div>
-            <div style={{ fontSize: 11, ...muted }}>{meta.short}{doc.type === "INV" ? " · ต้นฉบับ" : ""}</div>
+            <div style={{ fontSize: 11, ...muted }}>{meta.short}</div>
+            {hasCopies && <div className="copy-mark" style={{ display: "inline-block", marginTop: 4, padding: "1px 12px", border: "1.5px solid #0B1220", borderRadius: 4, fontSize: 12, fontWeight: 700, color: "#0B1220" }}>ต้นฉบับ</div>}
             <div style={{ marginTop: 10, fontSize: 11, ...muted }}>เลขที่ / No.</div><div className="mono" style={{ fontWeight: 600 }}>{doc.id}</div>
             <div style={{ marginTop: 6, fontSize: 11, ...muted }}>วันที่ / Date</div><div className="num">{doc.date}</div>
           </div>
@@ -511,7 +524,8 @@ function DocPaper({ doc }) {
           </div>
         )}
 
-        <div className="print-keep" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, marginTop: 36, fontSize: 11, textAlign: "center", ...muted }}>
+        {/* ช่องลายเซ็น 2 ฝั่ง: ดันลงล่างสุดของกระดาษ A4 (marginTop: auto ใน flex column ของ .a4-form) */}
+        <div className="print-keep sig-block" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, marginTop: "auto", paddingTop: 36, fontSize: 11, textAlign: "center", ...muted }}>
           <div><div style={{ borderTop: "1px solid #5B6478", paddingTop: 6 }}>{doc.type === "DO" ? "ผู้รับสินค้า" : doc.type === "PAY" || doc.type === "RC" ? "ผู้รับเงิน" : "ผู้รับเอกสาร"}</div>
             <div style={{ marginTop: 6 }}>{doc.type === "DO" && doc.ship && doc.ship.receivedBy ? doc.ship.receivedBy : "วันที่ ____ / ____ / ____"}</div></div>
           <div><div style={{ borderTop: "1px solid #5B6478", paddingTop: 6 }}>ผู้มีอำนาจลงนาม</div>
@@ -569,7 +583,7 @@ function ConvertModal({ sourceId, targetType, approveSources, onClose, onDone })
         ระบบคัดลอกข้อมูลลูกค้า รายการ ราคา ส่วนลด และภาษีจากเอกสารต้นทางให้อัตโนมัติ · ลูกค้า: <b style={{ color: "var(--text-primary)" }}>{src.customerName}</b>
       </div>
       <div className="grid-2" style={{ gap: 12, marginBottom: 12 }}>
-        <div><label style={lbl}>วันที่เอกสารใหม่</label><input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)}/></div>
+        <div><label style={lbl}>วันที่เอกสารใหม่</label><DateInput className="input" value={date} onChange={(e) => setDate(e.target.value)}/></div>
         {Workflow.canApproveType(targetType) && (
           <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, marginTop: 22, cursor: "pointer" }}>
             <input type="checkbox" checked={approveTarget} onChange={(e) => setApproveTarget(e.target.checked)}/> อนุมัติ{DOC_LABEL[targetType].th}ทันที
@@ -579,7 +593,10 @@ function ConvertModal({ sourceId, targetType, approveSources, onClose, onDone })
 
       {!isPay && others.length > 0 && (
         <div style={{ marginBottom: 12, padding: 10, background: "var(--bg-subtle)", borderRadius: 10 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>รวมเอกสารอื่นของลูกค้ารายนี้ที่ยังค้างอยู่ (เช่น วางบิลรวมหลายใบส่งของ)</div>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, display: "flex", gap: 10, alignItems: "center" }}>
+            <span>{targetType === "BN" ? "รวมใบกำกับภาษีอื่นของลูกค้ารายนี้ที่ยังไม่ได้วางบิล (ใบวางบิลรวมสิ้นเดือน)" : "รวมเอกสารอื่นของลูกค้ารายนี้ที่ยังค้างอยู่"}</span>
+            <a style={{ color: "var(--accent)", cursor: "pointer", fontWeight: 500 }} onClick={() => setSelected(selected.length === others.length + 1 ? [sourceId] : [sourceId, ...others.map((d) => d.id)])}>{selected.length === others.length + 1 ? "ยกเลิกเลือกทั้งหมด" : "เลือกทั้งหมด (" + others.length + ")"}</a>
+          </div>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             {others.map((d) => (
               <label key={d.id} style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
@@ -644,7 +661,7 @@ function WOModal({ so, onClose }) {
   return (
     <ErpModal title={`เปิดใบสั่งผลิตจาก ${so.id}`} width={720} onClose={onClose}
       footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" onClick={submit}><I.Factory size={14}/> เปิดใบสั่งผลิต</button></>}>
-      <div style={{ marginBottom: 12 }}><label style={{ fontSize: 12, color: "var(--text-secondary)" }}>กำหนดเสร็จ</label><input className="input" type="date" value={due} onChange={(e) => setDue(e.target.value)} style={{ marginTop: 4 }}/></div>
+      <div style={{ marginBottom: 12 }}><label style={{ fontSize: 12, color: "var(--text-secondary)" }}>กำหนดเสร็จ</label><DateInput className="input" value={due} onChange={(e) => setDue(e.target.value)} style={{ marginTop: 4 }}/></div>
       <table className="table" style={{ fontSize: 12.5 }}>
         <thead><tr><th>รายการ</th><th className="num">ในใบสั่งขาย</th><th className="num">เปิดผลิตแล้ว</th><th className="num">สต๊อก FG</th><th className="num" style={{ width: 120 }}>ผลิตเพิ่ม</th></tr></thead>
         <tbody>{rows.map((r) => (
@@ -749,9 +766,9 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
             <option value="">— เลือกลูกค้า —</option>
             {customers.map((cu) => <option key={cu.code} value={cu.code}>{cu.name}</option>)}
           </select></div>
-        <div><label style={lbl}>วันที่</label><input className="input" type="date" value={f.date} onChange={(e) => set({ date: e.target.value })}/></div>
+        <div><label style={lbl}>วันที่</label><DateInput className="input" value={f.date} onChange={(e) => set({ date: e.target.value })}/></div>
         <div><label style={lbl}>กำหนดชำระ / ครบกำหนด <span style={{ color: "var(--text-tertiary)" }}>(ว่าง = คำนวณจากเครดิตลูกค้า)</span></label>
-          <input className="input" type="date" value={f.due && f.due !== "—" ? f.due : ""} onChange={(e) => set({ due: e.target.value })}/></div>
+          <DateInput className="input" value={f.due && f.due !== "—" ? f.due : ""} onChange={(e) => set({ due: e.target.value })}/></div>
         {!isPay && <div><label style={lbl}>เลขที่ PO ลูกค้า / อ้างอิง</label><input className="input" value={f.refNo || ""} onChange={(e) => set({ refNo: e.target.value })}/></div>}
         {!isPay && <div><label style={lbl}>หัก ณ ที่จ่าย</label>
           <select className="input" value={f.whtRate || 0} onChange={(e) => set({ whtRate: Number(e.target.value) })}>

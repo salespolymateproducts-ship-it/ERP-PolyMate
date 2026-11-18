@@ -429,7 +429,7 @@ function MachineMaintModal({ m, onClose, onDone }) {
       footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={go}>บันทึก</button></>}>
       <div className="grid-2" style={{ gap: 10 }}>
         <div><label className="field-label">ประเภท</label><select className="select" value={f.kind} onChange={set("kind")}><option value="repair">ซ่อม</option><option value="PM">PM ตามรอบ</option></select></div>
-        <div><label className="field-label">วันที่ทำ</label><input className="input" type="date" value={f.date} max={Store.today()} onChange={set("date")}/></div>
+        <div><label className="field-label">วันที่ทำ</label><DateInput className="input" value={f.date} max={Store.today()} onChange={set("date")}/></div>
         <div style={{ gridColumn: "1 / -1" }}><label className="field-label">รายละเอียด *</label><textarea className="input" rows={3} style={{ width: "100%", height: "auto", padding: 8 }} value={f.note} onChange={set("note")}/></div>
         <div><label className="field-label">ค่าใช้จ่าย (บาท)</label><input className="input num" type="number" min="0" value={f.cost} onChange={set("cost")}/></div>
         <div><label className="field-label">เวลาที่เครื่องหยุด (ชม.)</label><input className="input num" type="number" min="0" step="any" value={f.downtimeHrs} onChange={set("downtimeHrs")}/></div>
@@ -734,9 +734,15 @@ function WorkOrderDetail({ wo, onProduce }) {
         <Field k="Cycle Time" v={wo.cycleTime + " วินาที / ครั้ง"}/>
       </div>
 
-      <MaterialReservation key={wo.id} wo={wo}/>
+      {["done", "cancelled"].includes(wo.status)
+        ? <div className="card" style={{ marginBottom: 14, padding: "12px 18px", fontSize: 12.5, color: "var(--text-secondary)" }}>
+            {wo.status === "done" ? "ใบสั่งผลิตปิดแล้ว — วัตถุดิบถูกตัดสต๊อกตามที่ผลิตจริงแล้ว ไม่ต้องจองวัตถุดิบเพิ่ม" : "ใบสั่งผลิตถูกยกเลิก — ไม่มีการจองวัตถุดิบ"}
+          </div>
+        : <MaterialReservation key={wo.id} wo={wo}/>}
 
       <ProductionRecorder wo={wo} onProduce={onProduce}/>
+
+      <ExtraMaterialCard wo={wo}/>
 
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="card-head">
@@ -869,15 +875,64 @@ function WODeliveries({ wo }) {
 }
 
 // สร้างใบสั่งซื้อ (สถานะรออนุมัติ) สำหรับวัตถุดิบที่ไม่พอ แยกตามผู้ขายหลักของวัตถุดิบ
+// เปิดหน้าต่างให้เจ้าหน้าที่กำหนดจำนวนสั่งซื้อเอง (ค่าเริ่มต้น = ยอดที่ขาด) — สั่งเกินได้เพื่อเผื่อเหตุฉุกเฉิน ส่วนที่เหลือจากการผลิตอยู่ในสต๊อกตามปกติ
 function createPOFromShortage(wo, shortItems) {
+  const items = shortItems.filter((r) => r.m && r.m.active !== false);
+  if (!items.length) { doCreatePOFromShortage(wo, shortItems); return; }
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = ReactDOM.createRoot(host);
+  const close = () => { root.unmount(); host.remove(); };
+  root.render(<ShortagePOModal wo={wo} items={items} allItems={shortItems} onClose={close}/>);
+}
+
+function ShortagePOModal({ wo, items, allItems, onClose }) {
+  const [q, setQ] = useState(() => Object.fromEntries(items.map((r) => [r.m.id, String(Math.ceil(r.kg - Math.max(0, r.available)))])));
+  const submit = () => {
+    const overrides = {};
+    for (const r of items) {
+      const v = Number(q[r.m.id]);
+      if (!(v >= 0)) { notify("จำนวนสั่งซื้อของ " + r.m.code + " ไม่ถูกต้อง", "error"); return; }
+      overrides[r.m.id] = v;
+    }
+    if (!Object.values(overrides).some((v) => v > 0)) { notify("ต้องระบุจำนวนสั่งซื้ออย่างน้อย 1 รายการ", "error"); return; }
+    if (doCreatePOFromShortage(wo, allItems, overrides)) onClose();
+  };
+  return (
+    <ErpModal title={"สั่งซื้อวัตถุดิบสำหรับ " + wo.id} width={640} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" onClick={submit}><I.Boxes size={13}/> สร้างใบสั่งซื้อ</button></>}>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 10 }}>ระบบเสนอจำนวนตามยอดที่ขาด — แก้จำนวนสั่งซื้อได้เอง เช่น ขาด 900 แต่สั่ง 1,200 เผื่อเหตุฉุกเฉิน ส่วนที่เหลือหลังผลิตคงอยู่ในสต๊อกวัตถุดิบ</div>
+      <table className="table" style={{ fontSize: 12.5 }}>
+        <thead><tr><th>วัตถุดิบ</th><th className="num">ขาด</th><th className="num">จำนวนที่สั่ง</th></tr></thead>
+        <tbody>{items.map((r) => {
+          const need = Math.ceil(r.kg - Math.max(0, r.available));
+          const v = Number(q[r.m.id]);
+          return (
+            <tr key={r.m.id}>
+              <td>{r.m.name}<div className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{r.m.code}</div></td>
+              <td className="num">{_fmt(need)} {r.m.unit}</td>
+              <td className="num">
+                <input className="input input-sm num" type="number" min="0" step="any" value={q[r.m.id]} onChange={(e) => setQ((s) => ({ ...s, [r.m.id]: e.target.value }))} style={{ width: 110, textAlign: "right" }}/> {r.m.unit}
+                {v > need && <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>เผื่อเพิ่ม {_fmt(v - need)}</div>}
+                {v < need && <div style={{ fontSize: 11, color: "var(--amber)" }}>น้อยกว่ายอดที่ขาด {_fmt(need - v)}</div>}
+              </td>
+            </tr>
+          );
+        })}</tbody>
+      </table>
+    </ErpModal>
+  );
+}
+
+function doCreatePOFromShortage(wo, shortItems, overrides) {
   // วัตถุดิบที่ปิดใช้งาน (active === false) ไม่ถูกนำไปสร้างใบสั่งซื้อใหม่
   const skipped = shortItems.filter((r) => r.m && r.m.active === false).map((r) => r.m.code);
-  runAction(() => Store.tx("PO from shortage", () => {
+  return runAction(() => Store.tx("PO from shortage", () => {
     const bySup = {};
     shortItems.forEach((r) => {
       const m = r.m; if (!m) return;
       if (m.active === false) return;
-      const need = Math.ceil(r.kg - Math.max(0, r.available));
+      const need = overrides && overrides[m.id] != null ? overrides[m.id] : Math.ceil(r.kg - Math.max(0, r.available));
       if (need <= 0) return;
       // ราคาอ้างอิง = ราคาซื้อล่าสุด (ไม่มีก็ใช้ต้นทุนถัวเฉลี่ย) — ถ้าไม่เคยซื้อเลยต้องกรอกราคาที่หน้าจัดซื้อ
       const ps = window.materialPurchaseStats ? window.materialPurchaseStats(m) : null;
@@ -923,6 +978,95 @@ function woBomCost(wo) {
     return { name: l.name, qty, unit: m ? m.unit : "KG", cost, v: qty * cost };
   });
   return { basis, lines, total: lines.reduce((t, l) => t + l.v, 0), hasBom: true, wasteRate: bom.wasteRate, bomName: bom.name, revision: bom.revision };
+}
+
+// เบิกวัตถุดิบเพิ่ม / คืนวัตถุดิบ เข้าใบสั่งผลิต — ต้นทุนสะท้อนวัตถุดิบที่ใช้จริง (รวมเข้าต้นทุนสินค้าตอนบันทึกผลิตครั้งถัดไป)
+function ExtraMaterialCard({ wo }) {
+  const [open, setOpen] = useState(false);
+  const role = Store.user() ? Store.user().role : null;
+  const list = wo.extraIssues || [];
+  const netExtra = list.reduce((t, e) => t + (e.kind === "RETURN" ? -e.qty : e.qty), 0);
+  // ใบที่ปิดแล้วคืนวัตถุดิบได้ (ถ้ายังมียอดเบิกเพิ่มคงค้าง) แต่เบิกเพิ่มไม่ได้
+  const can = (role === "admin" || role === "production") && (["queued", "setup", "running"].includes(wo.status) || (wo.status === "done" && netExtra > 0.0005));
+  const pending = Number(wo.pendingExtraCost) || 0;
+  if (!can && !list.length) return null;
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-head">
+        <div>
+          <div className="card-title">เบิกวัตถุดิบเพิ่ม / คืนวัตถุดิบ</div>
+          <div className="card-sub">ใช้วัตถุดิบเกินสูตร (เช่น ล้างเครื่อง เปลี่ยนสี ของเสีย) — ตัดสต๊อกทันที และรวมเข้าต้นทุนต่อชิ้นตอนบันทึกผลิตครั้งถัดไป
+            {pending !== 0 && <> · <b>รอรวมต้นทุน {baht(pending, 2)}</b></>}</div>
+        </div>
+        <div className="card-actions">
+          {can && <button className="btn btn-outline btn-sm" onClick={() => setOpen(true)}><I.Boxes size={13}/> เบิกเพิ่ม / คืน</button>}
+        </div>
+      </div>
+      {list.length > 0 && (
+        <div style={{ padding: "0 18px 14px" }}>
+          <table className="table" style={{ fontSize: 12.5 }}>
+            <thead><tr><th>เวลา</th><th>รายการ</th><th>วัตถุดิบ</th><th className="num">จำนวน</th><th className="num">มูลค่า</th><th>เหตุผล / โดย</th></tr></thead>
+            <tbody>{list.map((e, i) => (
+              <tr key={i}>
+                <td style={{ whiteSpace: "nowrap" }}>{e.at}</td>
+                <td><span className={"badge " + (e.kind === "RETURN" ? "badge-success" : "badge-warning")}>{e.kind === "RETURN" ? "คืน" : "เบิกเพิ่ม"}</span></td>
+                <td>{e.name}<div className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{e.code}</div></td>
+                <td className="num">{e.kind === "RETURN" ? "−" : "+"}{_fmt(e.qty, 3)} {e.unit}</td>
+                <td className="num">{e.kind === "RETURN" ? "−" : ""}{baht(e.value, 2)}</td>
+                <td>{e.reason}<div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{e.by}</div></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      {open && <ExtraMaterialModal wo={wo} onClose={() => setOpen(false)}/>}
+    </div>
+  );
+}
+
+function ExtraMaterialModal({ wo, onClose }) {
+  const mats = MATERIALS.filter((m) => m.active !== false);
+  const closed = wo.status === "done";
+  const [kind, setKind] = useState(closed ? "RETURN" : "ISSUE");
+  const [item, setItem] = useState(mats[0] ? mats[0].id : "");
+  const [qty, setQty] = useState("");
+  const [reason, setReason] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const m = mats.find((x) => x.id === item);
+  const net = (wo.extraIssues || []).filter((e) => e.item === item).reduce((t, e) => t + (e.kind === "RETURN" ? -e.qty : e.qty), 0);
+  const submit = async () => {
+    setErr("");
+    if (!m) return setErr("เลือกวัตถุดิบ");
+    if (!(Number(qty) > 0)) return setErr("ระบุจำนวนมากกว่า 0");
+    if (!reason.trim()) return setErr("ระบุเหตุผล");
+    setBusy(true);
+    try {
+      await Store.woMaterial(wo.id, item, Number(qty), kind, reason.trim());
+      notify(kind === "ISSUE" ? `เบิก ${m.code} เพิ่ม ${qty} ${m.unit} เข้า ${wo.id} แล้ว` : `คืน ${m.code} ${qty} ${m.unit} จาก ${wo.id} แล้ว`, "success");
+      onClose();
+    } catch (e) { setErr(e && e.message ? e.message : String(e)); setBusy(false); }
+  };
+  return (
+    <ErpModal title={"เบิกเพิ่ม / คืนวัตถุดิบ · " + wo.id} width={520} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={submit}>บันทึก</button></>}>
+      <div style={{ display: "flex", gap: 14, marginBottom: 10, fontSize: 13 }}>
+        {!closed && <label><input type="radio" checked={kind === "ISSUE"} onChange={() => setKind("ISSUE")}/> เบิกเพิ่ม (ตัดสต๊อก)</label>}
+        <label><input type="radio" checked={kind === "RETURN"} onChange={() => setKind("RETURN")}/> คืนวัตถุดิบ (เข้าสต๊อก)</label>
+      </div>
+      <label className="field-label">วัตถุดิบ</label>
+      <select className="select" value={item} onChange={(e) => setItem(e.target.value)} style={{ marginBottom: 8 }}>
+        {mats.map((x) => <option key={x.id} value={x.id}>{x.code} · {x.name} (คงเหลือ {_fmt(x.stock)} {x.unit})</option>)}
+      </select>
+      <label className="field-label">จำนวน {m ? "(" + m.unit + ")" : ""}</label>
+      <input className="input num" type="number" min="0" step="any" value={qty} onChange={(e) => setQty(e.target.value)} style={{ marginBottom: 4 }}/>
+      {kind === "RETURN" && <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 8 }}>คืนได้สูงสุด {_fmt(Math.max(0, net), 3)} {m ? m.unit : ""} (ยอดที่เบิกเพิ่มไว้ในใบนี้)</div>}
+      <label className="field-label" style={{ marginTop: 8 }}>เหตุผล *</label>
+      <input className="input" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="เช่น ล้างเครื่องเปลี่ยนสี / ของเสียเกินคาด / คืนส่วนที่ไม่ได้ใช้"/>
+      <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginTop: 8 }}>เบิก ณ ต้นทุนถัวเฉลี่ยปัจจุบัน · คืน ณ ต้นทุนเฉลี่ยของที่เบิกไป · ใบที่ปิดแล้วคืนได้อย่างเดียว (ต้นทุนสินค้าจะลดตามมูลค่าที่คืน)</div>
+      {err && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+    </ErpModal>
+  );
 }
 
 function ProductionRecorder({ wo, onProduce }) {
@@ -1209,11 +1353,11 @@ function AddWorkOrderForm({ onSubmit, onCancel }) {
         </div>
         <div>
           <label className="field-label">วันที่เปิดงาน</label>
-          <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)}/>
+          <DateInput className="input" value={date} onChange={(e) => setDate(e.target.value)}/>
         </div>
         <div>
           <label className="field-label">กำหนดส่ง</label>
-          <input type="date" className="input" value={due} onChange={(e) => setDue(e.target.value)}/>
+          <DateInput className="input" value={due} onChange={(e) => setDue(e.target.value)}/>
         </div>
       </div>
 

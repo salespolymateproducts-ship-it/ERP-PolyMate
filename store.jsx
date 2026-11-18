@@ -561,7 +561,9 @@ const Store = (function () {
   const setMachineCondition = (id, condition, reason) => serverCall("POST", "/actions/machines/" + encodeURIComponent(id) + "/condition", { condition, reason });
   // ปรับ % มาสเตอร์แบตช์/สารเติมแต่ง/เศษรีไซเคิลของใบสั่งผลิตที่ยังไม่เริ่มผลิต (server คำนวณใหม่จากสูตรตั้งต้น)
   const adjustWoBom = (woId, adjustments, reason) => serverCall("POST", "/actions/work-orders/" + encodeURIComponent(woId) + "/bom-adjust", { adjustments, reason });
-  const logMachineMaintenance = (id, body) => serverCall("POST", "/actions/machines/" + encodeURIComponent(id) + "/maintenance", body);
+  // เบิกวัตถุดิบเพิ่ม (ISSUE) / คืนวัตถุดิบ (RETURN) เข้าใบสั่งผลิตที่ยังไม่ปิด — มูลค่ารวมเข้าต้นทุนสินค้าสำเร็จรูปในการบันทึกผลิตครั้งถัดไป
+  const woMaterial = (woId, item, qty, kind, reason) => serverCall("POST", "/actions/work-orders/" + encodeURIComponent(woId) + "/material", { item, qty, kind, reason });
+  const logMachineMaintenance =(id, body) => serverCall("POST", "/actions/machines/" + encodeURIComponent(id) + "/maintenance", body);
 
   // ---------- สินค้าซื้อมาขายไป ----------
   // สินค้าที่ออก PO ซื้อได้ = ประเภทซื้อมาขายไป หรือเปิดธง buyable (เช่น สินค้า OEM ที่จ้างผู้อื่นผลิต) — ต้นทุนของสินค้ากลุ่มนี้มาจากการรับ PO
@@ -573,6 +575,10 @@ const Store = (function () {
   function productOnOrder(productId) {
     return state.purchaseOrders.filter((p) => ["pending", "approved"].includes(p.status))
       .reduce((t, p) => t + (p.lines || []).filter((l) => l.itemType === "product" && l.item === productId).reduce((x, l) => x + (Number(l.qty) || 0), 0), 0);
+  }
+  function productInProduction(code) {
+    return r3(state.workOrders.filter((w) => OPEN_WO.includes(w.status) && w.productCode === code)
+      .reduce((t, w) => t + Math.max(0, (Number(w.quantity) || 0) - (Number(w.produced) || 0)), 0));
   }
   // สินค้าที่ใบสั่งขายที่ยังไม่ส่งต้องการ = ที่เหลือส่งของใบสั่งขาย (SO) + ใบส่งสินค้าที่ยังไม่อนุมัติ (ยังไม่ตัดสต๊อก)
   function productDemandDocs(code) {
@@ -591,7 +597,8 @@ const Store = (function () {
   function productPosition(f) {
     const dem = productDemandDocs(f.code);
     const stock = Number(f.stock) || 0;
-    const incoming = productOnOrder(f.id);
+    // สินค้าซื้อได้ = ที่สั่งซื้อไว้ / สินค้าผลิตเอง (เช่น OEM) = ที่เหลือผลิตในใบสั่งผลิตที่เปิดอยู่
+    const incoming = isBuyable(f) ? productOnOrder(f.id) : productInProduction(f.code);
     const deficit = r3(Math.max(0, dem.qty - stock));
     const short = r3(Math.max(0, deficit - incoming));
     return { demand: dem.qty, docs: dem.docs, stock, incoming, deficit, short, covered: r3(deficit - short) };
@@ -748,8 +755,8 @@ const Store = (function () {
     state, subscribe, getVersion: () => version,
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
-    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, adjustWoBom, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,
-    isBuyable, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
+    adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, adjustWoBom, woMaterial, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,
+    isBuyable, productInProduction, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
     MACHINE_COND, machineCond, machineUsable, machinePM, machineFit, saveMachine, setMachineCondition, logMachineMaintenance,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,

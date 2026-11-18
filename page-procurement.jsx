@@ -309,11 +309,11 @@ function AddPOForm({ onSubmit, onCancel }) {
         </div>
         <div>
           <label className="field-label">วันที่ออก PO</label>
-          <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)}/>
+          <DateInput className="input" value={date} onChange={(e) => setDate(e.target.value)}/>
         </div>
         <div>
           <label className="field-label">กำหนดรับสินค้า</label>
-          <input type="date" className="input" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)}/>
+          <DateInput className="input" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)}/>
         </div>
       </div>
 
