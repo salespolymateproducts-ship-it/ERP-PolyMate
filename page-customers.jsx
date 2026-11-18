@@ -59,7 +59,7 @@ function PageCustomers() {
                   <td className="mono"><b>{c.code}</b></td>
                   <td>
                     <div style={{ fontSize: 13, fontWeight: 500 }}>{c.name}</div>
-                    <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{c.address.split(",")[0]}</div>
+                    <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{(c.address || "").split(",")[0]}</div>
                   </td>
                   <td className="mono" style={{ fontSize: 12 }}>{c.taxId}</td>
                   <td>
