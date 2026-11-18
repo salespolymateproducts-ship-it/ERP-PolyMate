@@ -140,6 +140,11 @@ public class DataController {
 		return workflow.produceWO(AuthInterceptor.user(req), id, Json.num(b.get("produced")), Json.num(b.get("ng")));
 	}
 
+	@PostMapping("/actions/work-orders/{id}/material")
+	public Map<String, Object> woMaterial(@PathVariable String id, @RequestBody Map<String, Object> b, HttpServletRequest req) {
+		return workflow.issueWoMaterial(AuthInterceptor.user(req), id, Json.s(b.get("item")), Json.num(b.get("qty")), Json.s(b.get("kind")), Json.s(b.get("reason")));
+	}
+
 	@PostMapping("/actions/work-orders/{id}/bom-adjust")
 	public Map<String, Object> bomAdjust(@PathVariable String id, @RequestBody Map<String, Object> b, HttpServletRequest req) {
 		return bomService.adjustWorkOrder(AuthInterceptor.user(req), id, b.get("adjustments") instanceof java.util.List<?> l ? l : java.util.List.of(), Json.s(b.get("reason")));

@@ -329,6 +329,11 @@ public class WorkflowService {
 				consumed.add(c);
 			}
 		}
+		// วัตถุดิบที่เบิกเพิ่ม/คืนเข้าใบสั่งผลิตนี้และยังไม่ถูกรวมในต้นทุน → รวมเข้าล็อตที่มีชิ้นดี (ไม่ให้สูญหายเมื่อล็อตนี้เป็น NG ทั้งหมด)
+		if (good > 0 && Math.abs(Json.num(wo.get("pendingExtraCost"))) > 1e-9) {
+			batchCost += Json.num(wo.get("pendingExtraCost"));
+			wo.put("pendingExtraCost", 0);
+		}
 		List<String> fgIds = jdbc.queryForList("select id from erp_records where collection='finished' and data->>'code' = ? for update", String.class, productCode);
 		if (!fgIds.isEmpty() && good > 0) {
 			Map<String, Object> fg = lock("finished", fgIds.get(0), "ไม่พบสินค้า");
@@ -398,6 +403,104 @@ public class WorkflowService {
 		out.put("materialCost", r4(batchCost));
 		if (newFgCost != null) out.put("unitCost", newFgCost);
 		if (!noCost.isEmpty()) out.put("noCost", noCost);
+		return out;
+	}
+
+	// ---------- เบิกวัตถุดิบเพิ่ม / คืนวัตถุดิบ เข้าใบสั่งผลิต ----------
+	/**
+	 * kind = ISSUE: เบิกวัตถุดิบเพิ่มนอกสูตร (ตัดสต๊อก) · RETURN: คืนวัตถุดิบที่เบิกเพิ่มไว้ (คืนได้ไม่เกินยอดเบิกสุทธิของวัตถุดิบนั้นในใบนี้)
+	 * มูลค่า (เบิก ณ ต้นทุนถัวเฉลี่ยปัจจุบัน / คืน ณ ต้นทุนเฉลี่ยของที่เบิกไป) สะสมใน pendingExtraCost แล้วรวมเข้าต้นทุนสินค้าสำเร็จรูปในการบันทึกผลิตครั้งถัดไป
+	 * ทำได้เฉพาะใบสั่งผลิตที่ยังไม่ปิด (queued / setup / running)
+	 */
+	@Transactional
+	public Map<String, Object> issueWoMaterial(AuthUser u, String woId, String materialId, double qty, String kind, String reason) {
+		need(u, "admin", "production");
+		boolean ret = "RETURN".equalsIgnoreCase(kind);
+		if (!ret && !"ISSUE".equalsIgnoreCase(kind)) throw ApiException.badRequest("ประเภทต้องเป็น ISSUE (เบิกเพิ่ม) หรือ RETURN (คืน)");
+		if (!(qty > 0) || Double.isInfinite(qty)) throw ApiException.badRequest("จำนวนต้องมากกว่า 0");
+		if (reason == null || reason.isBlank()) throw ApiException.badRequest("ต้องระบุเหตุผล");
+		qty = Json.r3(qty);
+		Map<String, Object> wo = lock("workOrders", woId, "ไม่พบใบสั่งผลิต " + woId);
+		String st = Json.s(wo.get("status"));
+		boolean open = st.equals("queued") || st.equals("setup") || st.equals("running");
+		boolean doneReturn = ret && st.equals("done"); // ผลิตเสร็จแล้วคืนวัตถุดิบที่เหลือได้ (เบิกเพิ่มต้องทำก่อนปิดงาน)
+		if (!open && !doneReturn) {
+			throw ApiException.conflict("WO_CLOSED", "เบิกเพิ่มได้เฉพาะใบสั่งผลิตที่ยังไม่ปิด และคืนวัตถุดิบได้เฉพาะใบที่ยังไม่ปิดหรือปิดแล้ว (สถานะปัจจุบัน " + st + ")");
+		}
+		java.util.Optional<String> ms = repo.getForUpdate("materials", materialId);
+		if (ms.isEmpty()) throw ApiException.unprocessable("MATERIAL_NOT_FOUND", "ไม่พบวัตถุดิบ " + materialId);
+		Map<String, Object> m = json.map(ms.get());
+		List<Object> issues = new ArrayList<>();
+		if (wo.get("extraIssues") instanceof List<?> old) issues.addAll(old);
+		double netQty = 0, netVal = 0;
+		for (Object o : issues) {
+			if (o instanceof Map<?, ?> e && materialId.equals(String.valueOf(e.get("item")))) {
+				netQty += Json.num(e.get("qty")) * ("RETURN".equals(String.valueOf(e.get("kind"))) ? -1 : 1);
+				netVal += Json.num(e.get("value")) * ("RETURN".equals(String.valueOf(e.get("kind"))) ? -1 : 1);
+			}
+		}
+		double unitCost, value, stock = Json.num(m.get("stock"));
+		if (ret) {
+			if (qty > netQty + 1e-6) throw ApiException.unprocessable("RETURN_TOO_MUCH", "คืนได้ไม่เกินยอดที่เบิกเพิ่มไว้ในใบนี้ (" + Json.r3(Math.max(0, netQty)) + " " + Json.s(m.get("unit")) + ")");
+			unitCost = netQty > 0 ? netVal / netQty : Json.num(m.get("cost"));
+			m.put("stock", Json.r3(stock + qty));
+		} else {
+			if (stock < qty) throw ApiException.unprocessable("INSUFFICIENT_MATERIAL", "วัตถุดิบ " + Json.s(m.get("code")) + " ไม่พอ (คงเหลือ " + Json.r3(stock) + " ต้องการ " + qty + ")");
+			unitCost = Json.num(m.get("cost"));
+			m.put("stock", Json.r3(stock - qty));
+		}
+		value = r4(qty * unitCost) * (ret ? -1 : 1);
+		save("materials", m, u);
+		logMove(u, ret ? "IN" : "OUT", Json.s(m.get("code")), qty, Json.s(m.get("unit")), woId, (ret ? "คืนวัตถุดิบจาก " : "เบิกวัตถุดิบเพิ่มเข้า ") + woId + " · " + reason.trim());
+		Map<String, Object> e = new LinkedHashMap<>();
+		e.put("at", nowStr());
+		e.put("by", u.fullName());
+		e.put("kind", ret ? "RETURN" : "ISSUE");
+		e.put("item", materialId);
+		e.put("code", m.get("code"));
+		e.put("name", m.get("name"));
+		e.put("qty", qty);
+		e.put("unit", m.get("unit"));
+		e.put("unitCost", r4(unitCost));
+		e.put("value", r4(Math.abs(value)));
+		e.put("reason", reason.trim());
+		issues.add(0, e);
+		wo.put("extraIssues", issues);
+		Double newFgCost = null;
+		if (doneReturn) {
+			// ใบปิดแล้ว: ต้นทุนถูกรวมในสินค้าไปแล้ว → ลดต้นทุนใบสั่งผลิต และลดต้นทุนเฉลี่ยสินค้าสำเร็จรูปตามมูลค่าที่คืน ÷ สต๊อกสินค้าปัจจุบัน
+			wo.put("materialCost", r4(Math.max(0, Json.num(wo.get("materialCost")) + value)));
+			List<String> fgIds = jdbc.queryForList("select id from erp_records where collection='finished' and data->>'code' = ? for update", String.class, Json.s(wo.get("productCode")));
+			if (!fgIds.isEmpty()) {
+				Map<String, Object> fg = lock("finished", fgIds.get(0), "ไม่พบสินค้า");
+				double fs = Json.num(fg.get("stock")), fc = Json.num(fg.get("cost"));
+				if (fs > 0 && fc > 0) {
+					newFgCost = r4(Math.max(0.0001, (fs * fc + value) / fs));
+					List<Object> hist = fg.get("costHistory") instanceof List<?> h ? new ArrayList<>(h) : new ArrayList<>();
+					Map<String, Object> he = new LinkedHashMap<>();
+					he.put("date", LocalDate.now(BKK).toString());
+					he.put("cost", newFgCost);
+					he.put("prev", fc);
+					he.put("by", u.fullName());
+					he.put("ref", woId);
+					he.put("note", "คืนวัตถุดิบหลังปิดงาน " + Json.s(m.get("code")) + " " + qty + " " + Json.s(m.get("unit")) + " (" + r4(-value) + " บาท) · " + reason.trim());
+					hist.add(he);
+					fg.put("cost", newFgCost);
+					fg.put("costHistory", hist);
+					save("finished", fg, u);
+				}
+			}
+		} else {
+			wo.put("pendingExtraCost", r4(Json.num(wo.get("pendingExtraCost")) + value));
+		}
+		save("workOrders", wo, u);
+		audit.log(u, ret ? "RETURN_MATERIAL" : "ISSUE_MATERIAL", "ใบสั่งผลิต", woId, Json.s(m.get("code")) + " " + (ret ? "-" : "+") + qty + " " + Json.s(m.get("unit")) + " · " + reason.trim());
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("ok", true);
+		out.put("stock", Json.num(m.get("stock")));
+		out.put("value", r4(value));
+		out.put("pendingExtraCost", Json.num(wo.get("pendingExtraCost")));
+		if (newFgCost != null) out.put("unitCost", newFgCost);
 		return out;
 	}
 }
