@@ -545,6 +545,8 @@ const Store = (function () {
     return w;
   }
   // เรียก server ตรง ๆ (ตรวจกฎและตอบ error ทันที) แล้วโหลดข้อมูลใหม่
+  // การเงิน (บัญชีเงิน/สมุดเงิน/รับ-จ่ายอื่น ๆ): เรียก API ตรง — กฎทั้งหมดอยู่ที่เซิร์ฟเวอร์
+  const finApi = (method, path, body) => api(method, "/finance" + path, body);
   async function serverCall(method, path, body) {
     if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
     await settleSync();
@@ -756,7 +758,7 @@ const Store = (function () {
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
     adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, adjustWoBom, woMaterial, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,
-    isBuyable, productInProduction, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
+    isBuyable, productInProduction, finApi, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
     MACHINE_COND, machineCond, machineUsable, machinePM, machineFit, saveMachine, setMachineCondition, logMachineMaintenance,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,

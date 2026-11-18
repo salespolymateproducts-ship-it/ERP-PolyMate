@@ -21,6 +21,7 @@ const NAV = [
   { id: "shipping", label: "การจัดส่งสินค้า", icon: "Truck" },
   { section: "การเงิน" },
   { id: "accounting", label: "บัญชี / ภพ.30", icon: "Wallet" },
+  { id: "finance", label: "บัญชีเงิน / สมุดเงิน", icon: "Wallet" },
   { section: "บุคคล" },
   { id: "hr", label: "พนักงาน", icon: "Badge" },
   { section: "วิเคราะห์" },

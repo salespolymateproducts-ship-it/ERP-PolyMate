@@ -136,7 +136,7 @@ function printDoc(docId, opts) {
     // เอกสารที่ต้องมีสำเนา (data-copies="2"): พิมพ์ต้นฉบับ แล้วตามด้วยสำเนาในหน้าใหม่ ป้ายมุมขวาบนเปลี่ยนเป็น "สำเนา"
     if (!isReport && sheet.dataset.copies === "2") {
       const copy = sheet.cloneNode(true);
-      copy.querySelectorAll(".copy-mark").forEach((m) => { m.textContent = "สำเนา"; });
+      copy.querySelectorAll(".copy-mark").forEach((m) => { m.textContent = sheet.dataset.copyLabel2 || "สำเนา"; });
       copy.style.breakBefore = "page"; copy.style.pageBreakBefore = "always";
       root.appendChild(copy);
     }
@@ -146,10 +146,12 @@ function printDoc(docId, opts) {
     if (!st) { st = document.createElement("style"); st.id = "print-page-style"; document.head.appendChild(st); }
     const q = (s) => '"' + String(s || "").replace(/["\\\n]/g, " ") + '"';
     const label = docId || opts.title || "";
-    st.textContent = "@page { size: A4 " + orientation + "; margin: 12mm 12mm 14mm 12mm;"
-      + " @top-right { content: " + q(label) + "; font-size: 8pt; color: #8B93A4; font-family: \"IBM Plex Sans Thai\", \"Noto Sans Thai\", Tahoma, sans-serif; }"
-      + " @bottom-left { content: " + q((window.COMPANY && window.COMPANY.nameTh) || "PolyMate ERP") + "; font-size: 8pt; color: #8B93A4; font-family: \"IBM Plex Sans Thai\", \"Noto Sans Thai\", Tahoma, sans-serif; }"
-      + " @bottom-right { content: \"หน้า \" counter(page) \" / \" counter(pages); font-size: 8pt; color: #8B93A4; font-family: \"IBM Plex Sans Thai\", \"Noto Sans Thai\", Tahoma, sans-serif; } }";
+    // opts.pageMargin: ขอบกระดาษเฉพาะเอกสาร (เช่น แบบฟอร์มทางการที่ต้องใช้พื้นที่เต็มหน้า) · opts.bare: ไม่พิมพ์หัว/ท้ายกระดาษ
+    const font = ' font-size: 8pt; color: #8B93A4; font-family: "IBM Plex Sans Thai", "Noto Sans Thai", Tahoma, sans-serif;';
+    st.textContent = "@page { size: A4 " + orientation + "; margin: " + (opts.pageMargin || "12mm 12mm 14mm 12mm") + ";"
+      + (opts.bare ? "" : " @top-right { content: " + q(label) + ";" + font + " }"
+      + " @bottom-left { content: " + q((window.COMPANY && window.COMPANY.nameTh) || "PolyMate ERP") + ";" + font + " }"
+      + " @bottom-right { content: \"หน้า \" counter(page) \" / \" counter(pages);" + font + " }") + " }";
 
     document.body.classList.add("printing");
     const done = () => { document.body.classList.remove("printing"); root.innerHTML = ""; window.removeEventListener("afterprint", done); };
@@ -237,6 +239,11 @@ function buildNotifications(role) {
   });
   s.materials.filter((m) => m.active !== false && m.stock < m.min).forEach((m) =>
     out.push({ id: "ls" + m.id, kind: "warning", icon: "Boxes", title: `วัตถุดิบต่ำกว่าจุดสั่งซื้อ: ${m.code} เหลือ ${_fmt(m.stock)} ${m.unit} (ขั้นต่ำ ${_fmt(m.min)})`, time: "สต๊อก", page: "inventory" }));
+  // ใบเสร็จที่ลูกค้าหัก ณ ที่จ่าย แต่ยังไม่ได้รับหนังสือรับรอง (50 ทวิ) เกินกำหนด
+  if (Store.user() && ["admin", "accounting"].includes(Store.user().role)) s.docs.forEach((d) => {
+    const w = Workflow.whtCertStatus(d);
+    if (w && w.state === "pending" && w.overdue) out.push({ id: "wc" + d.id, kind: "warning", icon: "Wallet", title: `รอหนังสือรับรองหัก ณ ที่จ่ายจาก ${d.customerName}: ใบเสร็จ ${d.id} ภาษี ${_fmt(d.wht, 2)} บาท รอมา ${w.days} วัน`, time: "บัญชี", page: "accounting" });
+  });
   // สินค้าซื้อมาขายไป: ต่ำกว่าจุดสั่งซื้อ และใบสั่งขายที่รอสินค้าเข้า
   s.finished.filter((f) => Store.isBuyable(f) && f.active !== false).forEach((f) => {
     const incoming = Store.productOnOrder(f.id);

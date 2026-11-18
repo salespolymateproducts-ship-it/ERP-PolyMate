@@ -131,6 +131,7 @@ function PageAccounting() {
   // ค่าใช้จ่ายทั้งหมดอยู่ใน Store กลาง (รวมรายการที่ตั้งเจ้าหนี้อัตโนมัติจากการรับของตาม PO)
   const expenses = Store.state.expenses.filter((e) => e.status !== "cancelled").map((e) => ({ ...e, vat: e.vat || 0, whtRate: e.whtRate || 0, due: e.due || addDays(e.date, 30) }));
   const [showForm, setShowForm] = React.useState(false);
+  const [whtExp, setWhtExp] = React.useState(null);
   const today = todayISO();
 
   // เดือนที่มีข้อมูล + เดือนปัจจุบัน (ใหม่สุดก่อน)
@@ -216,6 +217,7 @@ function PageAccounting() {
           { id: "AP", label: "เจ้าหนี้ค้างจ่าย", count: payables.length },
           { id: "PL", label: "P&L สรุป" },
           { id: "TAX", label: "ภพ.30 / ภาษีซื้อขาย" },
+          { id: "WHT", label: "ภาษีถูกหัก (50 ทวิ)", count: Store.state.docs.filter((d) => { const w = Workflow.whtCertStatus(d); return w && w.state === "pending"; }).length },
         ]}
         value={tab}
         onChange={setTab}
@@ -255,6 +257,7 @@ function PageAccounting() {
                       : <span className="badge badge-warning">รอชำระ</span>}</td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       {e.status !== "paid" && <button className="btn btn-outline btn-sm" onClick={() => markPaid(e.id)}>จ่ายแล้ว</button>}
+                      {e.whtRate > 0 && e.status === "paid" && <button className="btn btn-outline btn-sm" style={{ marginLeft: 4 }} onClick={() => setWhtExp(e)} title="หนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ)">{e.whtCert ? "50 ทวิ " + e.whtCert.no.slice(-4) : "ออก 50 ทวิ"}</button>}
                       <button className="btn btn-outline btn-sm" style={{ marginLeft: 4, color: "var(--danger)" }} onClick={() => removeExpense(e.id)} title="ยกเลิกรายการ" aria-label="ยกเลิกรายการ">✕</button>
                     </td>
                   </tr>
@@ -331,6 +334,8 @@ function PageAccounting() {
 
       {tab === "PL" && <PLPanel month={month}/>}
       {tab === "TAX" && <TaxReport month={month}/>}
+      {tab === "WHT" && <WhtCertPanel/>}
+      {whtExp && <WhtIssueModal exp0={whtExp} onClose={() => setWhtExp(null)}/>}
 
       {showForm && (
         <ExpenseForm
@@ -693,6 +698,120 @@ window.PageAccounting = PageAccounting;
 window.PageHR = PageHR;
 window.PageReports = PageReports;
 // เผื่อไฟล์อื่นเรียกใช้ component เหล่านี้ (เหมือนเวอร์ชันเดิม)
+// ================= หนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ) ที่ลูกค้าออกให้เรา =================
+// บันทึกเลขที่/วันที่/ยอด ผูกกับใบเสร็จที่มีหัก ณ ที่จ่าย (ไม่แนบไฟล์) — ใช้ติดตามที่ยังไม่ได้รับ และสรุปเครดิตภาษี
+function WhtCertModal({ rc, onClose, onDone }) {
+  const c0 = rc.whtCert;
+  const [no, setNo] = React.useState(c0 ? c0.no : "");
+  const [date, setDate] = React.useState(c0 ? c0.date : todayISO());
+  const [amount, setAmount] = React.useState(String(c0 ? c0.amount : rc.wht));
+  const [note, setNote] = React.useState(c0 ? c0.note || "" : "");
+  const [err, setErr] = React.useState("");
+  const diff = Math.round((Number(amount) - rc.wht) * 100) / 100;
+  const save = () => {
+    setErr("");
+    try { Workflow.setWhtCert(rc.id, { no, date, amount: Number(amount), note }); notify("บันทึกหนังสือรับรองหัก ณ ที่จ่ายของ " + rc.id + " แล้ว", "success"); onDone && onDone(); onClose(); }
+    catch (e) { setErr(e && e.message ? e.message : String(e)); }
+  };
+  const remove = () => {
+    if (!window.confirm("ลบหนังสือรับรองของ " + rc.id + " ? (จะกลับเป็นสถานะรอรับหนังสือ)")) return;
+    try { Workflow.setWhtCert(rc.id, null); notify("ลบหนังสือรับรองแล้ว", "success"); onDone && onDone(); onClose(); } catch (e) { setErr(e && e.message ? e.message : String(e)); }
+  };
+  const lbl = { fontSize: 12, color: "var(--text-secondary)", fontWeight: 500, display: "block", margin: "10px 0 4px" };
+  return (
+    <ErpModal title={"หนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ) · " + rc.id} width={520} onClose={onClose}
+      footer={<>{c0 && <button className="btn btn-ghost btn-sm" style={{ marginRight: "auto", color: "var(--danger)" }} onClick={remove}>ลบ</button>}<button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" onClick={save}>บันทึก</button></>}>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+        {rc.customerName} · ใบเสร็จวันที่ {rc.date} · ฐานภาษี {_fmt(rc.subtotal, 2)} · หัก {rc.whtRate}% = <b>{_fmt(rc.wht, 2)}</b> บาท
+      </div>
+      <label style={lbl}>เลขที่หนังสือรับรอง (จากลูกค้า) *</label>
+      <input className="input" value={no} onChange={(e) => setNo(e.target.value)} placeholder="เลขที่ที่ระบุบนหนังสือ 50 ทวิ"/>
+      <label style={lbl}>วันที่หนังสือ *</label>
+      <DateInput className="input" value={date} onChange={(e) => setDate(e.target.value)}/>
+      <label style={lbl}>ยอดภาษีที่ถูกหักตามหนังสือ (บาท) *</label>
+      <input className="input num" type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)}/>
+      {Math.abs(diff) > 0.005 && <div style={{ fontSize: 12, color: "var(--amber)", marginTop: 4 }}>ต่างจากยอดที่คำนวณ ({_fmt(rc.wht, 2)}) อยู่ {diff > 0 ? "+" : ""}{_fmt(diff, 2)} บาท — บันทึกได้ แต่ควรตรวจกับลูกค้า</div>}
+      <label style={lbl}>หมายเหตุ</label>
+      <input className="input" value={note} onChange={(e) => setNote(e.target.value)}/>
+      {err && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+    </ErpModal>
+  );
+}
+
+function WhtCertPanel() {
+  useStore();
+  const [status, setStatus] = React.useState("ALL");
+  const [year, setYear] = React.useState("ALL");
+  const [edit, setEdit] = React.useState(null);
+  const role = Store.user() ? Store.user().role : null;
+  const canEdit = role === "admin" || role === "accounting";
+  const all = Store.state.docs.filter((d) => Workflow.whtCertStatus(d)).sort((a, b) => (a.date < b.date ? 1 : -1));
+  const years = [...new Set(all.map((d) => d.date.slice(0, 4)))].sort().reverse();
+  const st = (d) => Workflow.whtCertStatus(d);
+  const rows = all.filter((d) => (year === "ALL" || d.date.startsWith(year)) && (status === "ALL" || st(d).state === status));
+  const sum = (list, f) => list.reduce((t, d) => t + f(d), 0);
+  const pending = all.filter((d) => st(d).state === "pending"), overdue = pending.filter((d) => st(d).overdue), received = all.filter((d) => st(d).state === "received");
+  // เครดิตภาษีที่ได้รับหนังสือแล้ว สรุปรายเดือน (ตามวันที่หนังสือ)
+  const byMonth = {};
+  received.filter((d) => year === "ALL" || d.whtCert.date.startsWith(year)).forEach((d) => { const k = d.whtCert.date.slice(0, 7); (byMonth[k] = byMonth[k] || { n: 0, amt: 0 }); byMonth[k].n++; byMonth[k].amt += d.whtCert.amount; });
+  const monthsSorted = Object.keys(byMonth).sort().reverse();
+  const exportRows = () => exportCSV("ภาษีถูกหัก-50ทวิ.csv", ["วันที่ใบเสร็จ", "เลขที่ใบเสร็จ", "ลูกค้า", "ฐานภาษี", "อัตรา %", "ยอดที่ควรถูกหัก", "สถานะ", "เลขที่หนังสือ", "วันที่หนังสือ", "ยอดตามหนังสือ", "หมายเหตุ"],
+    rows.map((d) => [d.date, d.id, d.customerName, d.subtotal, d.whtRate, d.wht, st(d).state === "received" ? "รับแล้ว" : "รอรับหนังสือ", d.whtCert ? d.whtCert.no : "", d.whtCert ? d.whtCert.date : "", d.whtCert ? d.whtCert.amount : "", d.whtCert ? d.whtCert.note : ""]));
+  return (
+    <div>
+      <div className="grid-4" style={{ margin: "14px 0" }}>
+        <SmallStat label="รอรับหนังสือ" value={pending.length + " ใบ · " + baht(sum(pending, (d) => d.wht))} tone="amber" icon="Clock"/>
+        <SmallStat label={"เกินกำหนด " + Workflow.WHT_CERT_DAYS + " วัน"} value={overdue.length + " ใบ · " + baht(sum(overdue, (d) => d.wht))} tone="accent" icon="Alert"/>
+        <SmallStat label="รับหนังสือแล้ว" value={received.length + " ใบ · " + baht(sum(received, (d) => d.whtCert.amount))} tone="success" icon="Check"/>
+        <SmallStat label="ภาษีถูกหักทั้งหมด (ตามใบเสร็จ)" value={baht(sum(all, (d) => d.wht))} tone="violet" icon="Wallet"/>
+      </div>
+      <div className="card">
+        <div style={{ padding: "12px 16px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <select className="input" style={{ width: 170 }} value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="ALL">ทุกสถานะ</option><option value="pending">รอรับหนังสือ</option><option value="received">รับแล้ว</option>
+          </select>
+          <select className="input" style={{ width: 130 }} value={year} onChange={(e) => setYear(e.target.value)}>
+            <option value="ALL">ทุกปี</option>{years.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <span className="spacer"/>
+          <button className="btn btn-outline btn-sm" disabled={!rows.length} onClick={exportRows}><I.Download size={14}/> ส่งออก CSV</button>
+        </div>
+        <div style={{ overflow: "auto" }}>
+          <table className="table">
+            <thead><tr><th>วันที่</th><th>ใบเสร็จ</th><th>ลูกค้า</th><th className="num">ฐานภาษี</th><th className="num">หัก %</th><th className="num">ภาษีที่ควรถูกหัก</th><th>สถานะ</th><th>หนังสือรับรอง</th><th></th></tr></thead>
+            <tbody>
+              {rows.map((d) => {
+                const w = st(d);
+                return (
+                  <tr key={d.id}>
+                    <td>{d.date}</td><td className="mono"><b>{d.id}</b></td><td>{d.customerName}</td>
+                    <td className="num">{_fmt(d.subtotal, 2)}</td><td className="num">{d.whtRate}%</td><td className="num"><b>{_fmt(d.wht, 2)}</b></td>
+                    <td>{w.state === "received" ? <span className="badge badge-success"><span className="b-dot"/>รับแล้ว</span>
+                      : <span className={"badge " + (w.overdue ? "badge-danger" : "badge-warning")}><span className="b-dot"/>รอรับ {w.days} วัน{w.overdue ? " · เกินกำหนด" : ""}</span>}</td>
+                    <td style={{ fontSize: 12 }}>{d.whtCert ? <><div className="mono">{d.whtCert.no}</div><div style={{ color: "var(--text-tertiary)" }}>{d.whtCert.date} · {_fmt(d.whtCert.amount, 2)}{Math.abs(d.whtCert.amount - d.wht) > 0.005 ? " ⚠ ต่างจากที่คำนวณ" : ""}</div></> : <span style={{ color: "var(--text-tertiary)" }}>—</span>}</td>
+                    <td>{canEdit && <button className="btn btn-outline btn-sm" onClick={() => setEdit(d)}>{d.whtCert ? "แก้ไข" : "บันทึกหนังสือ"}</button>}</td>
+                  </tr>
+                );
+              })}
+              {!rows.length && <tr><td colSpan={9} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>ไม่มีใบเสร็จที่ลูกค้าหัก ณ ที่จ่าย{all.length ? " ตามตัวกรองนี้" : " (เลือกอัตราหัก ณ ที่จ่ายในใบกำกับ/ใบเสร็จ แล้วจะมีรายการที่นี่)"}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {monthsSorted.length > 0 && (
+        <div className="card" style={{ marginTop: 14 }}>
+          <div className="card-head"><div><div className="card-title">สรุปเครดิตภาษีที่ได้รับหนังสือแล้ว (รายเดือน ตามวันที่หนังสือ)</div><div className="card-sub">ใช้เป็นเครดิตภาษีตอนยื่น ภงด.50/51</div></div></div>
+          <table className="table"><thead><tr><th>เดือน</th><th className="num">จำนวนฉบับ</th><th className="num">ภาษีที่ถูกหัก (บาท)</th></tr></thead>
+            <tbody>{monthsSorted.map((k) => <tr key={k}><td>{monthLabel(k)}</td><td className="num">{byMonth[k].n}</td><td className="num"><b>{_fmt(byMonth[k].amt, 2)}</b></td></tr>)}
+              <tr style={{ background: "var(--bg-subtle)" }}><td><b>รวม</b></td><td className="num"><b>{monthsSorted.reduce((t, k) => t + byMonth[k].n, 0)}</b></td><td className="num"><b>{_fmt(monthsSorted.reduce((t, k) => t + byMonth[k].amt, 0), 2)}</b></td></tr></tbody></table>
+        </div>
+      )}
+      {edit && <WhtCertModal rc={Store.state.docs.find((x) => x.id === edit.id) || edit} onClose={() => setEdit(null)}/>}
+    </div>
+  );
+}
+window.WhtCertModal = WhtCertModal;
+
 if (!window.SmallStat) window.SmallStat = SmallStat;
 if (!window.PLPanel) window.PLPanel = PLPanel;
 if (!window.ReportCard) window.ReportCard = ReportCard;

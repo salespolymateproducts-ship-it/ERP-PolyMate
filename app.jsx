@@ -16,6 +16,7 @@ const PAGES = {
   inventory:    { title: "คลังสินค้า",     crumb: ["PolyMate", "คลัง", "สต๊อก"], Comp: PageInventory },
   procurement:  { title: "ฝ่ายจัดซื้อ",     crumb: ["PolyMate", "จัดซื้อ", "PO / Supplier"], Comp: PageProcurement },
   accounting:   { title: "บัญชี",         crumb: ["PolyMate", "การเงิน", "บัญชี"], Comp: PageAccounting },
+  finance:      { title: "บัญชีเงิน / สมุดเงิน", crumb: ["PolyMate", "การเงิน", "บัญชีเงิน"], Comp: PageFinance },
   hr:           { title: "พนักงาน",       crumb: ["PolyMate", "บุคคล", "พนักงาน"], Comp: PageHR },
   reports:      { title: "รายงาน",        crumb: ["PolyMate", "วิเคราะห์", "รายงาน"], Comp: PageReports },
   docs:         { title: "เอกสารระบบ",     crumb: ["PolyMate", "เอกสารระบบ", "DB / API / Workflow"], Comp: PageDocs },

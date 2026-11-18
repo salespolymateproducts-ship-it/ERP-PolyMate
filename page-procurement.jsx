@@ -50,7 +50,7 @@ function PageProcurement() {
       setOpenPO(null);
       showToast(r.received.length
         ? `รับเข้า ${po.id} → เพิ่มสต๊อก ${r.received.length} รายการเรียบร้อย`
-        : `รับเข้า ${po.id} แล้ว`);
+        : `ตรวจรับงาน ${po.id} แล้ว → ตั้งเจ้าหนี้ ${r.expenseId || ""}`);
     } catch (e) {
       notify(e && e.message ? e.message : String(e), "error");
     } finally {
@@ -198,7 +198,7 @@ function PageProcurement() {
               : livePO.status === "received"
               ? <span className="badge badge-success" style={{ padding: "6px 12px" }}><I.Check size={13}/> รับเข้าแล้ว</span>
               : livePO.status !== "approved" ? <button className="btn btn-primary btn-sm" disabled={!canApprovePO} title={canApprovePO ? "" : "ไม่มีสิทธิ์อนุมัติ"} onClick={() => approvePO(livePO)}><I.Check size={13}/> อนุมัติใบสั่งซื้อ</button>
-              : <button className="btn btn-primary btn-sm" onClick={() => handleReceive(livePO)}><I.Upload size={13}/> ยืนยันรับเข้า + ตัดสต๊อก</button>}
+              : <button className="btn btn-primary btn-sm" onClick={() => handleReceive(livePO)}><I.Upload size={13}/> {isServicePO(livePO) ? "ยืนยันตรวจรับงาน (ตั้งเจ้าหนี้)" : "ยืนยันรับเข้า + ตัดสต๊อก"}</button>}
           </>
         }
       >
@@ -261,7 +261,7 @@ function AddPOForm({ onSubmit, onCancel }) {
   // val: "m:<id>" วัตถุดิบ · "p:<id>" สินค้าซื้อมาขาย (สินค้าที่ซื้อได้) · "custom" · ""
   const pickItem = (i, val) => setLines((ls) => ls.map((l, idx) => {
     if (idx !== i) return l;
-    if (val === "custom") return { ...l, itemType: "material", item: "custom", name: "" };
+    if (val === "custom") return { ...l, itemType: "material", item: "custom", name: "", unit: "งาน" };
     if (!val) return { ...l, itemType: "material", item: "", name: "" };
     const isP = val.startsWith("p:"), id = val.slice(2);
     const m = isP ? FINISHED.find((x) => x.id === id) : MATERIALS.find((x) => x.id === id);
@@ -287,8 +287,8 @@ function AddPOForm({ onSubmit, onCancel }) {
     e.preventDefault();
     if (!valid) return;
     const cleanLines = computed.filter((l) => l.name.trim() && l.amount > 0)
-      .map((l) => ({ itemType: l.itemType === "product" ? "product" : "material", item: l.item && l.item !== "custom" ? l.item : undefined, name: l.name.trim(), qty: parseFloat(l.qty) || 0, unit: l.unit, price: parseFloat(l.price) || 0, amount: l.amount }));
-    if (cleanLines.some((l) => !l.item)) { notify("ทุกรายการต้องเลือกวัตถุดิบจากทะเบียน (ไม่รองรับรายการพิมพ์เอง เพราะรับของเข้าสต๊อกไม่ได้)", "error"); return; }
+      .map((l) => ({ itemType: l.item === "custom" ? "service" : l.itemType === "product" ? "product" : "material", item: l.item && l.item !== "custom" ? l.item : undefined, name: l.name.trim(), qty: parseFloat(l.qty) || 0, unit: l.unit, price: parseFloat(l.price) || 0, amount: l.amount }));
+    if (cleanLines.some((l) => l.itemType !== "service" && !l.item)) { notify("กรุณาเลือกวัตถุดิบ/สินค้าจากทะเบียน หรือเลือก \"อื่นๆ / บริการ\" สำหรับงานบริการ", "error"); return; }
     onSubmit({
       id: nextPoId(), date,
       supplier, supplierName: sup ? sup.name.replace(/ (Co\.|Public|PCL|Pte).*$/i, "").trim() : supplier,
@@ -333,7 +333,7 @@ function AddPOForm({ onSubmit, onCancel }) {
                 <optgroup label="สินค้าซื้อมาขาย (สั่งซื้อได้)">
                   {FINISHED.filter((f) => Store.isBuyable(f) && f.active !== false).map((f) => <option key={"p" + f.id} value={"p:" + f.id}>{f.code} · {f.name}</option>)}
                 </optgroup>
-                <option value="custom">อื่นๆ / บริการ (ไม่เข้าคลัง)</option>
+                <option value="custom">อื่นๆ / บริการ (ไม่เข้าคลัง · ลงค่าใช้จ่ายเมื่อตรวจรับงาน)</option>
               </select>
               <input type="number" min="0" step="0.01" className="input num" style={{ height: 34, textAlign: "right" }} placeholder="0" value={l.qty} onChange={(e) => setLine(i, "qty", e.target.value)}/>
               <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.unit} onChange={(e) => setLine(i, "unit", e.target.value)}>
@@ -427,7 +427,7 @@ function ReceiveView({ onReceive }) {
               <td className="num">{p.expectedDate}</td>
               <td className="num" style={{ fontWeight: 500 }}>{baht(p.total)}</td>
               <td style={{ textAlign: "right" }}>
-                <button className="btn btn-outline btn-sm" onClick={() => onReceive(p)}><I.Upload size={13}/> รับเข้า + ตัดสต๊อก</button>
+                <button className="btn btn-outline btn-sm" onClick={() => onReceive(p)}><I.Upload size={13}/> {isServicePO(p) ? "ตรวจรับงาน" : "รับเข้า + ตัดสต๊อก"}</button>
               </td>
             </tr>
           ))}
@@ -437,6 +437,9 @@ function ReceiveView({ onReceive }) {
     </div>
   );
 }
+
+// PO ที่มีแต่รายการบริการ = ไม่มีของเข้าสต๊อก (รับงาน → ตั้งเจ้าหนี้อย่างเดียว)
+const isServicePO = (po) => !!po && (po.lines || []).length > 0 && po.lines.every((l) => l.itemType === "service");
 
 function POPreview({ po }) {
   return (
@@ -600,8 +603,8 @@ function SupplierForm({ mode, rec, onCancel, onDone }) {
   const locked = editing && poRefs > 0;
   const [form, setForm] = useState(editing ? {
     code: rec.code || "", name: rec.name || "", taxId: rec.taxId === "—" ? "" : (rec.taxId || ""), contact: rec.contact || "", phone: rec.phone || "",
-    email: rec.email || "", category: rec.category || SUP_CATEGORIES[0], credit: String(rec.credit == null ? 30 : rec.credit), address: rec.address || "",
-  } : { code: "", name: "", taxId: "", contact: "", phone: "", email: "", category: SUP_CATEGORIES[0], credit: "30", address: "" });
+    email: rec.email || "", category: rec.category || SUP_CATEGORIES[0], credit: String(rec.credit == null ? 30 : rec.credit), address: rec.address || "", payeeType: rec.payeeType === "individual" ? "individual" : "juristic",
+  } : { code: "", name: "", taxId: "", contact: "", phone: "", email: "", category: SUP_CATEGORIES[0], credit: "30", address: "", payeeType: "juristic" });
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -632,7 +635,7 @@ function SupplierForm({ mode, rec, onCancel, onDone }) {
     const ok = runAction(() => Store.tx(editing ? "editSupplier" : "createSupplier", () => {
       const clean = {
         name: form.name.trim(), taxId: form.taxId.trim() || "—", contact: form.contact.trim(), phone: form.phone.trim(),
-        email: form.email.trim(), category: form.category, credit, address: form.address.trim(),
+        email: form.email.trim(), category: form.category, credit, address: form.address.trim(), payeeType: form.payeeType,
       };
       if (!editing) {
         const c = codeConflictFor(null); // ตรวจซ้ำอีกครั้งในธุรกรรม (ข้อมูลล่าสุด)
@@ -683,6 +686,13 @@ function SupplierForm({ mode, rec, onCancel, onDone }) {
           <label className="field-label">เลขผู้เสียภาษี</label>
           <input className="input" style={{ fontFamily: "var(--font-mono)" }} placeholder="13 หลัก" value={form.taxId} onChange={(e) => set("taxId", e.target.value)}/>
           {taxDup && <div style={{ fontSize: 11.5, color: "#B45309", marginTop: 4 }}>⚠ เลขผู้เสียภาษีนี้ตรงกับ {taxDup.code} · {taxDup.name} (บันทึกได้ — อาจเป็นคนละสาขา)</div>}
+        </div>
+        <div>
+          <label className="field-label">ประเภทผู้รับเงิน (ใช้ออกหนังสือหัก ณ ที่จ่าย)</label>
+          <select className="select" value={form.payeeType} onChange={(e) => set("payeeType", e.target.value)}>
+            <option value="juristic">นิติบุคคล (ภ.ง.ด.53)</option>
+            <option value="individual">บุคคลธรรมดา (ภ.ง.ด.3)</option>
+          </select>
         </div>
         <div>
           <label className="field-label">เครดิต (วัน)</label>

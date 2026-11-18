@@ -38,7 +38,7 @@ const BOM_STATUS = { draft: { th: "ร่าง", cls: "badge-neutral" }, active
 function bomLineText(l) {
   if (l.basis === "shareOfResin") return `${_fmt(l.pct, 2)} % ของเม็ดผสม`;
   if (l.pct != null && (l.basis === "pctOfResin" || l.type === "regrind")) return `${_fmt(l.pct, 2)} % ของเม็ด`;
-  return `${_fmt(l.qty, 5)} กก./ชิ้น`;
+  return `${_fmt((Number(l.qty) || 0) * 1000, 3)} กรัม/ชิ้น`;  // หน่วยต่อชิ้นแสดงเป็นกรัม (เก็บและตัดสต๊อกเป็น กก.)
 }
 
 function BOMViewer() {
@@ -156,7 +156,7 @@ function BomCompare({ productCode }) {
                 <tr key={it.item}>
                   <td><div style={{ fontWeight: 500 }}>{it.name}</div><div style={{ fontSize: 11, color: "var(--text-secondary)" }}>{it.item} · {BOM_TYPE_TH[it.type] || it.type}</div></td>
                   {qs.map((l, i) => (
-                    <td key={i} className="num">{l ? <>{_fmt(l.qty, 5)} <span style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>กก.</span>{l.pct != null ? <div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{_fmt(l.pct, 2)} % ของเม็ด{l.basis === "shareOfResin" ? "ผสม" : ""}</div> : null}{i > 0 && fmtDiff(l.qty, qs[0] ? qs[0].qty : 0, 5)}</> : <span style={{ color: "var(--text-tertiary)" }}>—</span>}</td>
+                    <td key={i} className="num">{l ? <>{_fmt(l.qty * 1000, 3)} <span style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>กรัม</span>{l.pct != null ? <div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{_fmt(l.pct, 2)} % ของเม็ด{l.basis === "shareOfResin" ? "ผสม" : ""}</div> : null}{i > 0 && fmtDiff(l.qty, qs[0] ? qs[0].qty : 0, 5)}</> : <span style={{ color: "var(--text-tertiary)" }}>—</span>}</td>
                   ))}
                 </tr>
               );
@@ -193,7 +193,7 @@ function BomCard({ b, canEdit, onEdit, onCopy, onActivate, onDeactivate, onDefau
         </div>
       </div>
       <table className="table" style={{ fontSize: 12 }}>
-        <thead><tr><th>วัตถุดิบ</th><th>ชนิด</th><th className="num">กำหนด</th><th className="num">กก./ชิ้น</th><th className="num">ต้นทุน/ชิ้น</th></tr></thead>
+        <thead><tr><th>วัตถุดิบ</th><th>ชนิด</th><th className="num">กำหนด</th><th className="num">กรัม/ชิ้น</th><th className="num">ต้นทุน/ชิ้น</th></tr></thead>
         <tbody>
           {(b.lines || []).map((l, i) => {
             const rl = snap.lines[i] || {};
@@ -204,7 +204,7 @@ function BomCard({ b, canEdit, onEdit, onCopy, onActivate, onDeactivate, onDefau
                 <td><div className="mono" style={{ fontSize: 10.5, color: "var(--text-secondary)" }}>{m ? m.code : l.item}</div><div style={{ fontSize: 12 }}>{l.name}</div></td>
                 <td style={{ fontSize: 11.5 }}>{BOM_TYPE_TH[l.type] || l.type}</td>
                 <td className="num" style={{ fontSize: 11.5 }}>{bomLineText(l)}</td>
-                <td className="num" style={{ fontSize: 11.5 }}>{_fmt(rl.qty || 0, 5)}</td>
+                <td className="num" style={{ fontSize: 11.5 }}>{_fmt((rl.qty || 0) * 1000, 3)}</td>
                 <td className="num" style={{ fontWeight: 600 }}>{c > 0 ? _fmt((rl.qty || 0) * c, 4) : <span style={{ color: "var(--text-tertiary)", fontWeight: 400, fontSize: 11 }}>ไม่มีต้นทุน</span>}</td>
               </tr>
             );
@@ -247,25 +247,61 @@ function BomCard({ b, canEdit, onEdit, onCopy, onActivate, onDeactivate, onDefau
 
 function BomForm({ mode, rec, onCancel, onDone }) {
   const editing = mode === "edit";
-  const toLine = (l) => ({ item: l.item, type: l.type, basis: l.type === "regrind" ? "pctOfResin" : (l.basis || "perPiece"), value: String(l.basis === "pctOfResin" || l.basis === "shareOfResin" || l.type === "regrind" ? l.pct : l.qty) });
+  const toLine = (l) => ({ item: l.item, type: l.type, basis: l.type === "regrind" ? "pctOfResin" : (l.basis || "perPiece"), value: String(l.basis === "pctOfResin" || l.basis === "shareOfResin" || l.type === "regrind" ? l.pct : Math.round(l.qty * 1e6) / 1e3) });
   const isMix0 = !!(rec && (rec.lines || []).some((l) => l.type === "resin" && l.basis === "shareOfResin"));
   const [f, setF] = useState(rec ? {
-    resinMix: isMix0, resinWeight: isMix0 ? String(rec.resinWeight || "") : "",
+    resinMix: isMix0, resinWeight: isMix0 ? String(Math.round((rec.resinWeight || 0) * 1e6) / 1e3 || "") : "",
+    partWeight: rec.partWeight ? String(rec.partWeight) : "", runnerWeight: rec.partWeight ? String(rec.runnerWeight || 0) : "", cavities: rec.cavities ? String(rec.cavities) : "", piecesPerUnit: rec.piecesPerUnit ? String(rec.piecesPerUnit) : "1", regrindItem: rec.regrindItem || "",
     productCode: rec.productCode, name: mode === "copy" ? rec.name + " (สำเนา)" : rec.name, color: rec.color || "", mold: rec.mold || "",
     status: mode === "copy" ? "draft" : rec.status, wasteRate: String(rec.wasteRate || 0), packaging: rec.packaging || "",
     lines: (rec.lines || []).map(toLine),
-  } : { resinMix: false, resinWeight: "", productCode: "", name: "", color: "", mold: "", status: "draft", wasteRate: "0", packaging: "", lines: [{ item: "", type: "resin", basis: "perPiece", value: "" }] });
+  } : { resinMix: false, resinWeight: "", partWeight: "", runnerWeight: "", cavities: "", piecesPerUnit: "1", regrindItem: "", productCode: "", name: "", color: "", mold: "", status: "draft", wasteRate: "0", packaging: "", lines: [{ item: "", type: "resin", basis: "perPiece", value: "" }] });
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
   const [changeReason, setChangeReason] = useState("");
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   const setLine = (i, patch) => setF((x) => ({ ...x, lines: x.lines.map((l, idx) => idx === i ? { ...l, ...patch } : l) }));
   const mats = Store.state.materials.filter((m) => m.active !== false);
+  // เลือกสินค้า → เติมน้ำหนักชิ้นงานจากทะเบียนสินค้า · เลือกแม่พิมพ์ → เติมจำนวนคาวิตี้ (เติมเฉพาะช่องที่ยังว่าง/ยังเป็นค่าที่ระบบเติมไว้ แก้ทับได้)
+  const pickProduct = (code) => setF((x) => {
+    const p = Store.state.finished.find((q) => q.code === code);
+    const prev = Store.state.finished.find((q) => q.code === x.productCode);
+    const ppu0 = parseInt(x.piecesPerUnit, 10) || 1;
+    const per = (q) => String(Math.round(q.weight / ppu0 * 1000) / 1000);
+    const auto = x.partWeight === "" || (prev && prev.weight != null && x.partWeight === per(prev));
+    return { ...x, productCode: code, partWeight: auto ? (p && p.weight > 0 ? per(p) : "") : x.partWeight, runnerWeight: auto && p && p.weight > 0 && x.runnerWeight === "" ? "0" : x.runnerWeight };
+  });
+  const pickMold = (id) => setF((x) => {
+    const m = Store.state.molds.find((q) => q.id === id);
+    const prev = Store.state.molds.find((q) => q.id === x.mold);
+    const auto = x.cavities === "" || (prev && x.cavities === String(prev.cavities));
+    return { ...x, mold: id, cavities: auto ? (m && m.cavities ? String(m.cavities) : "") : x.cavities };
+  });
 
+  // เปลี่ยนจำนวนชิ้นต่อชุด → ถ้าน้ำหนักชิ้นงานยังเป็นค่าที่ระบบเติมจากสินค้า (น้ำหนักสินค้า ÷ ชิ้นต่อชุด) คำนวณใหม่ให้
+  const setPpu = (v) => setF((x) => {
+    const p = Store.state.finished.find((q) => q.code === x.productCode);
+    const old = parseInt(x.piecesPerUnit, 10) || 1, nw = parseInt(v, 10) || 1;
+    const per = (n) => String(Math.round(p.weight / n * 1000) / 1000);
+    const auto = p && p.weight > 0 && x.partWeight === per(old);
+    return { ...x, piecesPerUnit: v, partWeight: auto ? per(nw) : x.partWeight };
+  });
+  // น้ำหนักชิ้นงาน/รันเนอร์ (กรัม) → เม็ดต่อชิ้น (กก.) = (ชิ้นงาน + รันเนอร์ ÷ คาวิตี้) ÷ 1000 — server คำนวณซ้ำด้วยสูตรเดียวกัน
+  const partG = parseFloat(f.partWeight) || 0, runnerG = parseFloat(f.runnerWeight) || 0;
+  const moldCav = (Store.state.molds.find((m) => m.id === f.mold) || {}).cavities || 0;
+  const cavN = parseInt(f.cavities, 10) || moldCav || 0;
+  const useW = partG > 0;
+  const ppu = Math.max(1, parseInt(f.piecesPerUnit, 10) || 1);
+  const wOk = useW && cavN >= 1 && cavN % ppu === 0;
+  const runnerPc = wOk ? runnerG / cavN : 0;
+  // เม็ดต่อ 1 หน่วยสินค้า (ชิ้น หรือ ชุด) = (ชิ้นงาน + รันเนอร์ ÷ คาวิตี้) × ชิ้นต่อชุด
+  const rwKg = wOk ? Math.round((partG + runnerPc) * ppu / 1000 * 1e6) / 1e6 : 0;
+  // ปริมาณต่อชิ้นกรอกเป็นกรัมทุกชนิด (เม็ด/มาสเตอร์แบตช์/สารเติมแต่ง) — เก็บและตัดสต๊อกเป็น กก.
+  const valueKg = (l) => { const v = parseFloat(l.value) || 0; return l.basis === "perPiece" ? v / 1000 : v; };
   // ตัวอย่างการคำนวณสด (ตามกติกาเดียวกับ server)
   const draft = { lines: f.lines.filter((l) => l.item).map((l) => ({ item: l.item, name: (Store.state.materials.find((m) => m.id === l.item) || {}).name || l.item, type: l.type, basis: l.basis,
-    qty: l.basis === "perPiece" ? parseFloat(l.value) || 0 : undefined, pct: l.basis !== "perPiece" ? parseFloat(l.value) || 0 : undefined })), wasteRate: parseFloat(f.wasteRate) || 0,
-    resinWeight: f.resinMix ? parseFloat(f.resinWeight) || 0 : undefined };
+    qty: l.basis === "perPiece" ? (useW && l.type === "resin" ? rwKg : valueKg(l)) : undefined, pct: l.basis !== "perPiece" ? parseFloat(l.value) || 0 : undefined })), wasteRate: parseFloat(f.wasteRate) || 0,
+    resinWeight: f.resinMix ? (useW ? rwKg : (parseFloat(f.resinWeight) || 0) / 1000) : undefined };
   const shareSum = f.lines.filter((l) => l.type === "resin").reduce((t, l) => t + (parseFloat(l.value) || 0), 0);
   // เปิด/ปิดโหมดเม็ดผสม: เปลี่ยนวิธีกำหนดของทุกบรรทัดเม็ดพร้อมกัน
   const setMix = (on) => setF((x) => ({ ...x, resinMix: on, lines: x.lines.map((l) => l.type === "resin" ? { ...l, basis: on ? "shareOfResin" : "perPiece", value: "" } : l) }));
@@ -282,22 +318,29 @@ function BomForm({ mode, rec, onCancel, onDone }) {
       const l = f.lines[i];
       if (!l.item) return setErr("รายการที่ " + (i + 1) + " ยังไม่ได้เลือกวัตถุดิบ");
       const v = parseFloat(l.value);
-      if (!(v > 0)) return setErr("รายการที่ " + (i + 1) + " ต้องกรอกปริมาณมากกว่า 0");
+      if (!(v > 0) && !(useW && l.type === "resin")) return setErr("รายการที่ " + (i + 1) + " ต้องกรอกปริมาณมากกว่า 0");
       if (l.basis === "pctOfResin" && !(v < 100)) return setErr("รายการที่ " + (i + 1) + " สัดส่วนต้องน้อยกว่า 100%");
       if (l.basis === "shareOfResin" && !(v <= 100)) return setErr("รายการที่ " + (i + 1) + " สัดส่วนเม็ดต้องไม่เกิน 100%");
     }
-    if (f.resinMix) {
-      if (!(parseFloat(f.resinWeight) > 0)) return setErr("กรุณากรอกน้ำหนักเม็ดรวมต่อชิ้น (กก./ชิ้น)");
+    if (!useW && runnerG > 0) return setErr("กรอกรันเนอร์แล้ว ต้องกรอกน้ำหนักชิ้นงาน (กรัม/ชิ้น) ด้วย");
+    if (useW && cavN >= 1 && cavN % ppu !== 0) return setErr("จำนวนคาวิตี้ (" + cavN + ") ต้องหารด้วยจำนวนชิ้นต่อชุด (" + ppu + ") ลงตัว");
+    if (useW && !wOk) return setErr("ต้องระบุจำนวนคาวิตี้ หรือเลือกแม่พิมพ์ที่มีคาวิตี้");
+    if (useW && runnerG < 0) return setErr("น้ำหนักรันเนอร์ต้องไม่ติดลบ");
+    if (f.resinMix && !useW) {
+      if (!(parseFloat(f.resinWeight) > 0)) return setErr("กรุณากรอกน้ำหนักเม็ดรวมต่อชิ้น (กรัม/ชิ้น)");
       if (Math.abs(shareSum - 100) > 1e-6) return setErr("สัดส่วนเม็ดรวมต้องเท่ากับ 100 % พอดี (ตอนนี้ " + _fmt(shareSum, 2) + " %)");
     }
+    if (f.resinMix && Math.abs(shareSum - 100) > 1e-6) return setErr("สัดส่วนเม็ดรวมต้องเท่ากับ 100 % พอดี (ตอนนี้ " + _fmt(shareSum, 2) + " %)");
     const lines = f.lines.map((l) => {
       const m = Store.state.materials.find((x) => x.id === l.item);
-      const v = parseFloat(l.value);
+      const v = l.basis === "perPiece" ? (useW && l.type === "resin" ? rwKg : valueKg(l)) : parseFloat(l.value);
       return { item: l.item, name: m ? m.name : l.item, type: l.type, basis: l.basis, ...(l.basis === "perPiece" ? { qty: v } : { pct: v }), unit: "KG/PCS" };
     });
     const body = { ...(editing ? rec : {}), productCode: f.productCode, name: f.name.trim(), color: f.color.trim(), mold: f.mold, status: f.status,
       wasteRate: parseFloat(f.wasteRate) || 0, packaging: f.packaging.trim(), lines };
-    if (f.resinMix) body.resinWeight = parseFloat(f.resinWeight); else delete body.resinWeight;
+    if (f.resinMix) body.resinWeight = useW ? rwKg : parseFloat(f.resinWeight) / 1000; else delete body.resinWeight;
+    if (useW) Object.assign(body, { partWeight: partG, runnerWeight: runnerG, cavities: cavN, piecesPerUnit: ppu, regrindItem: f.regrindItem || undefined });
+    else { delete body.partWeight; delete body.runnerWeight; delete body.cavities; delete body.piecesPerUnit; delete body.regrindItem; }
     if (editing) body.changeReason = changeReason.trim();
     if (!editing) {
       let n = Store.state.boms.filter((b) => b.productCode === f.productCode).length + 1;
@@ -320,7 +363,7 @@ function BomForm({ mode, rec, onCancel, onDone }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <div style={{ gridColumn: "1 / -1" }}>
           <label className="field-label">สินค้า *</label>
-          <select className="select" value={f.productCode} disabled={editing} onChange={(e) => set("productCode", e.target.value)}>
+          <select className="select" value={f.productCode} disabled={editing} onChange={(e) => pickProduct(e.target.value)}>
             <option value="">— เลือกสินค้าสำเร็จรูป —</option>
             {Store.state.finished.map((p) => <option key={p.id} value={p.code}>{p.code} · {p.name}</option>)}
           </select>
@@ -344,7 +387,7 @@ function BomForm({ mode, rec, onCancel, onDone }) {
         </div>
         <div>
           <label className="field-label">แม่พิมพ์ตั้งต้น (ไม่บังคับ)</label>
-          <select className="select" value={f.mold} onChange={(e) => set("mold", e.target.value)}>
+          <select className="select" value={f.mold} onChange={(e) => pickMold(e.target.value)}>
             <option value="">—</option>
             {Store.state.molds.map((m) => <option key={m.id} value={m.id}>{m.id} · {m.name}</option>)}
           </select>
@@ -359,19 +402,53 @@ function BomForm({ mode, rec, onCancel, onDone }) {
         </div>
       </div>
 
+      <div style={{ marginTop: 16, padding: 12, border: "1px solid var(--border)", borderRadius: 10 }}>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>น้ำหนักชิ้นงานและรันเนอร์ (กรัม)</div>
+        <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginBottom: 8 }}>กรอกแล้วระบบคำนวณเม็ดต่อชิ้นให้เอง = (ชิ้นงาน + รันเนอร์ ÷ คาวิตี้) · รันเนอร์เป็นน้ำหนักต่อ 1 ช็อต (ใส่ 0 ถ้าเป็นรันเนอร์ร้อน) · ไม่กรอก = กรอกปริมาณเม็ดเองแบบเดิม</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
+          <div><label className="field-label">น้ำหนักชิ้นงาน (กรัม/ชิ้น)</label>
+            <input type="number" step="any" min="0" className="input num" value={f.partWeight} placeholder="เช่น 3" onChange={(e) => set("partWeight", e.target.value)}/></div>
+          <div><label className="field-label">จำนวนคาวิตี้{moldCav ? " (แม่พิมพ์: " + moldCav + ")" : ""}</label>
+            <input type="number" step="1" min="1" className="input num" value={f.cavities} placeholder={moldCav ? String(moldCav) : "เช่น 6"} onChange={(e) => set("cavities", e.target.value)}/></div>
+          <div><label className="field-label">จำนวนชิ้นต่อ 1 ชุด/หน่วยสินค้า</label>
+            <input type="number" step="1" min="1" className="input num" value={f.piecesPerUnit} onChange={(e) => setPpu(e.target.value)}/>
+            <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 3 }}>ขายเป็นชิ้น = 1 · ขายเป็นชุด (เช่น ซ้าย+ขวา) = 2</div></div>
+          <div><label className="field-label">น้ำหนักรันเนอร์ (กรัม/ช็อต)</label>
+            <input type="number" step="any" min="0" className="input num" value={f.runnerWeight} placeholder="0 = ไม่มี / รันเนอร์ร้อน" onChange={(e) => set("runnerWeight", e.target.value)}/></div>
+        </div>
+        {!useW && runnerG > 0 && <div style={{ marginTop: 8, fontSize: 12.5, color: "var(--danger)" }}>กรอกรันเนอร์แล้ว ต้องกรอกน้ำหนักชิ้นงานด้วย ระบบถึงจะคำนวณเม็ดให้</div>}
+        {useW && runnerG > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <label className="field-label">รันเนอร์ที่บดแล้วเก็บเข้าสต๊อกเป็น (ถ้ายังบดไม่ทัน ยอดจะรอใช้ในงานถัดไป)</label>
+            <select className="select" value={f.regrindItem} onChange={(e) => set("regrindItem", e.target.value)}>
+              <option value="">{f.lines.some((l) => l.type === "regrind" && l.item) ? "— ใช้เศษรีไซเคิลในสูตรนี้ —" : "— อัตโนมัติ: เม็ดรีไซเคิลเกรดเดียวกับเม็ดหลัก (ไม่มีจะสร้างให้) —"}</option>
+              {mats.filter((m) => m.recycledFrom || m.type === "เศษรีไซเคิล").map((m) => <option key={m.id} value={m.id}>{m.code} · {m.name}{m.recycledFrom ? " (รีไซเคิลของ " + m.recycledFrom + ")" : ""}</option>)}
+            </select>
+          </div>
+        )}
+        {useW && (
+          <div style={{ marginTop: 8, fontSize: 12.5, color: wOk ? "var(--text-primary)" : "var(--danger)" }}>
+            {wOk
+              ? <>น้ำหนักต่อช็อต <b>{_fmt(partG * cavN + runnerG, 2)}</b> กรัม{ppu > 1 && <> · 1 ช็อตได้ <b>{_fmt(cavN / ppu, 0)}</b> ชุด (ชุดละ {ppu} ชิ้น)</>} · รันเนอร์เฉลี่ย <b>{_fmt(runnerPc, 3)}</b> กรัม/ชิ้น · เม็ดที่ใช้จริง <b>{_fmt(rwKg * 1000, 3)}</b> กรัม/{ppu > 1 ? "ชุด" : "ชิ้น"} (= <b>{_fmt(rwKg * 1000, 2)}</b> กก. ต่อ 1,000 {ppu > 1 ? "ชุด" : "ชิ้น"})</>
+              : "ต้องระบุจำนวนคาวิตี้ หรือเลือกแม่พิมพ์ที่มีคาวิตี้"}
+          </div>
+        )}
+      </div>
+
       <label className="field-label" style={{ marginTop: 16 }}>รายการวัตถุดิบ *</label>
       <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginBottom: 8, fontSize: 12.5 }}>
         <label style={{ display: "flex", gap: 6, alignItems: "center", cursor: "pointer" }}>
           <input type="checkbox" checked={f.resinMix} onChange={(e) => setMix(e.target.checked)}/> ผสมเม็ดหลายเกรด (กำหนดเป็น % ของเม็ดรวม เช่น PP1100 80% + PP4510 20%)
         </label>
         {f.resinMix && <label style={{ display: "flex", gap: 6, alignItems: "center" }}>น้ำหนักเม็ดรวม/ชิ้น (ไม่รวมมาสเตอร์แบตช์)
-          <input type="number" step="any" min="0" className="input num" style={{ width: 100, height: 32, textAlign: "right" }} value={f.resinWeight} onChange={(e) => set("resinWeight", e.target.value)}/> กก.</label>}
+          {useW ? <span className="num" style={{ width: 100, textAlign: "right", fontWeight: 600 }}>{_fmt(rwKg * 1000, 3)}</span>
+            : <input type="number" step="any" min="0" className="input num" style={{ width: 100, height: 32, textAlign: "right" }} value={f.resinWeight} onChange={(e) => set("resinWeight", e.target.value)}/>} {useW ? "กรัม (คำนวณจากด้านบน)" : "กรัม"}</label>}
         {f.resinMix && <span style={{ color: Math.abs(shareSum - 100) > 1e-6 ? "var(--danger)" : "var(--success)" }}>สัดส่วนเม็ดรวม {_fmt(shareSum, 2)} % {Math.abs(shareSum - 100) > 1e-6 ? "(ต้องเป็น 100)" : "✓"}</span>}
       </div>
-      <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginBottom: 6 }}>เม็ดพลาสติกกรอกเป็น กก./ชิ้น · มาสเตอร์แบตช์/สารเติมแต่งกรอกเป็น กก./ชิ้น หรือ % ของน้ำหนักเม็ดก็ได้ · เศษรีไซเคิลกรอกเป็น % ของเม็ด (แทนเม็ดใหม่) — ถ้าจะใช้ ให้สร้างวัตถุดิบ "เศษบด" ในคลังก่อน</div>
+      <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginBottom: 6 }}>กรอกน้ำหนักชิ้นงานด้านบนแล้ว แถวเม็ดเลือกแค่วัตถุดิบ ปริมาณคำนวณให้เอง · มาสเตอร์แบตช์/สารเติมแต่งกรอกเป็น กรัม/ชิ้น หรือ % ของน้ำหนักเม็ด · สูตรเก่าที่ไม่กรอกน้ำหนักชิ้นงานยังกรอกปริมาณเม็ดเองได้ · สั่งซื้อและสต๊อกเป็น กก. · เศษรีไซเคิลกรอกเป็น % ของเม็ด (แทนเม็ดใหม่) — ถ้าจะใช้ ให้สร้างวัตถุดิบ "เศษบด" ในคลังก่อน</div>
       <div style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
         <div style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 90px 90px 28px", gap: 8, padding: "8px 10px", background: "var(--bg-subtle)", fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>
-          <div>วัตถุดิบ</div><div>ชนิด</div><div>กำหนดเป็น</div><div style={{ textAlign: "right" }}>ค่า</div><div style={{ textAlign: "right" }}>กก./ชิ้น</div><div/>
+          <div>วัตถุดิบ</div><div>ชนิด</div><div>กำหนดเป็น</div><div style={{ textAlign: "right" }}>ค่า</div><div style={{ textAlign: "right" }}>กรัม/ชิ้น</div><div/>
         </div>
         {f.lines.map((l, i) => (
           <div key={i} style={{ display: "grid", gridTemplateColumns: "1.6fr 1fr 1fr 90px 90px 28px", gap: 8, padding: "8px 10px", borderTop: "1px solid var(--border)", alignItems: "center" }}>
@@ -385,11 +462,13 @@ function BomForm({ mode, rec, onCancel, onDone }) {
             </select>
             {l.type === "masterbatch" || l.type === "additive"
               ? <select className="select" style={{ height: 34, padding: "0 6px" }} value={l.basis} onChange={(e) => setLine(i, { basis: e.target.value })}>
-                  <option value="perPiece">กก./ชิ้น</option><option value="pctOfResin">% ของเม็ด</option>
+                  <option value="perPiece">กรัม/ชิ้น</option><option value="pctOfResin">% ของเม็ด</option>
                 </select>
-              : <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{l.type === "regrind" ? "% ของเม็ด" : l.type === "resin" ? (f.resinMix ? "% ของเม็ดรวม" : "กก./ชิ้น") : "กก./ชิ้น"}</div>}
-            <input type="number" step="any" min="0" className="input num" style={{ height: 34, textAlign: "right" }} value={l.value} onChange={(e) => setLine(i, { value: e.target.value })}/>
-            <div className="num" style={{ textAlign: "right", fontSize: 12 }}>{_fmt((resolved[draft.lines.findIndex((d) => d.item === l.item && d.type === l.type)] || {}).qty || 0, 5)}</div>
+              : <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{l.type === "regrind" ? "% ของเม็ด" : l.type === "resin" ? (f.resinMix ? "% ของเม็ดรวม" : (useW ? "คำนวณอัตโนมัติ" : "กรัม/ชิ้น")) : "กรัม/ชิ้น"}</div>}
+            {useW && l.type === "resin" && !f.resinMix
+              ? <div style={{ textAlign: "right", fontSize: 11.5, color: "var(--text-tertiary)" }}>อัตโนมัติ</div>
+              : <input type="number" step="any" min="0" className="input num" style={{ height: 34, textAlign: "right" }} value={l.value} onChange={(e) => setLine(i, { value: e.target.value })}/>}
+            <div className="num" style={{ textAlign: "right", fontSize: 12 }}>{_fmt(((resolved[draft.lines.findIndex((d) => d.item === l.item && d.type === l.type)] || {}).qty || 0) * 1000, 3)}</div>
             <button type="button" className="icon-btn" style={{ width: 26, height: 26 }} onClick={() => set("lines", f.lines.length > 1 ? f.lines.filter((_, idx) => idx !== i) : f.lines)} title="ลบ"><I.X size={13}/></button>
           </div>
         ))}
@@ -533,6 +612,13 @@ function MaintenanceCalendar() {
 // ================= รายงานภาษี ภพ.30 / ภงด.53 (จากเอกสารจริง) =================
 function TaxReport({ month }) {
   useStore();
+  const [whtExp, setWhtExp] = useState(null);
+  const taxRole = Store.user() ? Store.user().role : null;
+  const canWht = taxRole === "admin" || taxRole === "accounting";
+  const markPaidFromReport = (id) => {
+    if (!window.confirm("บันทึกว่าจ่ายเงินรายการ " + id + " แล้ว (วันที่ " + Store.today() + ") — วันที่จ่ายจะใช้เป็นวันที่ในหนังสือรับรองหัก ณ ที่จ่าย")) return;
+    runAction(() => Store.update("expenses", id, { status: "paid", paidDate: Store.today(), paidBy: Store.userName() }, "id", "บันทึกจ่ายชำระ"), "บันทึกจ่าย " + id + " แล้ว");
+  };
   const ym = month || Store.today().slice(0, 7);
   const m = Analytics.month(ym);
   const sales = m.invoices.filter((d) => d.vatOn).map((d) => ({ date: d.date, doc: d.id, customer: (d.customerSnap && d.customerSnap.name) || d.customerName, taxId: (d.customerSnap && d.customerSnap.taxId) || "—", subtotal: d.subtotal, vat: d.vat }));
@@ -564,8 +650,32 @@ function TaxReport({ month }) {
       </div>
       <div className="card">
         <div className="card-head"><div><div className="card-title">ภาษีหัก ณ ที่จ่าย (ภงด.53)</div><div className="card-sub">รวม {baht(whtTotal, 2)}</div></div>
-          <div className="card-actions"><button className="btn btn-outline btn-sm" disabled={!wht.length} onClick={() => exportCSV(`ภงด53-${ym}.csv`, ["วันที่", "เลขที่", "ผู้รับเงิน", "ประเภทเงินได้", "ฐานภาษี", "อัตรา %", "ภาษีที่หัก"], wht.map((w) => [w.date, w.doc, w.payee, w.type, w.base, w.rate, w.base * w.rate / 100]))}><I.Download size={13}/> CSV</button></div></div>
-        {tbl(["วันที่", "เลขที่", "ผู้รับเงิน", "ประเภท", "ฐานภาษี", "ภาษีที่หัก"], wht.map((w) => [w.date, w.doc, w.payee, w.type, _fmt(w.base, 2), `${_fmt(w.base * w.rate / 100, 2)} (${w.rate}%)`]), "ไม่มีรายการหัก ณ ที่จ่ายในเดือนนี้")}
+          <div className="card-actions"><button className="btn btn-outline btn-sm" disabled={!wht.length} onClick={() => exportCSV(`ภงด53-${ym}.csv`, ["วันที่", "เลขที่", "ผู้รับเงิน", "ประเภทเงินได้", "ฐานภาษี", "อัตรา %", "ภาษีที่หัก", "เลขที่หนังสือรับรอง"], wht.map((w) => { const ex = Store.state.expenses.find((x) => x.id === w.doc); return [w.date, w.doc, w.payee, w.type, w.base, w.rate, w.base * w.rate / 100, ex && ex.whtCert ? ex.whtCert.no : ""]; }))}><I.Download size={13}/> CSV</button></div></div>
+        <table className="table" style={{ fontSize: 12.5 }}>
+          <thead><tr><th>วันที่</th><th>เลขที่</th><th>ผู้รับเงิน</th><th>ประเภท</th><th className="num">ฐานภาษี</th><th className="num">ภาษีที่หัก</th><th>หนังสือรับรอง (50 ทวิ)</th></tr></thead>
+          <tbody>
+            {wht.map((w) => {
+              const e = Store.state.expenses.find((x) => x.id === w.doc);
+              const cert = e && e.whtCert;
+              return (
+                <tr key={w.doc}>
+                  <td>{w.date}</td><td className="mono">{w.doc}</td><td>{w.payee}</td><td>{w.type}</td>
+                  <td className="num">{_fmt(w.base, 2)}</td><td className="num">{_fmt(w.base * w.rate / 100, 2)} ({w.rate}%)</td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    {!e ? "—" : cert
+                      ? <button className="btn btn-outline btn-sm" onClick={() => setWhtExp(e)}><I.Printer size={13}/> {cert.no}</button>
+                      : e.status === "paid"
+                        ? <button className="btn btn-primary btn-sm" onClick={() => setWhtExp(e)}>ออก 50 ทวิ</button>
+                        : <><span style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginRight: 6 }}>ยังไม่จ่ายเงิน</span>{canWht && <button className="btn btn-outline btn-sm" onClick={() => markPaidFromReport(e.id)}>บันทึกจ่าย</button>}</>}
+                  </td>
+                </tr>
+              );
+            })}
+            {!wht.length && <EmptyRow cols={7} text="ไม่มีรายการหัก ณ ที่จ่ายในเดือนนี้"/>}
+          </tbody>
+        </table>
+        <div style={{ padding: "8px 16px 12px", fontSize: 11.5, color: "var(--text-tertiary)" }}>ออกหนังสือรับรอง (50 ทวิ) ได้เมื่อบันทึกว่าจ่ายเงินแล้ว — วันที่จ่ายใช้เป็นวันที่ในหนังสือ</div>
+        {whtExp && <WhtIssueModal exp0={whtExp} onClose={() => setWhtExp(null)}/>}
       </div>
     </>
   );

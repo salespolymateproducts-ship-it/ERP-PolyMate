@@ -355,6 +355,8 @@ function MaterialTable({ canManage, onAdd, onEdit }) {
                   <td className="mono"><b>{m.code}</b></td>
                   <td>
                     <div style={{ fontSize: 13, fontWeight: 500 }}>{m.name}</div>
+                    {m.recycledFrom && (() => { const v = Store.state.materials.find((x) => x.id === m.recycledFrom); return <div style={{ fontSize: 11, color: "var(--success)", marginTop: 2 }}>♻ รีไซเคิลของ {v ? v.code + " · " + v.name : m.recycledFrom} (เกรดเดียวกัน)</div>; })()}
+                    {(() => { const rc = Store.state.materials.filter((x) => x.recycledFrom === m.id); return rc.length ? <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>มีรีไซเคิลเกรดเดียวกัน: {rc.map((x) => x.code + " " + _fmt(x.stock, 1) + " " + x.unit).join(", ")}</div> : null; })()}
                   </td>
                   <td><TypeBadge type={m.type}/></td>
                   <td className="mono" style={{ fontSize: 12 }}>{m.location}</td>
@@ -388,7 +390,7 @@ function MaterialTable({ canManage, onAdd, onEdit }) {
 }
 
 // ---------- ทะเบียนวัตถุดิบ: ตัวช่วยตรวจรหัสซ้ำ / การอ้างอิง ----------
-const MAT_TYPES = ["เม็ดพลาสติก", "Masterbatch", "Additive", "สี-เม็ด", "สี-ผง", "เหล็ก", "บรรจุภัณฑ์", "อื่น ๆ"];
+const MAT_TYPES = ["เม็ดพลาสติก", "เศษรีไซเคิล", "Masterbatch", "Additive", "สี-เม็ด", "สี-ผง", "เหล็ก", "บรรจุภัณฑ์", "อื่น ๆ"];
 const MAT_UNITS = ["KG", "G", "L", "PCS", "BAG", "ROLL", "SET", "BOX"];
 const matKey = (s) => String(s == null ? "" : s).replace(/\s+/g, "").toUpperCase(); // ไม่สนตัวพิมพ์เล็ก/ใหญ่และช่องว่าง
 
@@ -462,8 +464,8 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
   const [form, setForm] = useState(editing ? {
     code: rec.code, name: rec.name, type: rec.type || "เม็ดพลาสติก", unit: rec.unit || "KG",
     min: String(rec.min == null ? "" : rec.min), max: String(rec.max == null ? "" : rec.max),
-    openingCost: "", supplier: rec.supplier || "", location: rec.location || "", opening: "",
-  } : { code: "", name: "", type: "เม็ดพลาสติก", unit: "KG", min: "", max: "", openingCost: "", supplier: "", location: "", opening: "" });
+    openingCost: "", supplier: rec.supplier || "", location: rec.location || "", opening: "", recycledFrom: rec.recycledFrom || "",
+  } : { code: "", name: "", type: "เม็ดพลาสติก", unit: "KG", min: "", max: "", openingCost: "", supplier: "", location: "", opening: "", recycledFrom: "" });
   const [saving, setSaving] = useState(false);
   const [adj, setAdj] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -495,6 +497,7 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
       const clean = {
         name: form.name.trim(), type: form.type, unit: form.unit, min, max,
         supplier: form.supplier.trim(), location: form.location.trim(),
+        recycledFrom: form.type === "เศษรีไซเคิล" && form.recycledFrom ? form.recycledFrom : undefined,
       };
       if (!editing) {
         // ตรวจซ้ำอีกครั้งในธุรกรรม (ข้อมูลล่าสุด) + ต้องไม่มีประวัติเคลื่อนไหวค้างของรหัสนี้
@@ -550,6 +553,16 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
           <label className="field-label">ชื่อวัตถุดิบ *</label>
           <input className="input" placeholder="เช่น PP Homopolymer (HMC H1300)" value={form.name} onChange={(e) => set("name", e.target.value)}/>
         </div>
+        {form.type === "เศษรีไซเคิล" && (
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label className="field-label">รีไซเคิลของเม็ดเกรดไหน (เกรดเดียวกัน)</label>
+            <select className="select" value={form.recycledFrom} onChange={(e) => set("recycledFrom", e.target.value)}>
+              <option value="">— ไม่ระบุ —</option>
+              {Store.state.materials.filter((x) => !x.recycledFrom && x.type !== "เศษรีไซเคิล" && (!editing || x.id !== rec.id)).map((x) => <option key={x.id} value={x.id}>{x.code} · {x.name}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>ระบุแล้วระบบรู้ว่าเป็นเม็ดเกรดเดียวกับเม็ดใหม่ (เช่น ABS รีไซเคิล = ABS) และโชว์ยอดรีไซเคิลคู่กับเม็ดใหม่ในหน้าสต๊อก</div>
+          </div>
+        )}
         <div>
           <label className="field-label">หน่วยนับ *</label>
           <select className="select" value={form.unit} disabled={locked} onChange={(e) => set("unit", e.target.value)}>
@@ -678,6 +691,7 @@ function MaterialForm({ mode, rec, onCancel, onDone }) {
 function TypeBadge({ type }) {
   const map = {
     "เม็ดพลาสติก": "info",
+    "เศษรีไซเคิล": "success",
     "Masterbatch": "violet",
     "Additive": "warning",
     "สี-เม็ด": "violet",

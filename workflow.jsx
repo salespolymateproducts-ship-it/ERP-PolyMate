@@ -561,6 +561,46 @@ const Workflow = (function () {
     });
   }
 
+  // ---------------- หนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ) ที่ลูกค้าออกให้เรา ----------------
+  // ผูกกับใบเสร็จที่มีหัก ณ ที่จ่าย: doc.whtCert = { no, date, amount, note, by, at } · cert = null → ลบ (ยังไม่ได้รับ)
+  const WHT_CERT_DAYS = 30; // ใบเสร็จที่ยังไม่ได้รับหนังสือเกินกี่วันถือว่าเกินกำหนด
+  function whtCertStatus(rc) {
+    if (!rc || rc.type !== "RC" || !isLive(rc) || !(rc.wht > 0)) return null;
+    if (rc.whtCert) return { state: "received", cert: rc.whtCert };
+    const days = Math.floor((new Date(S.today() + "T00:00:00") - new Date(rc.date + "T00:00:00")) / 86400000);
+    return { state: "pending", days, overdue: days > WHT_CERT_DAYS };
+  }
+  function setWhtCert(rcId, cert) {
+    return S.tx("whtCert", () => {
+      const rc = mustGet(rcId);
+      const u = S.user();
+      if (!(u && (u.role === "admin" || u.role === "accounting"))) fail("เฉพาะผู้ดูแลระบบและฝ่ายบัญชีบันทึกหนังสือรับรองหัก ณ ที่จ่ายได้");
+      if (rc.type !== "RC") fail("บันทึกหนังสือรับรองได้เฉพาะใบเสร็จรับเงิน");
+      if (!isLive(rc)) fail("ใบเสร็จต้องอนุมัติแล้วและไม่ถูกยกเลิก");
+      if (!(rc.wht > 0)) fail("ใบเสร็จนี้ไม่มีหัก ณ ที่จ่าย");
+      if (cert == null) {
+        if (!rc.whtCert) return rc;
+        const old = rc.whtCert; delete rc.whtCert;
+        pushHistory(rc, "wht", "received", "pending", "ลบหนังสือรับรองหัก ณ ที่จ่าย " + old.no);
+        S.log("WHT_CERT", "ใบเสร็จ", rc.id, "ลบหนังสือรับรอง " + old.no);
+        return rc;
+      }
+      const no = String(cert.no || "").trim();
+      const amount = r2(Number(cert.amount));
+      if (!no) fail("กรุณาระบุเลขที่หนังสือรับรอง");
+      if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(cert.date || "")) fail("วันที่หนังสือรับรองไม่ถูกต้อง");
+      if (!(amount > 0)) fail("ยอดภาษีที่ถูกหักต้องมากกว่า 0");
+      if (amount > r2(rc.subtotal) + 0.005) fail("ยอดภาษีที่ถูกหักมากกว่ามูลค่าก่อนภาษีของใบเสร็จ");
+      const dup = docs().find((d) => d.type === "RC" && d.id !== rc.id && d.customer === rc.customer && d.whtCert && String(d.whtCert.no).trim().toLowerCase() === no.toLowerCase());
+      if (dup) fail("เลขที่หนังสือ " + no + " ถูกบันทึกกับ " + dup.id + " ของลูกค้ารายนี้แล้ว");
+      const had = !!rc.whtCert;
+      rc.whtCert = { no, date: cert.date, amount, note: String(cert.note || "").trim(), by: S.userName(), at: S.now() };
+      pushHistory(rc, "wht", had ? "received" : "pending", "received", (had ? "แก้ไข" : "บันทึก") + "หนังสือรับรองหัก ณ ที่จ่าย " + no + " ยอด " + amount.toLocaleString() + (Math.abs(amount - rc.wht) > 0.005 ? " (ต่างจากที่คำนวณ " + rc.wht.toLocaleString() + ")" : ""));
+      S.log("WHT_CERT", "ใบเสร็จ", rc.id, (had ? "แก้ไข" : "บันทึก") + "หนังสือรับรอง " + no + " ยอด " + amount);
+      return rc;
+    });
+  }
+
   // ---------------- ค่าเริ่มต้นฟอร์ม ----------------
   function blank(type) {
     return { type, customer: "", date: S.today(), due: "", refNo: "", note: "", vatOn: !NO_VAT_DEFAULT.includes(type), whtRate: 0, billDisc: 0,
@@ -573,7 +613,7 @@ const Workflow = (function () {
 
   return {
     PREFIX, NEXT, TYPES, VAT_RATE, STATUS_LABEL,
-    calc, lineAmount, get, children, parents, related, remainingLines, remainingValue, rcAmounts, paymentInfo, woUsed,
+    calc, lineAmount, get, children, parents, related, remainingLines, remainingValue, rcAmounts, paymentInfo, woUsed, setWhtCert, whtCertStatus, WHT_CERT_DAYS,
     statusInfo, can, canApproveType, canEditType, nextTypes, openSources, blank, addDays,
     saveDraft, submit, approve, reject, cancel, remove, convert, setShipStatus, createWorkOrders,
     isLive, isActive, label,

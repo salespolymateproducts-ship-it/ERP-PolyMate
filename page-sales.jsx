@@ -431,8 +431,22 @@ function DocPaper({ doc }) {
   const pay = doc.type === "INV" ? Workflow.paymentInfo(doc) : null;
   // ใบส่งสินค้า / ใบกำกับภาษี / ใบวางบิล: พิมพ์ออกมา 2 ฉบับ — ต้นฉบับ + สำเนา (เอกสารอื่นพิมพ์ฉบับเดียว)
   const hasCopies = ["DO", "INV", "BN"].includes(doc.type);
+  // ใบเสร็จที่ลูกค้าหัก ณ ที่จ่าย: สถานะหนังสือรับรอง (50 ทวิ) + ทางลัดบันทึก (ไม่แสดงตอนพิมพ์)
+  const whtSt = doc.type === "RC" ? Workflow.whtCertStatus(doc) : null;
+  const [whtOpen, setWhtOpen] = useState(false);
+  const whtRole = Store.user() ? Store.user().role : null;
   return (
     <div style={{ padding: 18, background: "var(--bg)", overflowX: "auto" }}>
+      {whtSt && (
+        <div className="no-print" style={{ marginBottom: 10, padding: "9px 12px", borderRadius: 8, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", fontSize: 12.5,
+          background: whtSt.state === "received" ? "var(--success-subtle)" : whtSt.overdue ? "var(--danger-subtle, #fee2e2)" : "var(--amber-subtle)",
+          color: whtSt.state === "received" ? "var(--success)" : whtSt.overdue ? "var(--danger)" : "var(--amber)" }}>
+          <span style={{ fontWeight: 600 }}>{whtSt.state === "received" ? "รับหนังสือรับรองหัก ณ ที่จ่ายแล้ว" : "รอหนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ) จากลูกค้า " + whtSt.days + " วัน" + (whtSt.overdue ? " · เกินกำหนด" : "")}</span>
+          {whtSt.state === "received" && <span>เลขที่ {whtSt.cert.no} · {whtSt.cert.date} · {_fmt(whtSt.cert.amount, 2)} บาท</span>}
+          {(whtRole === "admin" || whtRole === "accounting") && <button className="btn btn-outline btn-sm" style={{ marginLeft: "auto" }} onClick={() => setWhtOpen(true)}>{whtSt.state === "received" ? "แก้ไข" : "บันทึกหนังสือ"}</button>}
+        </div>
+      )}
+      {whtOpen && <WhtCertModal rc={doc} onClose={() => setWhtOpen(false)}/>}
       <div className="print-area a4-form" data-copies={hasCopies ? "2" : undefined} style={{ background: "white", color: "#0B1220", borderRadius: 8, padding: "28px 32px", boxShadow: "0 2px 10px rgba(0,0,0,0.06)", fontFamily: "var(--font-thai)", fontSize: 12, position: "relative" }}>
         {doc.status === "cancelled" && <div style={{ position: "absolute", top: 110, left: "50%", transform: "translateX(-50%) rotate(-14deg)", border: "4px solid #DC2626", color: "#DC2626", fontSize: 44, fontWeight: 800, padding: "4px 28px", borderRadius: 10, opacity: 0.32, pointerEvents: "none" }}>ยกเลิก</div>}
         {(doc.status === "draft" || doc.status === "pending") && <div style={{ position: "absolute", top: 110, left: "50%", transform: "translateX(-50%) rotate(-14deg)", border: "4px solid #94A3B8", color: "#94A3B8", fontSize: 40, fontWeight: 800, padding: "4px 28px", borderRadius: 10, opacity: 0.35, pointerEvents: "none" }}>ฉบับร่าง</div>}

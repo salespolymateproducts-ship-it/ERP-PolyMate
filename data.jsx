@@ -139,7 +139,7 @@ const WO_STATUS = {
 // Expenses
 const EXPENSES = [];  // ข้อมูลจริงมาจาก Store
 
-const EXPENSE_CATEGORIES = ["วัตถุดิบ", "สินค้าซื้อมาขาย", "สีผสม", "ค่าแรง", "ค่าไฟ", "ค่าซ่อมเครื่องจักร", "ค่าแพ็คสินค้า", "ค่าขนส่ง", "ค่าแม่พิมพ์", "ค่าใช้จ่ายทั่วไป"];
+const EXPENSE_CATEGORIES = ["วัตถุดิบ", "สินค้าซื้อมาขาย", "สีผสม", "ค่าแรง", "ค่าไฟ", "ค่าซ่อมเครื่องจักร", "ค่าแพ็คสินค้า", "ค่าขนส่ง", "ค่าแม่พิมพ์", "ค่าบริการ/จ้างทำของ", "ค่าใช้จ่ายทั่วไป"];
 
 const EMPLOYEES = [
   { id: "EMP-001", name: "สมชาย ใจดี", role: "หัวหน้าฝ่ายผลิต", dept: "Production", phone: "081-234-5678", joined: "2018-03-12", salary: 38000 },
@@ -208,7 +208,7 @@ const ROLES = {
     color: "#0EA5C7",
     description: "บิลต่างๆ · ภาษี · คงคลัง · ขนส่ง · ข้อมูลซื้อขาย",
     user: { name: "อรอนงค์ เลิศกุล", initial: "อร", title: "บัญชี" },
-    pages: ["dashboard", "sales", "customer-po", "customers", "inventory", "shipping", "accounting"],
+    pages: ["dashboard", "sales", "customer-po", "customers", "inventory", "shipping", "accounting", "finance"],
     canEdit: ["sales", "accounting"],
     approve: ["BN", "INV", "RC", "PAY"],
   },
