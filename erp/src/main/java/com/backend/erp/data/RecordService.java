@@ -242,6 +242,26 @@ public class RecordService {
 			i++;
 			if (!(o instanceof Map<?, ?> lm)) throw ApiException.badRequest("รายการที่ " + i + " ไม่ถูกต้อง");
 			@SuppressWarnings("unchecked") Map<String, Object> line = new LinkedHashMap<>((Map<String, Object>) lm);
+			// รายการบริการ/จ้างทำของ (เช่น ซ่อมแม่พิมพ์ ค่าขนส่ง): ไม่เข้าสต๊อก — ต้องมีรายละเอียด จำนวน และราคา; ลงเป็นค่าใช้จ่าย/เจ้าหนี้ตอนตรวจรับงาน
+			if ("service".equals(Json.s(line.get("itemType")))) {
+				String desc = Json.s(line.get("name")).trim();
+				if (desc.isEmpty()) throw ApiException.badRequest("รายการที่ " + i + " (บริการ) ต้องระบุรายละเอียดงาน");
+				if (desc.length() > 300) throw ApiException.badRequest("รายการที่ " + i + " รายละเอียดงานยาวเกิน 300 ตัวอักษร");
+				double sq = Json.num(line.get("qty")), sp = Json.num(line.get("price"));
+				if (!(sq > 0) || Double.isInfinite(sq)) throw ApiException.badRequest("รายการที่ " + i + " จำนวนต้องมากกว่า 0");
+				if (!(sp > 0) || Double.isInfinite(sp)) throw ApiException.badRequest("รายการที่ " + i + " ราคาต่อหน่วยต้องมากกว่า 0");
+				double samount = r2(sq * sp);
+				line.remove("item");
+				line.put("itemType", "service");
+				line.put("name", desc);
+				line.put("qty", sq);
+				line.put("price", sp);
+				line.put("amount", samount);
+				if (line.get("unit") == null || String.valueOf(line.get("unit")).isBlank()) line.put("unit", "งาน");
+				subtotal += samount;
+				out.add(line);
+				continue;
+			}
 			String item = line.get("item") == null ? "" : String.valueOf(line.get("item")).trim();
 			if (item.isEmpty() || "custom".equals(item)) throw ApiException.badRequest("รายการที่ " + i + " ต้องเลือกวัตถุดิบหรือสินค้าจากทะเบียน (ไม่รองรับรายการพิมพ์เอง เพราะรับของเข้าสต๊อกไม่ได้)");
 			boolean isProduct = "product".equals(Json.s(line.get("itemType")));

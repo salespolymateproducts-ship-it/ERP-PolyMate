@@ -178,6 +178,7 @@ public class WorkflowService {
 		List<String> matchedColl = new ArrayList<>();
 		List<Double> matchedQty = new ArrayList<>();
 		List<Double> matchedPrice = new ArrayList<>();
+		int serviceLines = 0;
 		int idx = 0;
 		for (Object lo : lines) {
 			idx++;
@@ -186,6 +187,7 @@ public class WorkflowService {
 			double qty = Json.num(line.get("qty"));
 			String label = Json.s(line.get("name")).isBlank() ? Json.s(line.get("item")) : Json.s(line.get("name"));
 			if (!(qty > 0)) throw ApiException.unprocessable("PO_LINE_INVALID", poId + " รายการที่ " + idx + " (" + label + ") จำนวนต้องมากกว่า 0");
+			if ("service".equals(Json.s(line.get("itemType")))) { serviceLines++; continue; } // งานบริการ: ไม่รับเข้าสต๊อก (ลงค่าใช้จ่ายด้านล่าง)
 			boolean isProduct = "product".equals(Json.s(line.get("itemType")));
 			Map<String, Object> m;
 			if (isProduct) {
@@ -254,9 +256,9 @@ public class WorkflowService {
 			Map<String, Object> exp = new LinkedHashMap<>();
 			exp.put("id", expId);
 			exp.put("date", LocalDate.now(BKK).toString());
-			exp.put("category", matchedColl.stream().allMatch("finished"::equals) ? "สินค้าซื้อมาขาย" : "วัตถุดิบ");
+			exp.put("category", matchedColl.isEmpty() ? "ค่าบริการ/จ้างทำของ" : matchedColl.stream().allMatch("finished"::equals) ? "สินค้าซื้อมาขาย" : "วัตถุดิบ");
 			exp.put("vendor", po.get("supplierName"));
-			exp.put("desc", "รับของตาม " + poId + " (" + lines.size() + " รายการ)");
+			exp.put("desc", (matchedColl.isEmpty() ? "ตรวจรับงานตาม " : "รับของตาม ") + poId + " (" + lines.size() + " รายการ)");
 			exp.put("amount", po.get("subtotal"));
 			exp.put("vat", po.get("vat"));
 			exp.put("whtRate", po.get("whtRate") == null ? 0 : po.get("whtRate"));
@@ -265,7 +267,7 @@ public class WorkflowService {
 			exp.put("due", LocalDate.now(BKK).plusDays(30).toString());
 			repo.insert("expenses", expId, json.str(exp), u.username());
 		}
-		audit.log(u, "RECEIVE", "ใบสั่งซื้อ", poId, "รับเข้าสต๊อก " + received.size() + " รายการ · ตั้งเจ้าหนี้ " + expId);
+		audit.log(u, "RECEIVE", "ใบสั่งซื้อ", poId, "รับเข้าสต๊อก " + received.size() + " รายการ" + (serviceLines > 0 ? " · ตรวจรับงานบริการ " + serviceLines + " รายการ" : "") + " · ตั้งเจ้าหนี้ " + expId);
 		Map<String, Object> out = new LinkedHashMap<>();
 		out.put("ok", true);
 		out.put("received", received);
@@ -329,6 +331,55 @@ public class WorkflowService {
 				consumed.add(c);
 			}
 		}
+		// รันเนอร์ (กรัม/ช็อต) ที่ได้กลับ: ช็อต = ⌈ผลิต ÷ คาวิตี้⌉ → น้ำหนักรวมเข้าสต๊อกเศษรีไซเคิลของสูตร ตีมูลค่าที่ต้นทุนเฉลี่ยของเม็ดต่อ กก.
+		// และหักออกจากต้นทุนล็อตนี้ (เม็ดที่กลับมาใช้ซ้ำไม่ใช่ต้นทุนของชิ้นงาน — ไปเป็นต้นทุนตอนนำเศษไปใช้ต่อ)
+		double runnerKg = 0;
+		// สินค้าเป็นชุด (เช่น ซ้าย+ขวา = 2 ชิ้น/ชุด): 1 ช็อต ได้ (คาวิตี้ ÷ ชิ้นต่อชุด) ชุด → ช็อต = ผลิต(ชุด) × ชิ้นต่อชุด ÷ คาวิตี้
+		double ppu = snap.isPresent() ? Math.max(1, Json.num(snap.get().get("piecesPerUnit"))) : 1;
+		if (snap.isPresent()) {
+			Map<String, Object> sn = snap.get();
+			double rwg = Json.num(sn.get("runnerWeight")), cav = Json.num(sn.get("cavities"));
+			String target = Json.s(sn.get("regrindItem"));
+			if (rwg > 0 && cav >= 1 && !target.isEmpty()) {
+				double kg = Json.r3(Math.ceil(produced * ppu / cav) * rwg / 1000d);
+				java.util.Optional<String> ts = kg > 0 ? repo.getForUpdate("materials", target) : java.util.Optional.empty();
+				if (ts.isPresent()) {
+					double kgSum = 0, valSum = 0;
+					if (sn.get("lines") instanceof List<?> sl) for (Object lo : sl) {
+						if (!(lo instanceof Map<?, ?> l) || !"resin".equals(String.valueOf(l.get("type")))) continue;
+						java.util.Optional<String> rs = repo.get("materials", String.valueOf(l.get("item")));
+						if (rs.isEmpty()) continue;
+						kgSum += Json.num(l.get("qty"));
+						valSum += Json.num(l.get("qty")) * Json.num(json.map(rs.get()).get("cost"));
+					}
+					double unitCost = kgSum > 0 ? valSum / kgSum : 0, value = kg * unitCost;
+					Map<String, Object> rm = json.map(ts.get());
+					double stock0 = Math.max(0, Json.num(rm.get("stock"))), cost0 = Json.num(rm.get("cost")), newStock = Json.r3(stock0 + kg);
+					rm.put("stock", newStock);
+					if (unitCost > 0) {
+						double newCost = cost0 > 0 && stock0 > 0 ? r4((stock0 * cost0 + value) / newStock) : r4(unitCost);
+						if (Math.abs(newCost - cost0) > 1e-9) {
+							List<Object> hist = rm.get("costHistory") instanceof List<?> h ? new ArrayList<>(h) : new ArrayList<>();
+							Map<String, Object> he = new LinkedHashMap<>();
+							he.put("date", LocalDate.now(BKK).toString());
+							he.put("cost", newCost);
+							he.put("prev", cost0);
+							he.put("by", u.fullName());
+							he.put("ref", woId);
+							he.put("note", "รับรันเนอร์กลับจากการผลิต " + kg + " กก. @ " + r4(unitCost));
+							hist.add(he);
+							rm.put("cost", newCost);
+							rm.put("costHistory", hist);
+						}
+					}
+					save("materials", rm, u);
+					logMove(u, "IN", Json.s(rm.get("code")), kg, Json.s(rm.get("unit")), woId, "รับรันเนอร์กลับเป็นเศษรีไซเคิล (" + (long) Math.ceil(produced * ppu / cav) + " ช็อต × " + rwg + " กรัม)");
+					batchCost = Math.max(0, batchCost - value);
+					runnerKg = kg;
+					wo.put("runnerRecovered", Json.r3(Json.num(wo.get("runnerRecovered")) + kg));
+				}
+			}
+		}
 		// วัตถุดิบที่เบิกเพิ่ม/คืนเข้าใบสั่งผลิตนี้และยังไม่ถูกรวมในต้นทุน → รวมเข้าล็อตที่มีชิ้นดี (ไม่ให้สูญหายเมื่อล็อตนี้เป็น NG ทั้งหมด)
 		if (good > 0 && Math.abs(Json.num(wo.get("pendingExtraCost"))) > 1e-9) {
 			batchCost += Json.num(wo.get("pendingExtraCost"));
@@ -363,7 +414,7 @@ public class WorkflowService {
 			if (ms.isPresent()) {
 				Map<String, Object> mold = json.map(ms.get());
 				double cav = Math.max(1, mold.get("cavities") != null ? Json.num(mold.get("cavities")) : Math.max(1, Json.num(wo.get("cavities"))));
-				mold.put("shots", (long) (Json.num(mold.get("shots")) + Math.ceil(produced / cav)));
+				mold.put("shots", (long) (Json.num(mold.get("shots")) + Math.ceil(produced * ppu / cav)));
 				save("molds", mold, u);
 			}
 		}
@@ -401,6 +452,7 @@ public class WorkflowService {
 		out.put("good", good);
 		out.put("hasBom", snap.isPresent());
 		out.put("materialCost", r4(batchCost));
+		if (runnerKg > 0) out.put("runnerRecoveredKg", runnerKg);
 		if (newFgCost != null) out.put("unitCost", newFgCost);
 		if (!noCost.isEmpty()) out.put("noCost", noCost);
 		return out;

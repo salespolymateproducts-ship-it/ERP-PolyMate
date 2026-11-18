@@ -114,6 +114,12 @@ public class BomService {
 		s.put("wasteRate", Json.num(bom.get("wasteRate")));
 		s.put("packaging", bom.get("packaging"));
 		s.put("lines", resolveLines(bom));
+		// น้ำหนักชิ้นงาน/รันเนอร์ (กรัม) — ใช้ตอนบันทึกผลิตเพื่อคำนวณรันเนอร์ที่ได้กลับเป็นเศษรีไซเคิล
+		if (bom.get("partWeight") != null) s.put("partWeight", Json.num(bom.get("partWeight")));
+		if (bom.get("runnerWeight") != null) s.put("runnerWeight", Json.num(bom.get("runnerWeight")));
+		if (bom.get("cavities") != null) s.put("cavities", Json.num(bom.get("cavities")));
+		if (bom.get("piecesPerUnit") != null) s.put("piecesPerUnit", Json.num(bom.get("piecesPerUnit")));
+		if (bom.get("regrindItem") != null) s.put("regrindItem", bom.get("regrindItem"));
 		// สูตรตั้งต้น (ก่อนปรับสัดส่วนรายใบ) — ใช้คำนวณใหม่เมื่อปรับ % ของใบสั่งผลิต
 		s.put("baseLines", bom.get("lines"));
 		if (bom.get("resinWeight") != null) s.put("baseResinWeight", Json.num(bom.get("resinWeight")));
@@ -156,6 +162,7 @@ public class BomService {
 			bom.put("isDefault", false);
 		} else {
 			validateLines(bom, status.equals("active"));
+			applyWeights(u, bom);
 		}
 
 		boolean changed = cur == null || !sameJson(resolveCore(cur), resolveCore(bom));
@@ -214,6 +221,11 @@ public class BomService {
 		Map<String, Object> c = new LinkedHashMap<>();
 		c.put("lines", b.get("lines"));
 		c.put("resinWeight", b.get("resinWeight") == null ? 0 : Json.num(b.get("resinWeight")));
+		c.put("partWeight", b.get("partWeight") == null ? 0 : Json.num(b.get("partWeight")));
+		c.put("runnerWeight", b.get("runnerWeight") == null ? 0 : Json.num(b.get("runnerWeight")));
+		c.put("cavities", b.get("cavities") == null ? 0 : Json.num(b.get("cavities")));
+		c.put("piecesPerUnit", b.get("piecesPerUnit") == null ? 1 : Json.num(b.get("piecesPerUnit")));
+		c.put("regrindItem", Json.s(b.get("regrindItem")));
 		c.put("wasteRate", Json.num(b.get("wasteRate")));
 		c.put("name", b.get("name"));
 		c.put("color", b.get("color"));
@@ -283,6 +295,76 @@ public class BomService {
 			bom.remove("resinWeight");
 		}
 		bom.put("lines", out);
+	}
+
+	/**
+	 * น้ำหนักชิ้นงาน (partWeight, กรัม/ชิ้น) + รันเนอร์ (runnerWeight, กรัม/ช็อต; 0 = รันเนอร์ร้อน/ไม่มี) + จำนวนคาวิตี้
+	 * → น้ำหนักเม็ดต่อชิ้น = (ชิ้นงาน + รันเนอร์ ÷ คาวิตี้) ÷ 1000 กก. — server คำนวณเองและเขียนทับค่าเม็ดในสูตร (ไม่ให้ตัวเลขสองที่ขัดกัน)
+	 * ไม่ได้กรอกน้ำหนักชิ้นงาน = สูตรแบบเดิม (กรอกกก./ชิ้นเอง)
+	 * regrindItem = วัตถุดิบ (เศษรีไซเคิล) ที่รับรันเนอร์กลับเข้าสต๊อกตอนผลิต — ไม่ระบุ = ใช้วัตถุดิบชนิดเศษรีไซเคิลในสูตร
+	 */
+	@SuppressWarnings("unchecked")
+	private void applyWeights(AuthUser u, Map<String, Object> bom) {
+		double part = bom.get("partWeight") == null ? 0 : Json.num(bom.get("partWeight"));
+		double runner = bom.get("runnerWeight") == null ? 0 : Json.num(bom.get("runnerWeight"));
+		if (!(part > 0)) { bom.remove("partWeight"); bom.remove("runnerWeight"); bom.remove("cavities"); bom.remove("regrindItem"); bom.remove("piecesPerUnit"); return; }
+		if (Double.isInfinite(part) || !(runner >= 0) || Double.isInfinite(runner)) throw ApiException.badRequest("น้ำหนักชิ้นงาน/รันเนอร์ต้องเป็นตัวเลขไม่ติดลบ");
+		double cav = bom.get("cavities") == null ? 0 : Json.num(bom.get("cavities"));
+		if (!(cav >= 1) && !Json.s(bom.get("mold")).isBlank()) {
+			Optional<String> ms = repo.get("molds", Json.s(bom.get("mold")));
+			if (ms.isPresent()) cav = Json.num(json.map(ms.get()).get("cavities"));
+		}
+		if (!(cav >= 1) || cav != Math.floor(cav)) throw ApiException.badRequest("ต้องระบุจำนวนคาวิตี้ (จำนวนเต็มตั้งแต่ 1) หรือเลือกแม่พิมพ์ที่มีคาวิตี้");
+		// ชิ้นต่อ 1 หน่วยสินค้า (ชุด): เช่น ซ้าย+ขวา = 2 — เม็ดต่อชุด = (ชิ้นงาน + รันเนอร์ ÷ คาวิตี้) × ชิ้นต่อชุด
+		double ppu = bom.get("piecesPerUnit") == null ? 1 : Json.num(bom.get("piecesPerUnit"));
+		if (!(ppu >= 1) || ppu != Math.floor(ppu)) throw ApiException.badRequest("จำนวนชิ้นต่อชุดต้องเป็นจำนวนเต็มตั้งแต่ 1");
+		if (cav % ppu != 0) throw ApiException.badRequest("จำนวนคาวิตี้ (" + (long) cav + ") ต้องหารด้วยจำนวนชิ้นต่อชุด (" + (long) ppu + ") ลงตัว");
+		double rw = r6((part + runner / cav) * ppu / 1000d);
+		bom.put("piecesPerUnit", ppu);
+		bom.put("partWeight", part);
+		bom.put("runnerWeight", runner);
+		bom.put("cavities", cav);
+		List<Map<String, Object>> lines = (List<Map<String, Object>>) bom.get("lines");
+		long share = lines.stream().filter(l -> "resin".equals(Json.s(l.get("type"))) && SHARE.equals(Json.s(l.get("basis")))).count();
+		if (share > 0) {
+			bom.put("resinWeight", rw);
+		} else {
+			List<Map<String, Object>> resins = lines.stream().filter(l -> "resin".equals(Json.s(l.get("type")))).toList();
+			if (resins.size() != 1) throw ApiException.badRequest("ผสมเม็ดหลายเกรดต้องกำหนดเป็น % ของเม็ดรวม เมื่อใช้น้ำหนักชิ้นงาน/รันเนอร์");
+			resins.get(0).put("qty", rw);
+			bom.remove("resinWeight");
+		}
+		String target = Json.s(bom.get("regrindItem")).trim();
+		if (target.isEmpty()) {
+			target = lines.stream().filter(l -> "regrind".equals(Json.s(l.get("type")))).map(l -> Json.s(l.get("item"))).findFirst().orElse("");
+		}
+		if (runner > 0 && target.isEmpty()) {
+			// ไม่ได้ระบุที่เก็บรันเนอร์ และสูตรไม่มีเศษรีไซเคิล → ใช้ "เม็ดรีไซเคิลของเกรดเดียวกัน" ของเม็ดหลักในสูตร (ไม่มีให้สร้างอัตโนมัติ)
+			String main = lines.stream().filter(l -> "resin".equals(Json.s(l.get("type")))).map(l -> Json.s(l.get("item"))).findFirst().orElse("");
+			if (!main.isEmpty()) target = recycledVariantOf(u, main);
+		}
+		if (runner > 0 && !target.isEmpty() && repo.get("materials", target).isEmpty()) throw ApiException.badRequest("ไม่พบวัตถุดิบเศษรีไซเคิล " + target + " ที่ใช้รับรันเนอร์กลับ");
+		if (target.isEmpty()) bom.remove("regrindItem"); else bom.put("regrindItem", target);
+	}
+
+	/** วัตถุดิบ "รีไซเคิลของเกรดเดียวกัน" (recycledFrom = รหัสเม็ดใหม่) — ไม่มีให้สร้างใหม่: รหัส <เม็ด>-RC ชื่อ "<เม็ด> (รีไซเคิล)" หน่วยเดียวกัน */
+	private String recycledVariantOf(AuthUser u, String virginId) {
+		List<String> found = jdbc.queryForList(
+			"select id from erp_records where collection = 'materials' and data->>'recycledFrom' = ? order by id limit 1", String.class, virginId);
+		if (!found.isEmpty()) return found.get(0);
+		Optional<String> vs = repo.get("materials", virginId);
+		if (vs.isEmpty()) return "";
+		Map<String, Object> v = json.map(vs.get());
+		String id = Json.s(v.get("code")) + "-RC";
+		for (int n = 2; repo.get("materials", id).isPresent(); n++) id = Json.s(v.get("code")) + "-RC" + n;
+		Map<String, Object> m = new LinkedHashMap<>();
+		m.put("id", id); m.put("code", id); m.put("name", Json.s(v.get("name")) + " (รีไซเคิล)");
+		m.put("type", "เศษรีไซเคิล"); m.put("unit", v.get("unit") == null ? "KG" : v.get("unit"));
+		m.put("stock", 0); m.put("min", 0); m.put("max", v.get("max") == null ? 10000 : v.get("max")); m.put("cost", 0);
+		m.put("active", true); m.put("recycledFrom", virginId);
+		repo.insert("materials", id, json.str(m), u.username());
+		audit.log(u, "CREATE", "วัตถุดิบ", id, "สร้างอัตโนมัติ: เม็ดรีไซเคิลของ " + virginId + " (รับรันเนอร์กลับจากการผลิต)");
+		return id;
 	}
 
 	// ---------- ใบสั่งผลิต: เลือกสูตร + snapshot ----------
