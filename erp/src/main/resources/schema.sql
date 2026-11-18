@@ -75,3 +75,83 @@ $$ language plpgsql;
 drop trigger if exists trg_erp_audit_immutable on erp_audit_logs;
 create trigger trg_erp_audit_immutable before update or delete on erp_audit_logs
   for each row execute function erp_audit_immutable();
+
+-- ==========================================================================
+-- การเงิน (ขั้น 1A): บัญชีเงินสด/ธนาคาร · สมุดเงิน (append-only) · รับ/จ่ายเงินอื่น ๆ · โอนระหว่างบัญชี
+-- ==========================================================================
+create table if not exists fin_accounts (
+  id              text primary key,
+  code            text not null,
+  name            text not null,
+  type            text not null check (type in ('cash','bank','cheque')),
+  bank_name       text not null default '',
+  account_no      text not null default '',
+  opening_balance numeric(14,2) not null default 0 check (opening_balance >= 0),
+  opening_date    date not null,
+  active          boolean not null default true,
+  note            text not null default '',
+  created_by      text,
+  created_at      timestamptz not null default now()
+);
+create unique index if not exists uq_fin_accounts_code on fin_accounts (lower(code));
+
+create table if not exists fin_txns (
+  id            text primary key,
+  kind          text not null check (kind in ('other_in','other_out','transfer')),
+  txn_date      date not null,
+  account_id    text not null references fin_accounts(id),
+  to_account_id text references fin_accounts(id),
+  amount        numeric(14,2) not null check (amount > 0),
+  category      text not null default '',
+  counterparty  text not null default '',
+  ref_no        text not null default '',
+  note          text not null default '',
+  status        text not null check (status in ('pending','confirmed','rejected','void')),
+  created_by    text not null,
+  created_by_id text not null,
+  created_at    timestamptz not null default now(),
+  approved_by   text,
+  approved_by_id text,
+  approved_at   timestamptz,
+  self_approved boolean not null default false,
+  reject_reason text,
+  void_reason   text,
+  voided_by     text,
+  voided_at     timestamptz,
+  void_date     date,
+  check ((kind = 'transfer' and to_account_id is not null and to_account_id <> account_id) or (kind <> 'transfer' and to_account_id is null))
+);
+create index if not exists idx_fin_txns_status on fin_txns (status, txn_date desc);
+
+create table if not exists fin_movements (
+  id           bigserial primary key,
+  account_id   text not null references fin_accounts(id),
+  mv_date      date not null,
+  direction    text not null check (direction in ('in','out')),
+  amount       numeric(14,2) not null check (amount > 0),
+  source_type  text not null,
+  source_id    text not null,
+  description  text not null default '',
+  reversal_of  bigint references fin_movements(id),
+  created_by   text,
+  created_at   timestamptz not null default now(),
+  cleared      boolean not null default false,   -- กระทบยอดกับ Statement แล้ว (เตรียมไว้สำหรับขั้น 1C)
+  cleared_at   timestamptz,
+  statement_ref text
+);
+create index if not exists idx_fin_mv_account on fin_movements (account_id, mv_date, id);
+
+create or replace function fin_movements_guard() returns trigger as $$
+begin
+  if tg_op = 'DELETE' then raise exception 'fin_movements is append-only'; end if;
+  if (new.account_id, new.mv_date, new.direction, new.amount, new.source_type, new.source_id, new.description, new.reversal_of, new.created_by, new.created_at)
+     is distinct from
+     (old.account_id, old.mv_date, old.direction, old.amount, old.source_type, old.source_id, old.description, old.reversal_of, old.created_by, old.created_at) then
+    raise exception 'fin_movements is immutable (only cleared/statement fields may change)';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+drop trigger if exists trg_fin_movements_guard on fin_movements;
+create trigger trg_fin_movements_guard before update or delete on fin_movements
+  for each row execute function fin_movements_guard();
