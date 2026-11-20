@@ -9,7 +9,15 @@ function PageMolds() {
   useStore();
   const role = Store.user() ? ROLES[Store.user().role] : null;
   const canEdit = role && (role.canEdit === "*" || (role.canEdit || []).includes("molds"));
-  const list = MOLDS.filter((m) => flt === "ALL" || (flt === "DUE" ? (m.status === "maintenance" || m.status === "alert" || (m.life && m.shots / m.life >= 0.9) || moldNextPM(m) <= Store.today()) : m.status === flt));
+  const moldMatch = (m) => flt === "ALL" || (flt === "DUE" ? (m.status === "maintenance" || m.status === "alert" || (m.life && m.shots / m.life >= 0.9) || moldNextPM(m) <= Store.today()) : m.status === flt);
+  // ค้นหา (รหัส/ชื่อ/ลูกค้า/ขนาด) · สถานะ (เมนูด้านบน) · เรียง · แบ่งหน้า (การ์ดหน้าละ 24)
+  const view = useListView(MOLDS, {
+    text: (m) => [m.code, m.name, m.customer, m.size, m.material].join(" "),
+    filter: moldMatch, filterKey: flt, pageSize: 24,
+    defaultSort: { key: "code", dir: "asc" },
+    sorts: { code: (m) => m.code, name: (m) => m.name, life: (m) => (m.life ? m.shots / m.life : 0), maint: (m) => m.lastMaint || "", shots: (m) => m.shots || 0 },
+  });
+  const list = view.sorted;
   const liveOpen = open ? MOLDS.find((m) => m.id === open.id) || open : null;
   return (
     <>
@@ -36,9 +44,16 @@ function PageMolds() {
         onChange={setTab}
       />
 
-      {tab === "GRID" && (
+      {tab === "GRID" && (<>
+      <div className="card" style={{ marginBottom: 12 }}>
+        <ListToolbar view={view} placeholder="รหัส / ชื่อแม่พิมพ์ / ลูกค้า…">
+          <select className="select" style={{ width: 210 }} aria-label="เรียงตาม" value={view.sort ? view.sort.key + ":" + view.sort.dir : "code:asc"} onChange={(e) => { const [key, dir] = e.target.value.split(":"); view.setSort({ key, dir }); }}>
+            <option value="code:asc">เรียง: รหัส</option><option value="name:asc">เรียง: ชื่อ</option><option value="life:desc">เรียง: ใช้ไปมากสุด (% อายุ)</option><option value="shots:desc">เรียง: Shot มากสุด</option><option value="maint:asc">เรียง: บำรุงรักษาเก่าสุด</option>
+          </select>
+        </ListToolbar>
+      </div>
       <div className="grid-3">
-        {list.map((m) => {
+        {view.pageRows.map((m) => {
           const lifePct = (m.shots / m.life) * 100;
           const tone = m.status === "in-use" ? "var(--success)" :
                        m.status === "available" ? "var(--text-secondary)" :
@@ -85,8 +100,10 @@ function PageMolds() {
             </div>
           );
         })}
+        {!view.total && <div className="card" style={{ gridColumn: "1 / -1", padding: 32, textAlign: "center", color: "var(--text-tertiary)" }}>{MOLDS.length ? "ไม่พบแม่พิมพ์ตามเงื่อนไข" : "ยังไม่มีแม่พิมพ์"}</div>}
       </div>
-      )}
+      {view.total > 0 && <div className="card" style={{ marginTop: 12 }}><Pager view={view}/></div>}
+      </>)}
       {tab === "CAL" && <window.MaintenanceCalendar/>}
 
       <Drawer open={!!liveOpen} onClose={() => setOpen(null)} title={liveOpen && liveOpen.name} width={680}

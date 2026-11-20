@@ -11,6 +11,15 @@ function PageQC() {
   const rework = QC_INSPECTIONS.filter((q) => q.result === "rework").length;
   const failed = QC_INSPECTIONS.filter((q) => q.result === "fail").length;
   const passRate = total ? Math.round((passed / total) * 100) : 0;
+  // บันทึก QC: ค้นหา (เลขที่/สินค้า/ใบสั่งผลิต/ผู้ตรวจ/defect) · ผลตรวจ · ช่วงวันที่ · เรียง · แบ่งหน้า
+  const [qcResult, setQcResult] = useState("ALL");
+  const view = useListView(QC_INSPECTIONS, {
+    text: (q) => [q.id, q.product, q.wo, q.inspector, (q.defects || []).map((d) => d.type).join(" "), (QC_RESULT[q.result] || {}).th].join(" "),
+    dateKey: (q) => q.date, dateLabel: "วันที่ตรวจ",
+    filter: (q) => qcResult === "ALL" || q.result === qcResult, filterKey: qcResult,
+    defaultSort: { key: "date", dir: "desc" },
+    sorts: { id: (q) => q.id, date: (q) => q.date, product: (q) => q.product, inspector: (q) => q.inspector, sample: (q) => q.sampleSize || 0, failed: (q) => (q.sampleSize ? q.failed / q.sampleSize : 0), result: (q) => (QC_RESULT[q.result] || {}).th || q.result },
+  });
 
   return (
     <>
@@ -20,7 +29,7 @@ function PageQC() {
         actions={
           <>
             <button className="btn btn-outline btn-sm" onClick={() => printReport("รายงานตรวจสอบคุณภาพ (QC)")}><I.Printer size={14}/> พิมพ์ / PDF</button>
-            <button className="btn btn-outline btn-sm" disabled={!total} onClick={() => exportCSV(`QC-${Store.today()}.csv`, ["เลขที่", "วันที่", "ใบสั่งผลิต", "สินค้า", "ผู้ตรวจ", "ตัวอย่าง", "ผ่าน", "เสีย", "Defects", "ผล"], QC_INSPECTIONS.map((q) => [q.id, q.date, q.wo, q.product, q.inspector, q.sampleSize, q.passed, q.failed, q.defects.map((d) => d.type + "x" + d.count).join(" "), QC_RESULT[q.result].th]))}><I.Download size={14}/> รายงาน QC (CSV)</button>
+            <button className="btn btn-outline btn-sm" disabled={!total} onClick={() => exportCSV(`QC-${Store.today()}.csv`, ["เลขที่", "วันที่", "ใบสั่งผลิต", "สินค้า", "ผู้ตรวจ", "ตัวอย่าง", "ผ่าน", "เสีย", "Defects", "ผล"], view.sorted.map((q) => [q.id, q.date, q.wo, q.product, q.inspector, q.sampleSize, q.passed, q.failed, q.defects.map((d) => d.type + "x" + d.count).join(" "), QC_RESULT[q.result].th]))}><I.Download size={14}/> รายงาน QC (CSV)</button>
             <button className="btn btn-primary btn-sm" onClick={() => setFormOpen(true)}><I.Plus size={14}/> บันทึก QC ใหม่</button>
           </>
         }
@@ -44,21 +53,26 @@ function PageQC() {
 
       {tab === "INSPECT" && (
         <div className="card">
+          <ListToolbar view={view} placeholder="เลขที่ / สินค้า / ใบสั่งผลิต / ผู้ตรวจ / Defect…">
+            <select className="select" style={{ width: 140 }} value={qcResult} onChange={(e) => setQcResult(e.target.value)}>
+            <option value="ALL">ทุกผลตรวจ</option>{Object.keys(QC_RESULT).map((k) => <option key={k} value={k}>{QC_RESULT[k].th}</option>)}
+          </select>
+          </ListToolbar>
           <table className="table">
             <thead>
               <tr>
-                <th>เลขที่</th>
-                <th>วันที่ตรวจ</th>
-                <th>WO / สินค้า</th>
-                <th>ผู้ตรวจ</th>
-                <th className="num">Sample</th>
-                <th>ผ่าน / ไม่ผ่าน</th>
+                <SortTh view={view} k="id">เลขที่</SortTh>
+                <SortTh view={view} k="date">วันที่ตรวจ</SortTh>
+                <SortTh view={view} k="product">WO / สินค้า</SortTh>
+                <SortTh view={view} k="inspector">ผู้ตรวจ</SortTh>
+                <SortTh view={view} k="sample" className="num">Sample</SortTh>
+                <SortTh view={view} k="failed">ผ่าน / ไม่ผ่าน</SortTh>
                 <th>Defects</th>
-                <th>ผล</th>
+                <SortTh view={view} k="result">ผล</SortTh>
               </tr>
             </thead>
             <tbody>
-              {QC_INSPECTIONS.map((q) => {
+              {view.pageRows.map((q) => {
                 const meta = QC_RESULT[q.result];
                 const failRate = (q.failed / q.sampleSize) * 100;
                 return (
@@ -87,9 +101,10 @@ function PageQC() {
                   </tr>
                 );
               })}
-              {!QC_INSPECTIONS.length && <EmptyRow cols={8} text="ยังไม่มีบันทึก QC — กด “บันทึก QC ใหม่”"/>}
+              {!view.total && <EmptyRow cols={8} text={QC_INSPECTIONS.length ? "ไม่พบบันทึก QC ตามเงื่อนไข" : "ยังไม่มีบันทึก QC — กด “บันทึก QC ใหม่”"}/>}
             </tbody>
           </table>
+          <Pager view={view}/>
         </div>
       )}
 

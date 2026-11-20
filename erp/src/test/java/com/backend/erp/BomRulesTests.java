@@ -330,6 +330,9 @@ class BomRulesTests {
 		assertEquals(Boolean.FALSE, r.get("hasBom"));
 		assertEquals(pc, stockOf("materials", "R-PC"), 1e-6);
 		assertEquals(10.0, stockOf("finished", "FG-P-NOBOM"), 1e-6);
+		Map<String, Object> done = call("GET", "/workOrders/WO-NB", null, admin, 200);
+		assertEquals("done", done.get("status"));
+		assertTrue(String.valueOf(done.get("doneAt")).matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}"));   // บันทึกวันเวลาที่เสร็จ
 	}
 
 	@Test @Order(9)

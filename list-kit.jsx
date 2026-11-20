@@ -11,6 +11,7 @@
     filter:      (row) => boolean           // ตัวกรองเฉพาะหน้า (เช่น สถานะ) — ส่ง filterKey ให้เปลี่ยนเมื่อเงื่อนไขเปลี่ยน เพื่อรีเซ็ตกลับหน้า 1
     filterKey:   string
     pageSize:    number (ค่าเริ่มต้น 50)
+    dateLabel:   ชื่อวันที่ที่ใช้กรอง เช่น "กำหนดส่ง" (ค่าเริ่มต้น "วันที่")
   }
   หมายเหตุ: Store ส่งอาร์เรย์เดิมที่ถูกแก้ในที่ → คำนวณใหม่ทุกครั้งที่วาดหน้า (ไม่ memo) และจับเวลา ถ้าช้าเกิน 80 ms จะเตือนในคอนโซล
   (สัญญาณว่าถึงเวลาย้ายการค้น/แบ่งหน้าไปที่เซิร์ฟเวอร์)
@@ -81,7 +82,7 @@ function useListView(rows, opts) {
   const toggleSort = (key) => setSort((s) => (s && s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: key === (o.defaultSort && o.defaultSort.key) ? (o.defaultSort.dir === "asc" ? "desc" : "asc") : "asc" }));
   const reset = () => { setQ(""); setFrom(""); setTo(""); setSort(o.defaultSort || null); };
   const active = !!(needle || from || to);
-  return { q, setQ, from, setFrom, to, setTo, sort, toggleSort, page: cur, setPage, pageSize, setPageSize, pages, total, all: rows.length, sorted, pageRows, reset, active, hasDate: !!o.dateKey };
+  return { q, setQ, from, setFrom, to, setTo, sort, setSort, toggleSort, page: cur, setPage, pageSize, setPageSize, pages, total, all: rows.length, sorted, pageRows, reset, active, hasDate: !!o.dateKey, dateLabel: o.dateLabel || "วันที่" };
 }
 
 /** แถบค้นหา + ช่วงวันที่ — children = ตัวกรองเฉพาะหน้า (ปุ่มสถานะ ฯลฯ) */
@@ -97,8 +98,8 @@ function ListToolbar({ view: v, placeholder, children }) {
         <input className="input" aria-label="ค้นหา" placeholder={placeholder || "ค้นหา…"} style={{ paddingLeft: 32 }} value={v.q} onChange={(e) => v.setQ(e.target.value)}/>
       </div>
       {v.hasDate && <>
-        <div style={{ width: 140 }}><DateInput className="input" value={v.from} placeholder="ตั้งแต่วันที่" onChange={(e) => v.setFrom(e.target.value)}/></div>
-        <div style={{ width: 140 }}><DateInput className="input" value={v.to} placeholder="ถึงวันที่" onChange={(e) => v.setTo(e.target.value)}/></div>
+        <div style={{ width: 140 }}><DateInput className="input" value={v.from} placeholder={v.dateLabel + " ตั้งแต่"} onChange={(e) => v.setFrom(e.target.value)}/></div>
+        <div style={{ width: 140 }}><DateInput className="input" value={v.to} placeholder={v.dateLabel + " ถึง"} onChange={(e) => v.setTo(e.target.value)}/></div>
         {presetBtn("month", "เดือนนี้")}{presetBtn("lastMonth", "เดือนที่แล้ว")}{presetBtn("year", "ปีนี้")}
       </>}
       {children}
@@ -128,7 +129,7 @@ function Pager({ view: v }) {
       <span style={{ color: "var(--text-secondary)" }}>แสดง {a}–{b} จาก {v.total} รายการ</span>
       <span style={{ flex: 1 }}/>
       <label style={{ display: "flex", alignItems: "center", gap: 6 }}>ต่อหน้า
-        <select className="select" style={{ width: 80 }} value={v.pageSize} onChange={(e) => v.setPageSize(Number(e.target.value))}>{LK_PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}</select>
+        <select className="select" style={{ width: 80 }} value={v.pageSize} onChange={(e) => v.setPageSize(Number(e.target.value))}>{(LK_PAGE_SIZES.includes(v.pageSize) ? LK_PAGE_SIZES : [v.pageSize, ...LK_PAGE_SIZES].sort((a, b) => a - b)).map((n) => <option key={n} value={n}>{n}</option>)}</select>
       </label>
       {btn("«", 1, v.page <= 1)}{btn("‹", v.page - 1, v.page <= 1)}
       <span>หน้า {v.page} / {v.pages}</span>

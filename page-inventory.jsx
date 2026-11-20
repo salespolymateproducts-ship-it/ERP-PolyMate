@@ -308,6 +308,16 @@ function MaterialTable({ canManage, onAdd, onEdit }) {
   const [showInactive, setShowInactive] = useState(true);
   const inactiveCount = MATERIALS.filter((m) => m.active === false).length;
   const rows = showInactive ? MATERIALS : MATERIALS.filter((m) => m.active !== false);
+  // ค้นหา (รหัส/ชื่อ/ประเภท/ตำแหน่ง/ผู้ขาย) · ประเภท · ระดับสต๊อก · เรียง · แบ่งหน้า
+  const [matType, setMatType] = useState("ALL");
+  const [matLevel, setMatLevel] = useState("ALL");
+  const level = (m) => (m.stock <= 0 ? "out" : m.stock < m.min ? "low" : "ok");
+  const view = useListView(rows, {
+    text: (m) => [m.code, m.name, m.type, m.location, m.supplier, m.grade, m.color].join(" "),
+    filter: (m) => (matType === "ALL" || m.type === matType) && (matLevel === "ALL" || level(m) === matLevel), filterKey: matType + "|" + matLevel + "|" + showInactive,
+    defaultSort: { key: "code", dir: "asc" },
+    sorts: { code: (m) => m.code, name: (m) => m.name, type: (m) => m.type, location: (m) => m.location, stock: (m) => m.stock || 0, cost: (m) => m.cost || 0, value: (m) => (m.stock || 0) * (m.cost || 0), supplier: (m) => m.supplier, status: (m) => (m.active === false ? 1 : 0) },
+  });
   // ไม่มีการลบวัตถุดิบ: ใช้ปิดใช้งาน/เปิดใช้งานเท่านั้น (ประวัติใน PO / Stock Movement / BOM คงเดิม)
   function toggleActive(m) {
     const activate = m.active === false;
@@ -323,20 +333,28 @@ function MaterialTable({ canManage, onAdd, onEdit }) {
           </label>
         </div>
       )}
+      <ListToolbar view={view} placeholder="รหัส / ชื่อวัตถุดิบ / ประเภท / ตำแหน่ง / ผู้ขาย…">
+        <select className="select" style={{ width: 150 }} value={matType} onChange={(e) => setMatType(e.target.value)}>
+          <option value="ALL">ทุกประเภท</option>{MAT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+        <select className="select" style={{ width: 150 }} value={matLevel} onChange={(e) => setMatLevel(e.target.value)}>
+          <option value="ALL">ทุกระดับสต๊อก</option><option value="out">หมด</option><option value="low">ต่ำกว่า Min</option><option value="ok">ปกติ</option>
+        </select>
+      </ListToolbar>
       <div style={{ overflow: "auto" }}>
         <table className="table">
           <thead>
             <tr>
-              <th>รหัส</th>
-              <th>รายการ</th>
-              <th>ประเภท</th>
-              <th>ตำแหน่ง</th>
-              <th className="num">คงเหลือ</th>
+              <SortTh view={view} k="code">รหัส</SortTh>
+              <SortTh view={view} k="name">รายการ</SortTh>
+              <SortTh view={view} k="type">ประเภท</SortTh>
+              <SortTh view={view} k="location">ตำแหน่ง</SortTh>
+              <SortTh view={view} k="stock" className="num">คงเหลือ</SortTh>
               <th>ระดับสต๊อก</th>
-              <th className="num">ราคาทุน</th>
-              <th className="num">มูลค่ารวม</th>
-              <th>ผู้ขาย</th>
-              <th>สถานะ</th>
+              <SortTh view={view} k="cost" className="num">ราคาทุน</SortTh>
+              <SortTh view={view} k="value" className="num">มูลค่ารวม</SortTh>
+              <SortTh view={view} k="supplier">ผู้ขาย</SortTh>
+              <SortTh view={view} k="status">สถานะ</SortTh>
               {canManage && <th></th>}
             </tr>
           </thead>
@@ -346,7 +364,8 @@ function MaterialTable({ canManage, onAdd, onEdit }) {
                 ยังไม่มีวัตถุดิบ{canManage && <> · <a onClick={onAdd} style={{ color: "var(--accent)", cursor: "pointer" }}>เพิ่มวัตถุดิบรายการแรก</a></>}
               </td></tr>
             )}
-            {rows.map((m) => {
+            {rows.length > 0 && !view.total && <tr><td colSpan={canManage ? 11 : 10} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>ไม่พบวัตถุดิบตามเงื่อนไข</td></tr>}
+            {view.pageRows.map((m) => {
               const inactive = m.active === false;
               const low = !inactive && m.stock < m.min;
               const danger = !inactive && m.stock < m.min * 0.8;
@@ -385,6 +404,7 @@ function MaterialTable({ canManage, onAdd, onEdit }) {
           </tbody>
         </table>
       </div>
+      <Pager view={view}/>
     </div>
   );
 }
@@ -731,29 +751,49 @@ function FinishedTable({ onAdd }) {
     const c = CUSTOMERS.find((x) => x.code === code);
     return c ? c.name : (code && code !== "—" ? code : null);
   };
+  // ค้นหา (รหัส/ชื่อ/ลูกค้า/สี/ผู้ขาย) · ประเภทงาน · ระดับสต๊อก · เรียง · แบ่งหน้า
+  const [fgJob, setFgJob] = useState("ALL");
+  const [fgLevel, setFgLevel] = useState("ALL");
+  const fgLevelOf = (f) => (f.stock <= 0 ? "out" : (Store.isBuyable(f) && f.min > 0 && f.stock < f.min) ? "low" : "ok");
+  const marginOf = (f) => (f.price && f.cost > 0 ? ((f.price - f.cost) / f.price) * 100 : 0);
+  const view = useListView(FINISHED, {
+    text: (f) => [f.code, f.name, f.customer, custName(f.customer), f.color, f.supplier, (JOB_TYPES[f.jobType] || {}).short].join(" "),
+    filter: (f) => (fgJob === "ALL" || f.jobType === fgJob) && (fgLevel === "ALL" || fgLevelOf(f) === fgLevel), filterKey: fgJob + "|" + fgLevel,
+    defaultSort: { key: "code", dir: "asc" },
+    sorts: { code: (f) => f.code, name: (f) => f.name, job: (f) => (JOB_TYPES[f.jobType] || {}).short || "", customer: (f) => custName(f.customer) || "", weight: (f) => (f.weight == null ? "" : f.weight),
+      stock: (f) => f.stock || 0, cost: (f) => f.cost || 0, price: (f) => f.price || 0, margin: (f) => marginOf(f) },
+  });
   return (
     <div className="card">
       {pe && <ProductEditModal f={Store.state.finished.find((x) => x.id === pe.id) || pe} onClose={() => setPe(null)} onDone={(m) => { setPe(null); flash(m); }}/>}
       {po && <ProductOrderModal f={po} onClose={() => setPo(null)} onDone={(m) => { setPo(null); flash(m); }}/>}
       {toast && <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 1100, background: "var(--text-primary)", color: "white", padding: "12px 18px", borderRadius: 10, boxShadow: "var(--shadow-lg)", fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 10 }}><I.Check size={16}/> {toast}</div>}
+      <ListToolbar view={view} placeholder="รหัส / ชื่อสินค้า / ลูกค้า / สี / ผู้ขาย…">
+        <select className="select" style={{ width: 150 }} value={fgJob} onChange={(e) => setFgJob(e.target.value)}>
+          <option value="ALL">ทุกประเภทงาน</option>{Object.keys(JOB_TYPES).map((k) => <option key={k} value={k}>{JOB_TYPES[k].short}</option>)}
+        </select>
+        <select className="select" style={{ width: 150 }} value={fgLevel} onChange={(e) => setFgLevel(e.target.value)}>
+          <option value="ALL">ทุกระดับสต๊อก</option><option value="out">หมด</option><option value="low">ต่ำกว่า Min</option><option value="ok">ปกติ</option>
+        </select>
+      </ListToolbar>
       <div style={{ overflow: "auto" }}>
       <table className="table">
         <thead>
           <tr>
-            <th>รหัส</th>
-            <th>สินค้า</th>
-            <th>ประเภทงาน</th>
-            <th>ลูกค้า</th>
-            <th className="num">น้ำหนัก</th>
-            <th className="num">คงเหลือ</th>
-            <th className="num">ราคาทุน</th>
-            <th className="num">ราคาขาย</th>
-            <th className="num">Margin</th>
+            <SortTh view={view} k="code">รหัส</SortTh>
+            <SortTh view={view} k="name">สินค้า</SortTh>
+            <SortTh view={view} k="job">ประเภทงาน</SortTh>
+            <SortTh view={view} k="customer">ลูกค้า</SortTh>
+            <SortTh view={view} k="weight" className="num">น้ำหนัก</SortTh>
+            <SortTh view={view} k="stock" className="num">คงเหลือ</SortTh>
+            <SortTh view={view} k="cost" className="num">ราคาทุน</SortTh>
+            <SortTh view={view} k="price" className="num">ราคาขาย</SortTh>
+            <SortTh view={view} k="margin" className="num">Margin</SortTh>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          {FINISHED.map((f) => {
+          {view.pageRows.map((f) => {
             const margin = f.price && f.cost > 0 ? ((f.price - f.cost) / f.price) * 100 : 0;
             const cn = custName(f.customer);
             const buy = Store.isBuyable(f);
@@ -793,9 +833,11 @@ function FinishedTable({ onAdd }) {
               ยังไม่มีสินค้า · <a onClick={onAdd} style={{ color: "var(--accent)", cursor: "pointer" }}>เพิ่มสินค้ารายการแรก</a>
             </td></tr>
           )}
+          {FINISHED.length > 0 && !view.total && <tr><td colSpan={10} style={{ textAlign: "center", padding: 32, color: "var(--text-tertiary)" }}>ไม่พบสินค้าตามเงื่อนไข</td></tr>}
         </tbody>
       </table>
       </div>
+      <Pager view={view}/>
     </div>
   );
 }
@@ -803,14 +845,28 @@ function FinishedTable({ onAdd }) {
 function Movement() {
   useStore();
   const moves = STOCK_MOVEMENTS;
+  // ค้นหา (รายการ/อ้างอิง/หมายเหตุ) · ประเภท · ช่วงวันที่ · เรียง · แบ่งหน้า
+  const [mvType, setMvType] = useState("ALL");
+  const view = useListView(moves, {
+    text: (m) => [m.item, m.ref, m.note, m.type, m.unit].join(" "),
+    dateKey: (m) => m.date, dateLabel: "วันที่",
+    filter: (m) => mvType === "ALL" || m.type === mvType, filterKey: mvType,
+    defaultSort: { key: "date", dir: "desc" },
+    sorts: { date: (m) => String(m.date || ""), type: (m) => m.type, item: (m) => m.item, qty: (m) => Math.abs(m.qty || 0), ref: (m) => m.ref },
+  });
   return (
     <div className="card">
+      <ListToolbar view={view} placeholder="รหัสรายการ / อ้างอิง (PO, ใบสั่งผลิต) / หมายเหตุ…">
+        <select className="select" style={{ width: 150 }} value={mvType} onChange={(e) => setMvType(e.target.value)}>
+          <option value="ALL">ทุกประเภท</option><option value="IN">IN รับเข้า</option><option value="OUT">OUT เบิกออก</option><option value="MOVE">MOVE ย้าย</option><option value="ADJ">ADJ ปรับยอด</option>
+        </select>
+      </ListToolbar>
       <table className="table">
         <thead>
-          <tr><th>เวลา</th><th>ประเภท</th><th>รายการ</th><th className="num">จำนวน</th><th>อ้างอิง</th><th>หมายเหตุ</th></tr>
+          <tr><SortTh view={view} k="date">เวลา</SortTh><SortTh view={view} k="type">ประเภท</SortTh><SortTh view={view} k="item">รายการ</SortTh><SortTh view={view} k="qty" className="num">จำนวน</SortTh><SortTh view={view} k="ref">อ้างอิง</SortTh><th>หมายเหตุ</th></tr>
         </thead>
         <tbody>
-          {moves.map((m, i) => {
+          {view.pageRows.map((m, i) => {
             const c = { IN: "success", OUT: "warning", MOVE: "info", ADJ: "neutral" }[m.type];
             const sign = m.type === "OUT" || (m.type === "ADJ" && m.qty < 0) ? "−" : m.type === "IN" ? "+" : "";
             return (
@@ -826,8 +882,10 @@ function Movement() {
               </tr>
             );
           })}
+          {!view.total && <tr><td colSpan={6} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>{moves.length ? "ไม่พบรายการเคลื่อนไหวตามเงื่อนไข" : "ยังไม่มีรายการเคลื่อนไหวสต๊อก"}</td></tr>}
         </tbody>
       </table>
+      <Pager view={view}/>
     </div>
   );
 }

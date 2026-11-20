@@ -30,6 +30,15 @@ function PageProcurement() {
   const canManageSup = !!role && (role.canEdit === "*" || (role.canEdit || []).includes("procurement"));
   const inactiveSupCount = SUPPLIERS.filter((s) => s.status === "inactive").length;
   const visibleSuppliers = SUPPLIERS.filter((s) => showInactiveSup || s.status !== "inactive");
+  // Supplier: ค้นหา (รหัส/ชื่อ/เลขผู้เสียภาษี/ผู้ติดต่อ/โทร/หมวด) · หมวด · เรียง · แบ่งหน้า
+  const [supCat, setSupCat] = useState("ALL");
+  const supSpend = (s) => PURCHASE_ORDERS.filter((p) => p.status === "received" && (p.supplier === s.code || p.supplierName === s.name)).reduce((t, p) => t + p.total, 0);
+  const supView = useListView(visibleSuppliers, {
+    text: (s) => [s.code, s.name, s.nameEn, s.taxId, s.contact, s.phone, s.email, s.category, s.address].join(" "),
+    filter: (s) => supCat === "ALL" || s.category === supCat, filterKey: supCat + "|" + showInactiveSup,
+    defaultSort: { key: "code", dir: "asc" },
+    sorts: { code: (s) => s.code, name: (s) => s.name, category: (s) => s.category, contact: (s) => s.contact, credit: (s) => s.credit || 0, spend: (s) => supSpend(s), rating: (s) => s.rating || 0 },
+  });
   const liveSup = openSup ? SUPPLIERS.find((s) => s.id === openSup.id) || openSup : null;
   // ไม่มีการลบ Supplier: ใช้ปิดใช้งาน/เปิดใช้งานเท่านั้น (PO เดิมยังแสดงข้อมูลเดิมครบ)
   const toggleSupActive = (s) => {
@@ -161,20 +170,26 @@ function PageProcurement() {
               ยังไม่มี Supplier ในทะเบียน{canManageSup ? " — กด \"เพิ่ม Supplier\" เพื่อเริ่มต้น" : " (ให้ Admin หรือฝ่ายจัดซื้อเพิ่ม)"}
             </div>
           )}
+          <ListToolbar view={supView} placeholder="รหัส / ชื่อผู้ขาย / เลขผู้เสียภาษี / ผู้ติดต่อ…">
+            <select className="select" style={{ width: 160 }} value={supCat} onChange={(e) => setSupCat(e.target.value)}>
+              <option value="ALL">ทุกหมวด</option>{[...new Set(SUPPLIERS.map((s) => s.category).filter(Boolean))].map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </ListToolbar>
           <table className="table">
             <thead>
               <tr>
-                <th>รหัส</th>
-                <th>ผู้ขาย</th>
-                <th>หมวด</th>
-                <th>ผู้ติดต่อ</th>
-                <th>เครดิต</th>
-                <th className="num">ยอดสั่งซื้อ YTD</th>
-                <th>คะแนน</th>
+                <SortTh view={supView} k="code">รหัส</SortTh>
+                <SortTh view={supView} k="name">ผู้ขาย</SortTh>
+                <SortTh view={supView} k="category">หมวด</SortTh>
+                <SortTh view={supView} k="contact">ผู้ติดต่อ</SortTh>
+                <SortTh view={supView} k="credit">เครดิต</SortTh>
+                <SortTh view={supView} k="spend" className="num">ยอดสั่งซื้อ YTD</SortTh>
+                <SortTh view={supView} k="rating">คะแนน</SortTh>
               </tr>
             </thead>
             <tbody>
-              {visibleSuppliers.map((s) => (
+              {supView.total === 0 && visibleSuppliers.length > 0 && <tr><td colSpan={7} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>ไม่พบผู้ขายตามเงื่อนไข</td></tr>}
+              {supView.pageRows.map((s) => (
                 <tr key={s.id} style={{ cursor: "pointer", opacity: s.status === "inactive" ? 0.6 : 1 }} onClick={() => setOpenSup(s)}>
                   <td className="mono"><b>{s.code}</b>{s.status === "inactive" && <> <span className="badge badge-neutral">ปิดใช้งาน</span></>}</td>
                   <td>
@@ -198,6 +213,7 @@ function PageProcurement() {
               ))}
             </tbody>
           </table>
+          <Pager view={supView}/>
         </div>
       )}
 

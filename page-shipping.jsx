@@ -21,13 +21,22 @@ function PageShipping({ role }) {
     deliveredToday: dos.filter((d) => st(d) === "delivered" && String(d.ship.deliveredAt).slice(0, 10) === today).length };
   const list = tab === "ACTIVE" ? dos.filter((d) => st(d) !== "delivered") : tab === "DONE" ? dos.filter((d) => st(d) === "delivered") : tab === "DRAFT" ? drafts : dos;
   const qty = (d) => (d.lines || []).reduce((s, l) => s + (Number(l.qty) || 0), 0);
+  // ใบส่งสินค้า: ค้นหา (เลขที่/ลูกค้า/อ้างอิง/รถ/ผู้รับ) · สถานะจัดส่ง · ช่วงวันที่ · เรียง · แบ่งหน้า (ตามแท็บที่เลือก)
+  const [shipSt, setShipSt] = useState("ALL");
+  const view = useListView(list, {
+    text: (d) => [d.id, d.customerName, d.customer, (d.sourceIds || []).join(" "), (d.ship || {}).vehicle, (d.ship || {}).receivedBy, (d.lines || []).map((l) => l.name).join(" ")].join(" "),
+    dateKey: (d) => d.date,
+    filter: (d) => shipSt === "ALL" || st(d) === shipSt, filterKey: tab + "|" + shipSt,
+    defaultSort: { key: "date", dir: "desc" },
+    sorts: { id: (d) => d.id, customer: (d) => d.customerName, date: (d) => d.date, qty: (d) => qty(d), status: (d) => (SHIP_LABEL[st(d)] || {}).th || "" },
+  });
 
   return (
     <>
       <PageHeader title="การจัดส่งสินค้า" subtitle="ติดตามใบส่งสินค้าที่อนุมัติแล้ว · ออกจัดส่ง · ยืนยันส่งถึง (เปิดใบส่งสินค้าจากใบสั่งขายในเมนูเอกสารขาย)"
-        actions={<><button className="btn btn-outline btn-sm" onClick={() => printReport("รายงานการจัดส่งสินค้า")}><I.Printer size={14}/> พิมพ์ / PDF</button><button className="btn btn-outline btn-sm" disabled={!list.length} onClick={() => exportCSV(`การจัดส่ง-${today}.csv`,
+        actions={<><button className="btn btn-outline btn-sm" onClick={() => printReport("รายงานการจัดส่งสินค้า")}><I.Printer size={14}/> พิมพ์ / PDF</button><button className="btn btn-outline btn-sm" disabled={!view.total} onClick={() => exportCSV(`การจัดส่ง-${today}.csv`,
           ["ใบส่งสินค้า", "ลูกค้า", "วันที่", "อ้างอิง", "จำนวนรวม", "สถานะจัดส่ง", "รถ/ผู้ขนส่ง", "ออกจัดส่ง", "ส่งถึง", "ผู้รับ"],
-          list.map((d) => [d.id, d.customerName, d.date, (d.sourceIds || []).join(" "), qty(d), (SHIP_LABEL[st(d)] || {}).th, (d.ship || {}).vehicle, (d.ship || {}).shippedAt, (d.ship || {}).deliveredAt, (d.ship || {}).receivedBy]))}>
+          view.sorted.map((d) => [d.id, d.customerName, d.date, (d.sourceIds || []).join(" "), qty(d), (SHIP_LABEL[st(d)] || {}).th, (d.ship || {}).vehicle, (d.ship || {}).shippedAt, (d.ship || {}).deliveredAt, (d.ship || {}).receivedBy]))}>
           <I.Download size={14}/> ส่งออก CSV</button></>}/>
 
       <div className="grid-4" style={{ marginBottom: 14 }}>
@@ -46,11 +55,16 @@ function PageShipping({ role }) {
             { id: "ALL", label: "ทั้งหมด", count: dos.length },
           ]}/>
         </div>
+        <ListToolbar view={view} placeholder="เลขที่ใบส่งสินค้า / ลูกค้า / อ้างอิง / รถ / ผู้รับ…">
+          <select className="select" style={{ width: 150 }} value={shipSt} onChange={(e) => setShipSt(e.target.value)}>
+            <option value="ALL">ทุกสถานะจัดส่ง</option>{Object.keys(SHIP_LABEL).map((k) => <option key={k} value={k}>{SHIP_LABEL[k].th}</option>)}
+          </select>
+        </ListToolbar>
         <div style={{ overflow: "auto" }}>
           <table className="table">
-            <thead><tr><th>ใบส่งสินค้า</th><th>ลูกค้า</th><th>วันที่</th><th>อ้างอิง</th><th className="num">จำนวนรวม</th><th>สถานะจัดส่ง</th><th>รถ / ผู้รับ</th><th></th></tr></thead>
+            <thead><tr><SortTh view={view} k="id">ใบส่งสินค้า</SortTh><SortTh view={view} k="customer">ลูกค้า</SortTh><SortTh view={view} k="date">วันที่</SortTh><th>อ้างอิง</th><SortTh view={view} k="qty" className="num">จำนวนรวม</SortTh><SortTh view={view} k="status">สถานะจัดส่ง</SortTh><th>รถ / ผู้รับ</th><th></th></tr></thead>
             <tbody>
-              {list.map((d) => {
+              {view.pageRows.map((d) => {
                 const s = st(d); const live = Workflow.isLive(d);
                 return (
                   <tr key={d.id}>
@@ -68,10 +82,11 @@ function PageShipping({ role }) {
                   </tr>
                 );
               })}
-              {!list.length && <EmptyRow cols={8} text="ไม่มีรายการ"/>}
+              {!view.total && <EmptyRow cols={8} text={list.length ? "ไม่พบรายการตามเงื่อนไข" : "ไม่มีรายการ"}/>}
             </tbody>
           </table>
         </div>
+        <Pager view={view}/>
       </div>
       {ship && <ShipModal doc={Workflow.get(ship.id)} to={ship.to} onClose={() => setShip(null)}/>}
       {openId && <DocDrawer id={openId} onClose={() => setOpenId(null)} onOpen={setOpenId}

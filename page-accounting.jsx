@@ -161,6 +161,30 @@ function PageAccounting() {
   const apTotal = payables.reduce((s, p) => s + p.net, 0);
   const dueSoon = payables.filter((p) => p.days <= 7).reduce((s, p) => s + p.net, 0);
 
+  // รายการค่าใช้จ่าย: ค้นหา (เลขที่/ผู้ขาย/รายละเอียด/PO/เลขผู้เสียภาษี) · หมวด · สถานะ · ช่วงวันที่ (เริ่มต้น = เดือนที่เลือกด้านบน แก้ได้) · เรียง · แบ่งหน้า
+  const [expCat, setExpCat] = React.useState("ALL");
+  const [expSt, setExpSt] = React.useState("ALL");
+  const expView = useListView(expenses, {
+    text: (e) => [e.id, e.vendor, e.desc, e.category, e.ref, e.vendorTaxId, e.supplierId].join(" "),
+    dateKey: (e) => e.date, dateLabel: "วันที่",
+    filter: (e) => (expCat === "ALL" || e.category === expCat) && (expSt === "ALL" || (expSt === "paid" ? e.status === "paid" : e.status !== "paid")), filterKey: expCat + "|" + expSt,
+    defaultSort: { key: "date", dir: "desc" },
+    sorts: { id: (e) => e.id, date: (e) => e.date, category: (e) => e.category, vendor: (e) => e.vendor, amount: (e) => e.amount || 0, vat: (e) => e.vat || 0, wht: (e) => whtAmount(e.amount, e.whtRate), status: (e) => (e.status === "paid" ? 1 : 0) },
+  });
+  React.useEffect(() => {   // เปลี่ยนเดือนด้านบน → ช่วงวันที่ของรายการตามเดือนนั้น (ล้างหรือเปลี่ยนช่วงเองได้)
+    if (!month) return;
+    const [y, m] = month.split("-").map(Number), p = (n) => String(n).padStart(2, "0");
+    expView.setFrom(y + "-" + p(m) + "-01"); expView.setTo(y + "-" + p(m) + "-" + p(new Date(y, m, 0).getDate()));
+  }, [month]);
+  // เจ้าหนี้ค้างจ่าย: ค้นหา · ความเร่งด่วน · ช่วงวันครบกำหนด · เรียง · แบ่งหน้า
+  const [apUrg, setApUrg] = React.useState("ALL");
+  const apView = useListView(payables, {
+    text: (p) => [p.id, p.vendor, p.desc, p.category, p.ref].join(" "),
+    dateKey: (p) => p.due, dateLabel: "ครบกำหนด",
+    filter: (p) => apUrg === "ALL" || (apUrg === "late" ? p.days < 0 : apUrg === "soon" ? p.days >= 0 && p.days <= 7 : p.days > 7), filterKey: apUrg,
+    defaultSort: { key: "days", dir: "asc" },
+    sorts: { id: (p) => p.id, vendor: (p) => p.vendor, net: (p) => p.net, due: (p) => p.due, days: (p) => p.days },
+  });
   const addExpense = (e) => runAction(() => Store.add("expenses", e, `${e.category} ${e.vendor} ${e.amount}`), `บันทึก ${e.id} แล้ว`);
   const markPaid = (id) => runAction(() => Store.update("expenses", id, { status: "paid", paidDate: today, paidBy: Store.userName() }, "id", "บันทึกจ่ายชำระ"), `บันทึกจ่าย ${id} แล้ว`);
   const removeExpense = (id) => {
@@ -174,12 +198,12 @@ function PageAccounting() {
     if (tab === "AP") {
       downloadCSV(`เจ้าหนี้ค้างจ่าย_${today}.csv`, [
         ["เลขที่", "ผู้ขาย", "รายละเอียด", "ยอดสุทธิที่ต้องจ่าย", "กำหนดชำระ", "เหลือ (วัน)"],
-        ...payables.map((p) => [p.id, p.vendor, p.desc, p.net.toFixed(2), p.due, p.days]),
+        ...apView.sorted.map((p) => [p.id, p.vendor, p.desc, p.net.toFixed(2), p.due, p.days]),
       ]);
     } else {
-      downloadCSV(`ค่าใช้จ่าย_${month}.csv`, [
+      downloadCSV(`ค่าใช้จ่าย_${expView.from || "ทั้งหมด"}_${expView.to || ""}.csv`, [
         ["เลขที่", "วันที่", "หมวด", "ผู้ขาย", "รายละเอียด", "ก่อน VAT", "VAT", "หัก ณ ที่จ่าย %", "หัก ณ ที่จ่าย", "ยอดจ่ายสุทธิ", "กำหนดชำระ", "สถานะ"],
-        ...monthExp.map((e) => [
+        ...expView.sorted.map((e) => [
           e.id, e.date, e.category, e.vendor, e.desc, e.amount.toFixed(2), e.vat.toFixed(2),
           e.whtRate, whtAmount(e.amount, e.whtRate).toFixed(2), netPayable(e).toFixed(2), e.due,
           e.status === "paid" ? "ชำระแล้ว" : "รอชำระ",
@@ -226,21 +250,25 @@ function PageAccounting() {
       {tab === "EXP" && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 14 }}>
           <div className="card" style={{ overflowX: "auto" }}>
+            <ListToolbar view={expView} placeholder="เลขที่ / ผู้ขาย / รายละเอียด / PO…">
+              <select className="select" style={{ width: 150 }} value={expCat} onChange={(e) => setExpCat(e.target.value)}><option value="ALL">ทุกหมวด</option>{EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+              <select className="select" style={{ width: 130 }} value={expSt} onChange={(e) => setExpSt(e.target.value)}><option value="ALL">ทุกสถานะ</option><option value="unpaid">รอชำระ</option><option value="paid">ชำระแล้ว</option></select>
+            </ListToolbar>
             <table className="table">
               <thead>
                 <tr>
-                  <th>เลขที่</th><th>วันที่</th><th>หมวด</th><th>ผู้ขาย</th><th>รายละเอียด</th>
-                  <th className="num">ก่อน VAT</th><th className="num">VAT</th><th className="num">หัก ณ ที่จ่าย</th>
-                  <th>สถานะ</th><th></th>
+                  <SortTh view={expView} k="id">เลขที่</SortTh><SortTh view={expView} k="date">วันที่</SortTh><SortTh view={expView} k="category">หมวด</SortTh><SortTh view={expView} k="vendor">ผู้ขาย</SortTh><th>รายละเอียด</th>
+                  <SortTh view={expView} k="amount" className="num">ก่อน VAT</SortTh><SortTh view={expView} k="vat" className="num">VAT</SortTh><SortTh view={expView} k="wht" className="num">หัก ณ ที่จ่าย</SortTh>
+                  <SortTh view={expView} k="status">สถานะ</SortTh><th></th>
                 </tr>
               </thead>
               <tbody>
-                {monthExp.length === 0 && (
+                {expView.total === 0 && (
                   <tr><td colSpan={10} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>
-                    ยังไม่มีรายการในเดือนนี้ — กด "บันทึกค่าใช้จ่าย" เพื่อเพิ่ม
+                    {expenses.length ? "ไม่พบรายการตามเงื่อนไข — ลองเปลี่ยนช่วงวันที่หรือกด \"ล้างตัวกรอง\"" : "ยังไม่มีรายการ — กด \"บันทึกค่าใช้จ่าย\" เพื่อเพิ่ม"}
                   </td></tr>
                 )}
-                {monthExp.map((e) => (
+                {expView.pageRows.map((e) => (
                   <tr key={e.id}>
                     <td className="mono"><b>{e.id}</b></td>
                     <td className="num" style={{ fontSize: 12.5 }}>{e.date}</td>
@@ -262,17 +290,18 @@ function PageAccounting() {
                     </td>
                   </tr>
                 ))}
-                {monthExp.length > 0 && (
+                {expView.total > 0 && (
                   <tr style={{ background: "var(--bg-subtle)", fontWeight: 600 }}>
-                    <td colSpan={5} style={{ textAlign: "right" }}>รวม</td>
-                    <td className="num">{_fmt(totalExp)}</td>
-                    <td className="num" style={{ color: "var(--text-secondary)" }}>{_fmt(totalVat)}</td>
-                    <td className="num" style={{ color: "var(--amber)" }}>({_fmt(totalWht)})</td>
+                    <td colSpan={5} style={{ textAlign: "right" }}>รวมตามที่กรอง ({expView.total} รายการ)</td>
+                    <td className="num">{_fmt(expView.sorted.reduce((t, e) => t + e.amount, 0))}</td>
+                    <td className="num" style={{ color: "var(--text-secondary)" }}>{_fmt(expView.sorted.reduce((t, e) => t + e.vat, 0))}</td>
+                    <td className="num" style={{ color: "var(--amber)" }}>({_fmt(expView.sorted.reduce((t, e) => t + whtAmount(e.amount, e.whtRate), 0))})</td>
                     <td colSpan={2}></td>
                   </tr>
                 )}
               </tbody>
             </table>
+            <Pager view={expView}/>
           </div>
           <div className="card">
             <div className="card-head"><div className="card-title">สัดส่วนค่าใช้จ่าย · {monthLabel(month)}</div></div>
@@ -303,13 +332,16 @@ function PageAccounting() {
 
       {tab === "AP" && (
         <div className="card" style={{ overflowX: "auto" }}>
+          <ListToolbar view={apView} placeholder="เลขที่ / ผู้ขาย / รายละเอียด…">
+            <select className="select" style={{ width: 160 }} value={apUrg} onChange={(e) => setApUrg(e.target.value)}><option value="ALL">ทุกความเร่งด่วน</option><option value="late">เกินกำหนด</option><option value="soon">ครบใน 7 วัน</option><option value="ok">ปกติ</option></select>
+          </ListToolbar>
           <table className="table">
-            <thead><tr><th>เลขที่</th><th>ผู้ขาย</th><th>รายละเอียด</th><th className="num">ยอดจ่ายสุทธิ</th><th>กำหนดชำระ</th><th>ระยะเวลา</th><th>เร่งด่วน</th><th></th></tr></thead>
+            <thead><tr><SortTh view={apView} k="id">เลขที่</SortTh><SortTh view={apView} k="vendor">ผู้ขาย</SortTh><th>รายละเอียด</th><SortTh view={apView} k="net" className="num">ยอดจ่ายสุทธิ</SortTh><SortTh view={apView} k="due">กำหนดชำระ</SortTh><SortTh view={apView} k="days">ระยะเวลา</SortTh><th>เร่งด่วน</th><th></th></tr></thead>
             <tbody>
-              {payables.length === 0 && (
-                <tr><td colSpan={8} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>ไม่มีเจ้าหนี้ค้างจ่าย</td></tr>
+              {apView.total === 0 && (
+                <tr><td colSpan={8} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>{payables.length ? "ไม่พบเจ้าหนี้ตามเงื่อนไข" : "ไม่มีเจ้าหนี้ค้างจ่าย"}</td></tr>
               )}
-              {payables.map((p) => (
+              {apView.pageRows.map((p) => (
                 <tr key={p.id}>
                   <td className="mono"><b>{p.id}</b></td>
                   <td style={{ fontWeight: 500 }}>{p.vendor}</td>
@@ -329,6 +361,7 @@ function PageAccounting() {
               ))}
             </tbody>
           </table>
+          <Pager view={apView}/>
         </div>
       )}
 
@@ -358,21 +391,33 @@ function nextId(prefix, existing) {
 }
 
 function ExpenseForm({ existing, onClose, onSave }) {
+  useStore();
   const today = todayISO();
+  // ผู้ขายเลือกได้เฉพาะที่ลงทะเบียนไว้ (จัดซื้อ → Supplier) — เก็บเลข/ที่อยู่ผู้เสียภาษีตามทะเบียน ณ วันที่บันทึก
+  const suppliers = Store.state.suppliers.filter((x) => x.status !== "inactive").sort((a, b) => String(a.name).localeCompare(String(b.name), "th"));
   const [f, setF] = React.useState({
-    date: today, category: EXPENSE_CATEGORIES[0], vendor: "", desc: "",
-    amount: "", hasVat: true, whtRate: 0, creditDays: 30, status: "approved",
+    date: today, category: EXPENSE_CATEGORIES[0], supplierId: "", desc: "",
+    amount: "", priceMode: "ex", hasVat: false, whtRate: 0, creditDays: 30, status: "approved",
   });
   const [err, setErr] = React.useState({});
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
+  const sup = suppliers.find((x) => x.id === f.supplierId) || null;
+  const pickSupplier = (e) => {
+    const s2 = suppliers.find((x) => x.id === e.target.value);
+    setF({ ...f, supplierId: e.target.value, ...(s2 && s2.credit != null ? { creditDays: s2.credit } : {}) });
+  };
 
-  const amount = parseFloat(f.amount) || 0;
-  const vat = f.hasVat ? Math.round(amount * VAT_RATE) / 100 : 0;
+  // ยอดที่กรอก: "ไม่รวม VAT" (ฐานภาษี) หรือ "รวม VAT" (ถอด VAT ออกจากยอดรวม) — ติ๊ก VAT เองเท่านั้น
+  const r2 = (n) => Math.round(n * 100) / 100;
+  const entered = parseFloat(f.amount) || 0;
+  const incl = f.hasVat && f.priceMode === "inc";
+  const amount = incl ? r2(entered * 100 / (100 + VAT_RATE)) : r2(entered);          // ฐานภาษี (ก่อน VAT)
+  const vat = f.hasVat ? (incl ? r2(entered - amount) : r2(amount * VAT_RATE / 100)) : 0;
   const wht = whtAmount(amount, +f.whtRate);
 
   const save = () => {
     const er = {};
-    if (!f.vendor.trim()) er.vendor = "กรุณาระบุผู้ขาย";
+    if (!sup) er.vendor = "กรุณาเลือกผู้ขายจากทะเบียน (ถ้ายังไม่มี ให้เพิ่มที่ จัดซื้อ → Supplier ก่อน)";
     if (!(amount > 0)) er.amount = "จำนวนเงินต้องมากกว่า 0";
     if (!f.date) er.date = "กรุณาระบุวันที่";
     setErr(er);
@@ -381,10 +426,15 @@ function ExpenseForm({ existing, onClose, onSave }) {
       id: nextId("EXP-", existing),
       date: f.date,
       category: f.category,
-      vendor: f.vendor.trim(),
+      vendor: sup.name,
+      supplierId: sup.id,
+      vendorTaxId: sup.taxId && sup.taxId !== "—" ? sup.taxId : "",
+      vendorAddress: sup.address || "",
       desc: f.desc.trim(),
       amount,
       vat,
+      priceMode: f.hasVat ? f.priceMode : "ex",
+      enteredAmount: r2(entered),
       whtRate: +f.whtRate,
       due: addDays(f.date, +f.creditDays || 0),
       status: f.status,
@@ -409,10 +459,22 @@ function ExpenseForm({ existing, onClose, onSave }) {
           </select>
         </Field>
       </div>
-      <Field label="ผู้ขาย" error={err.vendor}><input style={inputStyle} value={f.vendor} onChange={set("vendor")} autoFocus/></Field>
+      <Field label="ผู้ขาย (เลือกจากทะเบียน Supplier)" error={err.vendor}>
+        <select style={inputStyle} value={f.supplierId} onChange={pickSupplier} autoFocus>
+          <option value="">— เลือกผู้ขาย —</option>
+          {suppliers.map((x) => <option key={x.id} value={x.id}>{x.code ? x.code + " · " : ""}{x.name}</option>)}
+        </select>
+      </Field>
+      {!suppliers.length && <div style={{ fontSize: 12, color: "var(--amber)" }}>ยังไม่มีผู้ขายในทะเบียน — เพิ่มที่เมนู จัดซื้อ → Supplier ก่อน</div>}
+      {sup && (
+        <div style={{ background: "var(--bg-subtle)", borderRadius: 8, padding: "8px 12px", fontSize: 12, display: "grid", gap: 3 }}>
+          <div><span style={{ color: "var(--text-secondary)" }}>เลขประจำตัวผู้เสียภาษี: </span><b className="mono">{sup.taxId && sup.taxId !== "—" ? sup.taxId : "ไม่ระบุ (ควรเพิ่มในทะเบียนผู้ขาย)"}</b></div>
+          <div><span style={{ color: "var(--text-secondary)" }}>ที่อยู่: </span>{sup.address || "ไม่ระบุ (ควรเพิ่มในทะเบียนผู้ขาย)"}</div>
+        </div>
+      )}
       <Field label="รายละเอียด"><input style={inputStyle} value={f.desc} onChange={set("desc")}/></Field>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <Field label="จำนวนเงิน (ก่อน VAT)" error={err.amount}>
+        <Field label={"จำนวนเงิน (" + (incl ? "รวม VAT" : "ไม่รวม VAT") + ")"} error={err.amount}>
           <input type="number" min="0" step="0.01" style={inputStyle} value={f.amount} onChange={set("amount")}/>
         </Field>
         <Field label="หัก ณ ที่จ่าย">
@@ -428,12 +490,21 @@ function ExpenseForm({ existing, onClose, onSave }) {
           </select>
         </Field>
       </div>
-      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-        <input type="checkbox" checked={f.hasVat} onChange={set("hasVat")}/> มีใบกำกับภาษี (VAT {VAT_RATE}%)
-      </label>
+      <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", fontSize: 13 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <input type="checkbox" checked={f.hasVat} onChange={set("hasVat")}/> มีใบกำกับภาษี (VAT {VAT_RATE}%)
+        </label>
+        {f.hasVat && (
+          <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 5 }}><input type="radio" name="expPriceMode" checked={f.priceMode === "ex"} onChange={() => setF({ ...f, priceMode: "ex" })}/> ยอดที่กรอก <b>ไม่รวม</b> VAT</label>
+            <label style={{ display: "flex", alignItems: "center", gap: 5 }}><input type="radio" name="expPriceMode" checked={f.priceMode === "inc"} onChange={() => setF({ ...f, priceMode: "inc" })}/> ยอดที่กรอก <b>รวม</b> VAT แล้ว</label>
+          </span>
+        )}
+      </div>
       <div style={{ background: "var(--bg-subtle)", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, display: "grid", gap: 4 }}>
-        <Row k="ก่อน VAT" v={_fmt(amount)}/>
-        <Row k={`VAT ${f.hasVat ? VAT_RATE : 0}%`} v={_fmt(vat)}/>
+        <Row k="ฐานภาษี (ก่อน VAT)" v={_fmt(amount)}/>
+        <Row k={f.hasVat ? `VAT ${VAT_RATE}%` : "VAT (ไม่มีใบกำกับภาษี)"} v={_fmt(vat)}/>
+        {f.hasVat && <Row k="รวม VAT" v={_fmt(amount + vat)}/>}
         <Row k={`หัก ณ ที่จ่าย ${f.whtRate}%`} v={"(" + _fmt(wht) + ")"}/>
         <Row k={<b>ยอดจ่ายสุทธิ</b>} v={<b>{_fmt(amount + vat - wht)}</b>}/>
         <Row k="กำหนดชำระ" v={addDays(f.date || today, +f.creditDays || 0)}/>
@@ -523,10 +594,16 @@ function PageHR() {
   useStore();
   const employees = Store.state.employees;
   const [showForm, setShowForm] = React.useState(false);
-  const [q, setQ] = React.useState("");
-
-  const list = employees.filter((e) =>
-    !q || [e.id, e.name, e.role, e.dept, e.phone].join(" ").toLowerCase().includes(q.toLowerCase()));
+  // ค้นหา (รหัส/ชื่อ/ตำแหน่ง/แผนก/โทร) · แผนก · ช่วงวันที่เริ่มงาน · เรียง · แบ่งหน้า
+  const [hrDept, setHrDept] = React.useState("ALL");
+  const depts = [...new Set(employees.map((e) => e.dept).filter(Boolean))];
+  const view = useListView(employees, {
+    text: (e) => [e.id, e.name, e.role, e.dept, e.phone].join(" "),
+    dateKey: (e) => e.joined, dateLabel: "เริ่มงาน",
+    filter: (e) => hrDept === "ALL" || e.dept === hrDept, filterKey: hrDept,
+    defaultSort: { key: "id", dir: "asc" },
+    sorts: { id: (e) => e.id, name: (e) => e.name, role: (e) => e.role, dept: (e) => e.dept, phone: (e) => e.phone, joined: (e) => e.joined || "", salary: (e) => +e.salary || 0 },
+  });
   const payroll = employees.reduce((s, e) => s + (+e.salary || 0), 0);
 
   const exportPayroll = () => downloadCSV(`เงินเดือน_${monthKey(todayISO())}.csv`, [
@@ -545,7 +622,6 @@ function PageHR() {
         subtitle={`${employees.length} คน · ${new Set(employees.map((e) => e.dept)).size} แผนก · ค่าแรงเดือน ${baht(payroll)}`}
         actions={
           <>
-            <input placeholder="ค้นหา…" value={q} onChange={(e) => setQ(e.target.value)} style={{ ...inputStyle, width: 180, height: 30 }}/>
             <button className="btn btn-outline btn-sm" onClick={() => printReport("รายงานพนักงาน")}><I.Printer size={14}/> พิมพ์ / PDF</button>
             <button className="btn btn-outline btn-sm" onClick={exportPayroll}><I.Download size={14}/> รายงานเงินเดือน</button>
             <button className="btn btn-primary btn-sm" onClick={() => setShowForm(true)}><I.Plus size={14}/> เพิ่มพนักงาน</button>
@@ -553,13 +629,16 @@ function PageHR() {
         }
       />
       <div className="card" style={{ overflowX: "auto" }}>
+        <ListToolbar view={view} placeholder="รหัส / ชื่อ / ตำแหน่ง / แผนก / โทร…">
+          <select className="select" style={{ width: 150 }} value={hrDept} onChange={(e) => setHrDept(e.target.value)}><option value="ALL">ทุกแผนก</option>{depts.map((d) => <option key={d} value={d}>{d}</option>)}</select>
+        </ListToolbar>
         <table className="table">
-          <thead><tr><th>รหัส</th><th>ชื่อ</th><th>ตำแหน่ง</th><th>แผนก</th><th>โทรศัพท์</th><th>เริ่มงาน</th><th className="num">เงินเดือน</th><th></th></tr></thead>
+          <thead><tr><SortTh view={view} k="id">รหัส</SortTh><SortTh view={view} k="name">ชื่อ</SortTh><SortTh view={view} k="role">ตำแหน่ง</SortTh><SortTh view={view} k="dept">แผนก</SortTh><SortTh view={view} k="phone">โทรศัพท์</SortTh><SortTh view={view} k="joined">เริ่มงาน</SortTh><SortTh view={view} k="salary" className="num">เงินเดือน</SortTh><th></th></tr></thead>
           <tbody>
-            {list.length === 0 && (
+            {view.total === 0 && (
               <tr><td colSpan={8} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>ไม่พบพนักงาน</td></tr>
             )}
-            {list.map((e) => (
+            {view.pageRows.map((e) => (
               <tr key={e.id}>
                 <td className="mono"><b>{e.id}</b></td>
                 <td>
@@ -580,6 +659,7 @@ function PageHR() {
             ))}
           </tbody>
         </table>
+        <Pager view={view}/>
       </div>
       {showForm && (
         <EmployeeForm

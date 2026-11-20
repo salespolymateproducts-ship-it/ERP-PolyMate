@@ -2,6 +2,7 @@
 
 function PageProduction() {
   const [tab, setTab] = useState("BOARD");
+  const [listStatus, setListStatus] = useState("ALL");   // เปิดแท็บรายการพร้อมกรองสถานะ (จากลิงก์ "ดูทั้งหมด" บนบอร์ด)
   const [openWO, setOpenWO] = useState(() => { const id = window.takeFocus("wo"); return id ? WORK_ORDERS.find((w) => w.id === id) || null : null; });
   const [cancelWO, setCancelWO] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -31,11 +32,11 @@ function PageProduction() {
           { id: "MACHINE", label: "สถานะเครื่องจักร", count: MACHINES.length },
         ]}
         value={tab}
-        onChange={setTab}
+        onChange={(t) => { if (t === "LIST") setListStatus("ALL"); setTab(t); }}
       />
 
-      {tab === "BOARD" && <KanbanBoard onOpen={setOpenWO}/>}
-      {tab === "LIST"  && <WorkOrderList onOpen={setOpenWO}/>}
+      {tab === "BOARD" && <KanbanBoard onOpen={setOpenWO} onShowAll={(st) => { setListStatus(st); setTab("LIST"); }}/>}
+      {tab === "LIST"  && <WorkOrderList key={listStatus} onOpen={setOpenWO} initialStatus={listStatus}/>}
       {tab === "MACHINE" && <MachineGrid/>}
 
       <Drawer
@@ -85,7 +86,12 @@ function PageProduction() {
   );
 }
 
-function KanbanBoard({ onOpen }) {
+function KanbanBoard({ onOpen, onShowAll }) {
+  // คอลัมน์ "เสร็จแล้ว" แสดงเฉพาะงานที่เสร็จภายใน 7 วัน (เลือก 30 วัน/ทั้งหมดได้) — ใบสั่งผลิตทุกใบยังอยู่ครบในแท็บ "รายการทั้งหมด"
+  const [doneWin, setDoneWin] = React.useState("7");
+  const days = doneWin === "ALL" ? null : Number(doneWin);
+  const cutoff = days == null ? "" : (() => { const d = new Date(Store.today() + "T00:00:00"); d.setDate(d.getDate() - days); return lkIso(d); })();
+  const inWin = (w) => days == null || (!!w.doneAt && String(w.doneAt).slice(0, 10) >= cutoff);
   const cols = [
     { id: "queued", title: "รอผลิต", tone: "var(--text-secondary)" },
     { id: "setup", title: "ตั้งเครื่อง", tone: "var(--amber)" },
@@ -95,15 +101,27 @@ function KanbanBoard({ onOpen }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
       {cols.map((col) => {
-        const items = WORK_ORDERS.filter((w) => w.status === col.id);
+        const all = WORK_ORDERS.filter((w) => w.status === col.id);
+        const items = col.id === "done" ? all.filter(inWin).sort((a, b) => String(b.doneAt || "").localeCompare(String(a.doneAt || ""))) : all;
         return (
           <div key={col.id} style={{ background: "var(--bg-subtle)", borderRadius: 12, padding: 10, minHeight: 360 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 6px 10px" }}>
               <span style={{ width: 10, height: 10, borderRadius: 99, background: col.tone, boxShadow: `0 0 0 3px ${col.tone}22` }} />
               <span style={{ fontWeight: 600, fontSize: 13 }}>{col.title}</span>
-              <span className="badge badge-neutral" style={{ marginLeft: "auto" }}>{items.length}</span>
+              {col.id === "done" && (
+                <select className="select" aria-label="ช่วงเวลางานที่เสร็จ" style={{ width: 96, height: 26, fontSize: 11.5, marginLeft: "auto" }} value={doneWin} onChange={(e) => setDoneWin(e.target.value)}>
+                  <option value="7">7 วันล่าสุด</option><option value="30">30 วัน</option><option value="ALL">ทั้งหมด</option>
+                </select>
+              )}
+              <span className="badge badge-neutral" style={col.id === "done" ? undefined : { marginLeft: "auto" }}>{all.length !== items.length ? items.length + " / " + all.length : items.length}</span>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {col.id === "done" && all.length > 0 && (
+              <div style={{ padding: "0 6px 8px", fontSize: 11.5, color: "var(--text-secondary)" }}>
+                {items.length === 0 ? "ไม่มีงานที่เสร็จใน " + doneWin + " วันล่าสุด · " : ""}
+                <a onClick={() => onShowAll && onShowAll("done")} style={{ color: "var(--accent)", cursor: "pointer" }}>ดูที่เสร็จแล้วทั้งหมด ({all.length}) ในรายการ →</a>
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "68vh", overflowY: "auto", paddingRight: 2 }}>
               {items.map((w) => {
                 const pct = Math.round((w.produced / w.quantity) * 100);
                 return (
@@ -156,26 +174,41 @@ function KanbanBoard({ onOpen }) {
   );
 }
 
-function WorkOrderList({ onOpen }) {
+function WorkOrderList({ onOpen, initialStatus }) {
+  // ใบสั่งผลิต: ค้นหา (เลขที่/สินค้า/ลูกค้า/เครื่อง/แม่พิมพ์) · สถานะ · ช่วงกำหนดส่ง · เรียง · แบ่งหน้า
+  const [woStatus, setWoStatus] = React.useState(initialStatus || "ALL");
+  const view = useListView(WORK_ORDERS, {
+    text: (w) => [w.id, w.product, w.productCode, w.customerName, w.customer, w.machine, w.mold, w.so, w.note].join(" "),
+    dateKey: (w) => w.due, dateLabel: "กำหนดส่ง",
+    filter: (w) => woStatus === "ALL" || w.status === woStatus, filterKey: woStatus,
+    defaultSort: { key: "due", dir: "desc" },
+    sorts: { id: (w) => w.id, product: (w) => w.product, machine: (w) => w.machine, quantity: (w) => w.quantity || 0, produced: (w) => w.produced || 0, ng: (w) => (w.produced ? w.ng / w.produced : 0),
+      status: (w) => (WO_STATUS[w.status] || {}).th || w.status, due: (w) => w.due || "" },
+  });
   return (
     <div className="card">
+      <ListToolbar view={view} placeholder="เลขที่ใบสั่งผลิต / สินค้า / ลูกค้า / เครื่อง / แม่พิมพ์…">
+        <select className="select" style={{ width: 150 }} value={woStatus} onChange={(e) => setWoStatus(e.target.value)}>
+            <option value="ALL">ทุกสถานะ</option>{Object.keys(WO_STATUS).map((k) => <option key={k} value={k}>{WO_STATUS[k].th}</option>)}
+          </select>
+      </ListToolbar>
       <div style={{ overflow: "auto" }}>
         <table className="table">
           <thead>
             <tr>
-              <th>เลขที่</th>
-              <th>สินค้า / ลูกค้า</th>
-              <th>เครื่อง / แม่พิมพ์</th>
+              <SortTh view={view} k="id">เลขที่</SortTh>
+              <SortTh view={view} k="product">สินค้า / ลูกค้า</SortTh>
+              <SortTh view={view} k="machine">เครื่อง / แม่พิมพ์</SortTh>
               <th>Cavity / Cycle</th>
-              <th className="num">เป้าหมาย</th>
-              <th className="num">ผลิตแล้ว</th>
-              <th className="num">NG</th>
-              <th>สถานะ</th>
-              <th>กำหนดส่ง</th>
+              <SortTh view={view} k="quantity" className="num">เป้าหมาย</SortTh>
+              <SortTh view={view} k="produced" className="num">ผลิตแล้ว</SortTh>
+              <SortTh view={view} k="ng" className="num">NG</SortTh>
+              <SortTh view={view} k="status">สถานะ</SortTh>
+              <SortTh view={view} k="due">กำหนดส่ง</SortTh>
             </tr>
           </thead>
           <tbody>
-            {WORK_ORDERS.map((w) => {
+            {view.pageRows.map((w) => {
               const pct = Math.round((w.produced / w.quantity) * 100);
               const ngPct = w.produced ? (w.ng / w.produced) * 100 : 0;
               return (
@@ -207,9 +240,11 @@ function WorkOrderList({ onOpen }) {
                 </tr>
               );
             })}
+            {!view.total && <tr><td colSpan={9} style={{ textAlign: "center", padding: 32, color: "var(--text-tertiary)" }}>{WORK_ORDERS.length ? "ไม่พบใบสั่งผลิตตามเงื่อนไข" : "ยังไม่มีใบสั่งผลิต"}</td></tr>}
           </tbody>
         </table>
       </div>
+      <Pager view={view}/>
     </div>
   );
 }

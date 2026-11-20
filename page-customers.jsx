@@ -6,14 +6,20 @@ function PageCustomers() {
   const [edit, setEdit] = useState(null);
   const [addOpen, setAddOpen] = useState(false);
   const [toast, setToast] = useState(null);
-  const [search, setSearch] = useState("");
+  const [cStatus, setCStatus] = useState("ALL");
   useStore();
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2600); };
 
-  const q = search.trim().toLowerCase();
   const stats = Object.fromEntries(CUSTOMERS.map((c) => [c.code, Analytics.customerStats(c.code)]));
   const segments = ["ALL", ...Array.from(new Set(CUSTOMERS.map((c) => c.segment).filter(Boolean)))];
-  const rows = CUSTOMERS.filter((c) => (seg === "ALL" || c.segment === seg) && (!q || (c.name + c.nameEn + c.code + c.taxId + c.contact).toLowerCase().includes(q)));
+  // ค้นหา (ชื่อ/รหัส/เลขผู้เสียภาษี/ผู้ติดต่อ/โทร/อีเมล/ที่อยู่) · กลุ่มธุรกิจ · สถานะ · เรียง · แบ่งหน้า
+  const view = useListView(CUSTOMERS, {
+    text: (c) => [c.name, c.nameEn, c.code, c.taxId, c.contact, c.phone, c.email, c.address, c.segment].join(" "),
+    filter: (c) => (seg === "ALL" || c.segment === seg) && (cStatus === "ALL" || c.status === cStatus), filterKey: seg + "|" + cStatus,
+    defaultSort: { key: "code", dir: "asc" },
+    sorts: { code: (c) => c.code, name: (c) => c.name, taxId: (c) => c.taxId, contact: (c) => c.contact, credit: (c) => c.credit || 0, segment: (c) => c.segment, ytd: (c) => stats[c.code].ytd, total: (c) => stats[c.code].total, status: (c) => c.status },
+  });
+  const rows = view.sorted;
   const totalSales = Object.values(stats).reduce((s, x) => s + x.total, 0);
   const totalAR = Object.values(stats).reduce((s, x) => s + x.outstanding, 0);
 
@@ -30,31 +36,28 @@ function PageCustomers() {
         }
       />
       <div className="card">
-        <div style={{ padding: "12px 16px", display: "flex", gap: 8, alignItems: "center" }}>
-          <div style={{ position: "relative", flex: 1, maxWidth: 360 }}>
-            <I.Search size={14} style={{ position: "absolute", left: 10, top: 9, color: "var(--text-tertiary)" }}/>
-            <input className="input" placeholder="ค้นหาบริษัท หรือเลขผู้เสียภาษี…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ paddingLeft: 32 }}/>
-          </div>
-          <span className="spacer"/>
-          <select className="input" style={{ width: 200 }} aria-label="กลุ่มธุรกิจ" value={seg} onChange={(e) => setSeg(e.target.value)}>{segments.map((s) => <option key={s} value={s}>{s === "ALL" ? "ทุกกลุ่มธุรกิจ" : s}</option>)}</select>
-        </div>
+        <ListToolbar view={view} placeholder="ชื่อบริษัท / รหัส / เลขผู้เสียภาษี / ผู้ติดต่อ / โทร…">
+          <select className="input" style={{ width: 190 }} aria-label="กลุ่มธุรกิจ" value={seg} onChange={(e) => setSeg(e.target.value)}>{segments.map((s) => <option key={s} value={s}>{s === "ALL" ? "ทุกกลุ่มธุรกิจ" : s}</option>)}</select>
+          <select className="input" style={{ width: 150 }} aria-label="สถานะ" value={cStatus} onChange={(e) => setCStatus(e.target.value)}><option value="ALL">ทุกสถานะ</option><option value="active">ปกติ</option><option value="watch">เฝ้าระวัง</option><option value="inactive">ระงับ</option></select>
+        </ListToolbar>
         <div style={{ overflow: "auto" }}>
           <table className="table">
             <thead>
               <tr>
-                <th>รหัส</th>
-                <th>บริษัท</th>
-                <th>เลขผู้เสียภาษี</th>
-                <th>ผู้ติดต่อ</th>
-                <th>เครดิตเทอม</th>
-                <th>Segment</th>
-                <th className="num">ใบกำกับปีนี้</th>
-                <th className="num">ยอดขายรวม</th>
-                <th>สถานะ</th>
+                <SortTh view={view} k="code">รหัส</SortTh>
+                <SortTh view={view} k="name">บริษัท</SortTh>
+                <SortTh view={view} k="taxId">เลขผู้เสียภาษี</SortTh>
+                <SortTh view={view} k="contact">ผู้ติดต่อ</SortTh>
+                <SortTh view={view} k="credit">เครดิตเทอม</SortTh>
+                <SortTh view={view} k="segment">Segment</SortTh>
+                <SortTh view={view} k="ytd" className="num">ใบกำกับปีนี้</SortTh>
+                <SortTh view={view} k="total" className="num">ยอดขายรวม</SortTh>
+                <SortTh view={view} k="status">สถานะ</SortTh>
               </tr>
             </thead>
             <tbody>
-              {rows.map((c) => (
+              {!view.total && <tr><td colSpan={9} style={{ textAlign: "center", padding: 32, color: "var(--text-tertiary)" }}>{CUSTOMERS.length ? "ไม่พบลูกค้าตามเงื่อนไข" : "ยังไม่มีลูกค้า"}</td></tr>}
+              {view.pageRows.map((c) => (
                 <tr key={c.id} onClick={() => setOpen(c)} style={{ cursor: "pointer" }}>
                   <td className="mono"><b>{c.code}</b></td>
                   <td>
@@ -80,6 +83,7 @@ function PageCustomers() {
             </tbody>
           </table>
         </div>
+        <Pager view={view}/>
       </div>
 
       <Drawer open={!!open} onClose={() => setOpen(null)} title={open?.name} width={620}>

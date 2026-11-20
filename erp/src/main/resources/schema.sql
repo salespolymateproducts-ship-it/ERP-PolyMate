@@ -290,3 +290,8 @@ $$ language plpgsql;
 drop trigger if exists trg_fin_receipt_rcs_guard on fin_receipt_rcs;
 create trigger trg_fin_receipt_rcs_guard before update or delete on fin_receipt_rcs
   for each row execute function fin_receipt_rcs_guard();
+
+-- ใบสั่งผลิตที่เสร็จแล้วแต่ยังไม่มีวันเวลาที่เสร็จ (ข้อมูลก่อนเพิ่มฟิลด์ doneAt): ใช้เวลาแก้ไขล่าสุดแทน (ทำซ้ำได้ ไม่เปลี่ยนเวอร์ชันของเรคอร์ด)
+update erp_records
+   set data = data || jsonb_build_object('doneAt', to_char(updated_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI:SS'))
+ where collection = 'workOrders' and data->>'status' = 'done' and coalesce(data->>'doneAt', '') = '';

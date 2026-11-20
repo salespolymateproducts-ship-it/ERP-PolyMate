@@ -505,13 +505,17 @@ function PageAuditLog() {
   const logs = Store.state.auditLogs;
   const [action, setAction] = useState("ALL");
   const [user, setUser] = useState("ALL");
-  const [q, setQ] = useState("");
-  const [limit, setLimit] = useState(200);
   const actions = ["ALL", ...Array.from(new Set(logs.map((l) => l.action))).sort()];
   const users = ["ALL", ...Array.from(new Set(logs.map((l) => l.user)))];
-  const term = q.trim().toLowerCase();
-  const filtered = logs.filter((l) => (action === "ALL" || l.action === action) && (user === "ALL" || l.user === user)
-    && (!term || [l.entity, l.entityId, l.detail, l.user].join(" ").toLowerCase().includes(term)));
+  // ค้นหา (เลขที่เอกสาร/รายละเอียด/ผู้ใช้) · การกระทำ · ผู้ใช้ · ช่วงวันที่ · เรียง · แบ่งหน้า (หน้าละ 100)
+  const view = useListView(logs, {
+    text: (l) => [l.entity, l.entityId, l.detail, l.user, l.action].join(" "),
+    dateKey: (l) => l.at, dateLabel: "วันที่",
+    filter: (l) => (action === "ALL" || l.action === action) && (user === "ALL" || l.user === user), filterKey: action + "|" + user, pageSize: 100,
+    defaultSort: { key: "at", dir: "desc" },
+    sorts: { at: (l) => String(l.at || ""), user: (l) => l.user, action: (l) => l.action, entity: (l) => l.entity, entityId: (l) => l.entityId },
+  });
+  const filtered = view.sorted;
   return (
     <>
       <window.PageHeader title="Log การใช้งานระบบ" subtitle="บันทึกอัตโนมัติทุกการเข้าใช้งาน การสร้าง แก้ไข อนุมัติ ยกเลิก และการเปลี่ยนแปลงสต๊อก"
@@ -519,28 +523,26 @@ function PageAuditLog() {
           onClick={() => exportCSV(`audit-log-${Store.today()}.csv`, ["วันเวลา", "ผู้ใช้", "Role", "การกระทำ", "ประเภท", "อ้างอิง", "รายละเอียด"],
             filtered.map((l) => [l.at, l.user, l.role, l.action, l.entity, l.entityId, l.detail]))}><I.Download size={14}/> ส่งออก CSV</button></>}/>
       <div className="card">
-        <div style={{ display: "flex", gap: 8, padding: 14, flexWrap: "wrap", alignItems: "center" }}>
-          <select className="input" style={{ width: 170 }} aria-label="การกระทำ" value={action} onChange={(e) => setAction(e.target.value)}>
+        <ListToolbar view={view} placeholder="ค้นหาเลขที่เอกสาร / รายละเอียด / ผู้ใช้…">
+          <select className="input" style={{ width: 160 }} aria-label="การกระทำ" value={action} onChange={(e) => setAction(e.target.value)}>
             {actions.map((a) => <option key={a} value={a}>{a === "ALL" ? "ทุกการกระทำ" : a}</option>)}</select>
-          <select className="input" style={{ width: 170 }} aria-label="ผู้ใช้" value={user} onChange={(e) => setUser(e.target.value)}>
+          <select className="input" style={{ width: 160 }} aria-label="ผู้ใช้" value={user} onChange={(e) => setUser(e.target.value)}>
             {users.map((a) => <option key={a} value={a}>{a === "ALL" ? "ผู้ใช้ทั้งหมด" : a}</option>)}</select>
-          <input className="input" style={{ maxWidth: 280 }} placeholder="ค้นหาเลขที่เอกสาร / รายละเอียด" value={q} onChange={(e) => setQ(e.target.value)}/>
-          <span className="badge badge-neutral">{filtered.length} รายการ</span>
-        </div>
+        </ListToolbar>
         <div style={{ overflow: "auto" }}>
           <table className="table" style={{ fontSize: 12.5 }}>
-            <thead><tr><th>วันเวลา</th><th>ผู้ใช้</th><th>การกระทำ</th><th>ประเภท</th><th>อ้างอิง</th><th>รายละเอียด</th></tr></thead>
+            <thead><tr><SortTh view={view} k="at">วันเวลา</SortTh><SortTh view={view} k="user">ผู้ใช้</SortTh><SortTh view={view} k="action">การกระทำ</SortTh><SortTh view={view} k="entity">ประเภท</SortTh><SortTh view={view} k="entityId">อ้างอิง</SortTh><th>รายละเอียด</th></tr></thead>
             <tbody>
-              {filtered.slice(0, limit).map((l) => (
+              {view.pageRows.map((l) => (
                 <tr key={l.id}><td className="num" style={{ whiteSpace: "nowrap" }}>{l.at}</td><td>{l.user}<div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{l.role}</div></td>
                   <td><span className={"badge badge-" + (AUDIT_ACTION_TONE[l.action] || "neutral")}>{l.action}</span></td><td>{l.entity}</td>
                   <td className="mono">{l.entityId}</td><td>{l.detail}</td></tr>
               ))}
-              {!filtered.length && <EmptyRow cols={6} text="ยังไม่มีบันทึก"/>}
+              {!view.total && <EmptyRow cols={6} text={logs.length ? "ไม่พบบันทึกตามเงื่อนไข" : "ยังไม่มีบันทึก"}/>}
             </tbody>
           </table>
-          {filtered.length > limit && <div style={{ padding: 12, textAlign: "center" }}><button className="btn btn-outline btn-sm" onClick={() => setLimit((n) => n + 200)}>แสดงเพิ่ม ({filtered.length - limit} รายการ)</button></div>}
         </div>
+        <Pager view={view}/>
       </div>
     </>
   );

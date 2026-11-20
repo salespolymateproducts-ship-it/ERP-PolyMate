@@ -432,7 +432,10 @@ public class WorkflowService {
 		wo.put("logs", logs);
 		String st = Json.s(wo.get("status"));
 		if ("queued".equals(st) || "setup".equals(st)) wo.put("status", "running");
-		if (Json.num(wo.get("produced")) - Json.num(wo.get("ng")) >= Json.num(wo.get("quantity"))) wo.put("status", "done");
+		if (Json.num(wo.get("produced")) - Json.num(wo.get("ng")) >= Json.num(wo.get("quantity"))) {
+			wo.put("status", "done");
+			if (Json.s(wo.get("doneAt")).isBlank()) wo.put("doneAt", nowStr());   // วันเวลาที่งานเสร็จจริง (ใช้แสดงงานที่เพิ่งเสร็จบนบอร์ด)
+		}
 		save("workOrders", wo, u);
 
 		if (wo.get("machine") != null) {
