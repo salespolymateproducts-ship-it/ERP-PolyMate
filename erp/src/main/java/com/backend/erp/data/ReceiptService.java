@@ -61,7 +61,22 @@ public class ReceiptService {
 		m.put("allocations", jdbc.queryForList("select a.invoice_id as \"invoiceId\", a.amount::float8 as amount, a.wht::float8 as wht, coalesce(d.data->>'date','') as \"invoiceDate\", coalesce(d.data->>'due','') as due, "
 			+ "coalesce(d.data->>'total','0')::float8 as total, coalesce(d.data->>'refNo','') as \"refNo\", coalesce(d.data->>'note','') as note, coalesce(d.data->>'status','') as \"invoiceStatus\", "
 			+ "coalesce(d.data->'sourceIds','[]'::jsonb)::text as \"sourceIds\" from fin_receipt_allocs a left join erp_records d on d.collection = 'docs' and d.id = a.invoice_id where a.receipt_id = ? order by a.id", id));
+		// ใบเสร็จรับเงิน (RC) ที่ผูกไว้ — ใช้ติดตามว่าใบเสร็จที่พนักงานพกไปเก็บเงินได้เงินแล้วหรือยัง
+		m.put("rcIds", jdbc.queryForList("select rc_id from fin_receipt_rcs where receipt_id = ? order by id", String.class, id));
 		return m;
+	}
+
+	/** สถานะการเก็บเงินของใบเสร็จ (RC): ใบรับเงินที่ผูกและยัง pending/confirmed — ใบที่ไม่อยู่ในรายการ = ยังไม่มีการบันทึกรับเงิน */
+	public List<Map<String, Object>> rcStatus(AuthUser u) {
+		FinanceService.needRead(u);
+		return jdbc.queryForList("select l.rc_id as \"rcId\", r.id as \"receiptId\", r.status, to_char(r.rcv_date,'YYYY-MM-DD') as date, r.received::float8 as received "
+			+ "from fin_receipt_rcs l join fin_receipts r on r.id = l.receipt_id where r.status in ('pending','confirmed') order by l.rc_id, r.id");
+	}
+
+	/** ใบกำกับที่ภาษีถูกหัก ณ ที่จ่ายถูกบันทึกผ่านใบรับเงินแล้ว (pending/confirmed) — การติดตามหนังสือ 50 ทวิ ของฝั่งลูกค้าใช้ใบรับเงินที่เดียว */
+	public List<String> whtInvoices(AuthUser u) {
+		FinanceService.needRead(u);
+		return jdbc.queryForList("select distinct a.invoice_id from fin_receipt_allocs a join fin_receipts r on r.id = a.receipt_id where r.status in ('pending','confirmed') and a.wht > 0 order by 1", String.class);
 	}
 
 	public List<Map<String, Object>> list(AuthUser u, String status, String customerId) {
@@ -167,6 +182,17 @@ public class ReceiptService {
 			fin.lockAccounts(List.of(accountId), date, true);
 		}
 
+		// ใบเสร็จรับเงิน (RC) ที่ออกไว้ล่วงหน้า (ไม่บังคับ): ต้องเป็นของลูกค้าเดียวกัน ยังไม่ถูกยกเลิก
+		List<String> rcIds = new ArrayList<>();
+		if (b.get("rcIds") instanceof List<?> rl) for (Object o : rl) {
+			String rc = Json.s(o).trim();
+			if (rc.isEmpty() || rcIds.contains(rc)) continue;
+			List<Map<String, Object>> d = jdbc.queryForList("select data->>'type' as type, data->>'customer' as customer, data->>'status' as status from erp_records where collection = 'docs' and id = ?", rc);
+			if (d.isEmpty() || !"RC".equals(d.get(0).get("type"))) throw ApiException.badRequest("ไม่พบใบเสร็จรับเงิน " + rc);
+			if (!customerId.equals(d.get(0).get("customer"))) throw ApiException.badRequest("ใบเสร็จ " + rc + " ไม่ใช่ของลูกค้าที่เลือก");
+			if ("cancelled".equals(d.get(0).get("status"))) throw ApiException.conflict("RC_CANCELLED", "ใบเสร็จ " + rc + " ถูกยกเลิกแล้ว");
+			rcIds.add(rc);
+		}
 		String no = (String) counters.next("RV", date.toString()).get("docNo");
 		double threshold = ((Number) fin.settings().get("approvalThreshold")).doubleValue();
 		boolean admin = u.isAdmin();
@@ -179,7 +205,8 @@ public class ReceiptService {
 			status.equals("confirmed"), admin);
 		for (Map.Entry<String, BigDecimal[]> e : want.entrySet())
 			jdbc.update("insert into fin_receipt_allocs(receipt_id,invoice_id,amount,wht) values (?,?,?,?)", no, e.getKey(), e.getValue()[0], e.getValue()[1]);
-		audit.log(u, "RV_CREATE", "ใบรับเงิน", no, "ลูกค้า " + customerId + " รับ " + received + " ค่าธรรมเนียม " + fee + " ภาษีถูกหัก " + sumWht + " เกิน " + excess + " → " + want.keySet() + " · " + status + (admin ? " (admin อนุมัติเอง)" : ""));
+		for (String rc : rcIds) jdbc.update("insert into fin_receipt_rcs(receipt_id,rc_id) values (?,?)", no, rc);
+		audit.log(u, "RV_CREATE", "ใบรับเงิน", no, (rcIds.isEmpty() ? "" : "ใบเสร็จ " + rcIds + " · ") + "ลูกค้า " + customerId + " รับ " + received + " ค่าธรรมเนียม " + fee + " ภาษีถูกหัก " + sumWht + " เกิน " + excess + " → " + want.keySet() + " · " + status + (admin ? " (admin อนุมัติเอง)" : ""));
 		if (status.equals("confirmed")) post(u, no);
 		return receipt(no);
 	}

@@ -22,6 +22,7 @@ const NAV = [
   { section: "การเงิน", grp: "fin" },
   { id: "fin-approvals", label: "รออนุมัติ", icon: "Check", grp: "fin" },
   { sub: "รายรับ", grp: "fin" },
+  { id: "fin-rc-wait", label: "ใบเสร็จรอเก็บเงิน", icon: "Wallet", grp: "fin" },
   { id: "fin-receipts", label: "รับเงินลูกค้า", icon: "Wallet", grp: "fin" },
   { sub: "รายจ่าย", grp: "fin" },
   { id: "accounting", label: "บัญชี / ภพ.30 (ค่าใช้จ่าย)", icon: "Wallet", grp: "fin" },

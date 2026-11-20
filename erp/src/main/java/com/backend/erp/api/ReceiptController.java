@@ -33,6 +33,12 @@ public class ReceiptController {
 	@GetMapping("/summary")
 	public Map<String, Object> summary(HttpServletRequest req) { return rc.summary(AuthInterceptor.user(req)); }
 
+	@GetMapping("/rc-status")
+	public List<Map<String, Object>> rcStatus(HttpServletRequest req) { return rc.rcStatus(AuthInterceptor.user(req)); }
+
+	@GetMapping("/wht-invoices")
+	public List<String> whtInvoices(HttpServletRequest req) { return rc.whtInvoices(AuthInterceptor.user(req)); }
+
 	@GetMapping("/open-invoices")
 	public List<Map<String, Object>> openInvoices(@RequestParam String customerId, HttpServletRequest req) { return rc.openInvoices(AuthInterceptor.user(req), customerId); }
 

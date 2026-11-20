@@ -167,6 +167,8 @@ class ReceiptTests {
 		assertEquals(0.0, remaining("C1", "IV-1"), 1e-9);                                                                         // ใบกำกับปิดครบ
 		call("POST", "/finance/receipts", rv("C1", "BANK1", 10, 0, List.of(alloc("IV-1", 10, 0))), admin, 422);                  // ปิดแล้วจัดสรรเพิ่มไม่ได้
 		String id = String.valueOf(r.get("id"));
+		assertEquals(List.of("IV-1"), call("GET", "/finance/receipts/wht-invoices", null, acc, 200).get("_list"));              // ฝั่งลูกค้า: ภาษีถูกหักของ IV-1 ติดตามผ่านใบรับเงิน
+		call("GET", "/finance/receipts/wht-invoices", null, sales, 403);
 		assertEquals(1, ((Number) call("GET", "/finance/receipts/summary", null, acc, 200).get("whtCertPendingCount")).intValue());
 		call("POST", "/finance/receipts/" + id + "/wht-cert", Map.of("no", "", "date", TODAY.toString(), "amount", 30), acc, 400);
 		Map<String, Object> c = call("POST", "/finance/receipts/" + id + "/wht-cert", Map.of("no", "50T-001", "date", TODAY.toString(), "amount", 30), acc, 200);
@@ -231,7 +233,29 @@ class ReceiptTests {
 		assertEquals(400.0, remaining("C1", "IV-4"), 1e-9);
 	}
 
-	@Test @Order(7)
+	@SuppressWarnings("unchecked")
+	List<Map<String, Object>> rcStatus() throws Exception { return (List<Map<String, Object>>) call("GET", "/finance/receipts/rc-status", null, acc, 200).get("_list"); }
+
+	@Test @Order(8)
+	void receiptsLinkToIssuedRcAndTrackCollection() throws Exception {
+		jdbc.update("insert into erp_records(collection,id,data) values ('docs','RC-1','{\"type\":\"RC\",\"customer\":\"C1\",\"status\":\"approved\"}'::jsonb), "
+			+ "('docs','RC-OTHER','{\"type\":\"RC\",\"customer\":\"C2\",\"status\":\"approved\"}'::jsonb), ('docs','RC-CANC','{\"type\":\"RC\",\"customer\":\"C1\",\"status\":\"cancelled\"}'::jsonb)");
+		assertEquals(0, rcStatus().stream().filter(s -> "RC-1".equals(s.get("rcId"))).count());                                  // ยังไม่มีใครบันทึกรับเงิน = รอเก็บเงิน
+		call("POST", "/finance/receipts", with(rv("C1", "CASH1", 100, 0, List.of(alloc("IV-4", 100, 0))), "rcIds", List.of("NOPE")), admin, 400);       // ไม่พบใบเสร็จ
+		call("POST", "/finance/receipts", with(rv("C1", "CASH1", 100, 0, List.of(alloc("IV-4", 100, 0))), "rcIds", List.of("RC-OTHER")), admin, 400);    // ลูกค้าไม่ตรง
+		call("POST", "/finance/receipts", with(rv("C1", "CASH1", 100, 0, List.of(alloc("IV-4", 100, 0))), "rcIds", List.of("RC-CANC")), admin, 409);     // ใบเสร็จถูกยกเลิก
+		assertEquals(400.0, remaining("C1", "IV-4"), 1e-9);                                                                                           // ที่ปฏิเสธต้องไม่จองยอด
+		Map<String, Object> pend = call("POST", "/finance/receipts", with(rv("C1", "CASH1", 100, 0, List.of(alloc("IV-4", 100, 0))), "rcIds", List.of("RC-1")), acc, 200);
+		assertEquals(List.of("RC-1"), pend.get("rcIds"));
+		assertEquals("pending", rcStatus().stream().filter(s -> "RC-1".equals(s.get("rcId"))).findFirst().orElseThrow().get("status"));              // รออนุมัติ
+		call("POST", "/finance/receipts/" + pend.get("id") + "/approve", null, admin, 200);
+		assertEquals("confirmed", rcStatus().stream().filter(s -> "RC-1".equals(s.get("rcId"))).findFirst().orElseThrow().get("status"));            // รับเงินแล้ว
+		call("POST", "/finance/receipts/" + pend.get("id") + "/void", Map.of("reason", "ทดสอบ"), admin, 200);
+		assertEquals(0, rcStatus().stream().filter(s -> "RC-1".equals(s.get("rcId"))).count());                                  // กลับรายการ → กลับไปรอเก็บเงิน
+		call("GET", "/finance/receipts/rc-status", null, sales, 403);
+	}
+
+	@Test @Order(9)
 	void allocationsAreImmutable() {
 		assertThrows(Exception.class, () -> jdbc.update("delete from fin_receipt_allocs"));
 		assertThrows(Exception.class, () -> jdbc.update("update fin_receipt_allocs set amount = amount + 1"));

@@ -1,4 +1,4 @@
-/* global React, I, Store, ErpModal, DateInput, notify, baht, _fmt, fmtDate, finErr, finMoney, FIN_STATUS */
+/* global React, I, Store, useStore, Workflow, ErpModal, DateInput, notify, baht, _fmt, fmtDate, finErr, finMoney, FIN_STATUS */
 
 /*
   การเงิน ขั้น A2: รับเงินลูกค้า (RV) — จัดสรรเข้าใบกำกับภาษีหลายใบ · ค่าธรรมเนียมธนาคาร · ภาษีถูกหัก (รอ 50 ทวิ) · เงินรอคืนลูกค้า
@@ -7,10 +7,11 @@
 
 const rvNum = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
-function FinReceiptModal({ accounts, onClose, onDone }) {
+function FinReceiptModal({ accounts, onClose, onDone, prefill }) {
   const customers = (Store.state.customers || []).filter((c) => c.status !== "inactive");
   const bankAccs = accounts.filter((a) => a.active);
-  const [f, setF] = React.useState({ date: Store.today(), customerId: "", accountId: "", received: "", bankFee: "", refNo: "", note: "" });
+  const [f, setF] = React.useState({ date: Store.today(), customerId: prefill ? prefill.customerId : "", accountId: "", received: prefill && prefill.received > 0 ? String(prefill.received) : "", bankFee: "", refNo: "", note: "" });
+  const appliedRef = React.useRef(false);
   const [open, setOpen] = React.useState([]);        // ใบกำกับค้างของลูกค้า
   const [al, setAl] = React.useState({});            // invoiceId -> { amount, wht }
   const [keepExcess, setKeepExcess] = React.useState(false);
@@ -22,7 +23,23 @@ function FinReceiptModal({ accounts, onClose, onDone }) {
     if (!f.customerId) { setOpen([]); setAl({}); return undefined; }
     let live = true;
     Store.finApi("GET", "/receipts/open-invoices?customerId=" + encodeURIComponent(f.customerId))
-      .then((l) => { if (live) { setOpen(l); setAl({}); } }).catch((e) => setErr(e.message || String(e)));
+      .then((l) => {
+        if (!live) return;
+        setOpen(l);
+        if (prefill && !appliedRef.current) {
+          // เติมการจัดสรรให้จากใบเสร็จที่เลือก: ใบกำกับที่ใบเสร็จครอบคลุม ตามลำดับ ใช้เงินที่คาดว่าจะได้รับ (แก้ไขได้)
+          appliedRef.current = true;
+          let left = rvNum(prefill.received); const res = {};
+          (prefill.invoiceIds || []).forEach((id) => {
+            const inv = l.find((x) => x.id === id); if (!inv) return;
+            const wht = Math.min(inv.wht, inv.remaining), full = rvNum(inv.remaining - wht);
+            const amt = Math.max(0, Math.min(full, left));
+            res[id] = { amount: amt ? String(amt) : "", wht: amt >= full ? String(wht || "") : "" };
+            left = rvNum(left - amt);
+          });
+          setAl(res);
+        } else setAl({});
+      }).catch((e) => setErr(e.message || String(e)));
     return () => { live = false; };
   }, [f.customerId]);
 
@@ -44,7 +61,7 @@ function FinReceiptModal({ accounts, onClose, onDone }) {
     setErr(""); setBusy(true);
     try {
       const allocations = rows.filter((r) => (Number(r.a.amount) || 0) + (Number(r.a.wht) || 0) > 0).map((r) => ({ invoiceId: r.i.id, amount: r.a.amount || 0, wht: r.a.wht || 0 }));
-      const rc = await Store.finApi("POST", "/receipts", { ...f, received: f.received || 0, bankFee: f.bankFee || 0, allocations, keepExcess });
+      const rc = await Store.finApi("POST", "/receipts", { ...f, received: f.received || 0, bankFee: f.bankFee || 0, allocations, keepExcess, rcIds: prefill ? prefill.rcIds : [] });
       notify((rc.status === "pending" ? "บันทึกใบรับเงิน " : "รับเงินแล้ว ") + rc.id + (rc.status === "pending" ? " — รอ admin อนุมัติ" : ""), "success");
       onDone();
     } catch (e) { setErr(e && e.message ? e.message : String(e)); setBusy(false); }
@@ -54,6 +71,7 @@ function FinReceiptModal({ accounts, onClose, onDone }) {
   return (
     <ErpModal title="รับเงินลูกค้า" width={860} onClose={onClose}
       footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={busy || !f.customerId || !f.accountId} onClick={save}>บันทึกรับเงิน</button></>}>
+      {prefill && <div style={{ marginBottom: 8, padding: "8px 12px", borderRadius: 8, background: "var(--accent-subtle, #eef4ff)", fontSize: 12.5 }}>บันทึกรับเงินสำหรับใบเสร็จ <b className="mono">{(prefill.rcIds || []).join(", ")}</b> · เติมยอดตามใบเสร็จให้แล้ว ตรวจและแก้ให้ตรงกับเงินที่ได้รับจริง (ค่าธรรมเนียม/ภาษีถูกหัก)</div>}
       <div className="grid-2" style={{ gap: 10 }}>
         <div><label style={lbl}>วันที่รับเงิน *</label><DateInput className="input" value={f.date} max={Store.today()} onChange={(e) => set("date", e.target.value)}/></div>
         <div><label style={lbl}>ลูกค้า *</label>
@@ -162,6 +180,7 @@ function FinReceiptDetailModal({ r, isAdmin, user, onClose, onApprove, onReject,
         <div style={cell}>ลูกค้า: <b>{r.customerName}</b></div><div style={cell}>สถานะ: <span className={"badge " + st.cls}>{st.th}</span></div>
         <div style={cell}>วันที่รับเงิน: {fmtDate(r.date)}</div><div style={cell}>เข้าบัญชี: <b>{r.accountId}</b>{r.refNo ? " · อ้างอิง " + r.refNo : ""}</div>
         <div style={cell}>ผู้บันทึก: {r.createdBy} · {r.createdAt}</div>
+        {(r.rcIds || []).length ? <div style={cell}>ใบเสร็จรับเงินที่ออกไว้: <b className="mono">{r.rcIds.join(", ")}</b></div> : null}
         <div style={cell}>เงินเข้าบัญชี <b>{finMoney(r.received)}</b> · ค่าธรรมเนียม {finMoney(r.bankFee)} · ภาษีถูกหัก {finMoney(r.wht)}{r.excess ? " · เงินรอคืน " + finMoney(r.excess) : ""}</div>
         {r.note ? <div style={{ ...cell, gridColumn: "1 / -1" }}>หมายเหตุ: {r.note}</div> : null}
       </div>
@@ -222,7 +241,7 @@ function FinReceipts({ accounts, isAdmin, user, setModal, reload, tick }) {
               const mine = user && r.createdBy === user.fullName;
               return (
                 <tr key={r.id}>
-                  <td className="mono"><b>{r.id}</b><div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{r.accountId}{r.refNo ? " · " + r.refNo : ""}</div></td>
+                  <td className="mono"><b>{r.id}</b><div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{r.accountId}{r.refNo ? " · " + r.refNo : ""}</div>{(r.rcIds || []).length ? <div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>ใบเสร็จ {r.rcIds.join(", ")}</div> : null}</td>
                   <td>{fmtDate(r.date)}</td><td>{r.customerName}</td>
                   <td style={{ fontSize: 12 }}>{r.allocations.map((a) => <div key={a.invoiceId}><span className="mono">{a.invoiceId}</span> · {finMoney(a.amount + a.wht)}{a.refNo ? <div style={{ color: "var(--text-tertiary)" }}>อ้างอิง {a.refNo}</div> : null}</div>)}</td>
                   <td className="num" style={{ fontWeight: 600, color: "var(--success)" }}>{finMoney(r.received)}</td>
@@ -256,3 +275,95 @@ function FinReceipts({ accounts, isAdmin, user, setModal, reload, tick }) {
 }
 
 window.FinReceipts = FinReceipts;
+
+/** ใบกำกับที่ใบเสร็จ (RC) ครอบคลุม — ไล่ขึ้นไปตามเอกสารต้นทาง (RC → BN/INV) */
+function rcInvoiceIds(rc) {
+  const out = [];
+  const walk = (id, depth) => {
+    const d = Workflow.get(id); if (!d || depth > 6) return;
+    if (d.type === "INV") { if (!out.includes(d.id)) out.push(d.id); return; }
+    (d.sourceIds || []).forEach((x) => walk(x, depth + 1));
+  };
+  (rc.sourceIds || []).forEach((x) => walk(x, 0));
+  return out;
+}
+window.rcInvoiceIds = rcInvoiceIds;
+
+/** ข้อมูลเตรียมเปิดหน้ารับเงินจากใบเสร็จ */
+function rcPrefill(rc) {
+  const a = Workflow.rcAmounts(rc);
+  return { customerId: rc.customer, rcIds: [rc.id], invoiceIds: rcInvoiceIds(rc), received: Math.max(0, a.outstanding) };
+}
+window.rcPrefill = rcPrefill;
+
+/** ป้ายสถานะเก็บเงินของใบเสร็จ: รอเก็บเงิน (กี่วัน) / รอยืนยัน / รับเงินแล้ว — เฉพาะผู้มีสิทธิ์การเงิน */
+function RcCollectBadge({ doc }) {
+  const [st, setSt] = React.useState(undefined);
+  React.useEffect(() => {
+    let live = true;
+    Store.finApi("GET", "/receipts/rc-status").then((l) => { if (live) setSt(l.filter((x) => x.rcId === doc.id)); }).catch(() => { if (live) setSt(null); });
+    return () => { live = false; };
+  }, [doc.id]);
+  if (st === undefined || st === null || !["approved", "partial"].includes(doc.status)) return null;
+  const conf = st.find((x) => x.status === "confirmed"), pend = st.find((x) => x.status === "pending");
+  const days = Math.max(0, Math.round((Date.now() - new Date(doc.date).getTime()) / 86400000));
+  return (
+    <div style={{ margin: "8px 0", fontSize: 12.5 }}>
+      {conf ? <span className="badge badge-success">รับเงินแล้ว · {conf.receiptId}</span>
+        : pend ? <span className="badge badge-warning">รอ admin อนุมัติการรับเงิน · {pend.receiptId}</span>
+        : <span className="badge badge-warning">ออกแล้ว · รอเก็บเงิน ({days} วัน){doc.collector ? " · ผู้เก็บเงิน " + doc.collector : ""}</span>}
+    </div>
+  );
+}
+window.RcCollectBadge = RcCollectBadge;
+
+/** หน้า "ใบเสร็จรอเก็บเงิน": ใบเสร็จที่ออกให้ลูกค้าแล้วแต่ยังไม่มีการบันทึกรับเงินจริง เรียงตามอายุ */
+function FinRcWaiting({ accounts, reload, tick }) {
+  useStore();
+  const [links, setLinks] = React.useState([]);
+  const [open, setOpen] = React.useState(null);
+  const [collector, setCollector] = React.useState("ALL");
+  React.useEffect(() => { let live = true; Store.finApi("GET", "/receipts/rc-status").then((l) => { if (live) setLinks(l); }).catch(finErr); return () => { live = false; }; }, [tick]);
+  const linked = new Set(links.map((x) => x.rcId));
+  const day = (d) => Math.max(0, Math.round((Date.now() - new Date(d.date).getTime()) / 86400000));
+  const rows = Store.state.docs.filter((d) => d.type === "RC" && ["approved", "partial"].includes(d.status) && !linked.has(d.id) && Workflow.rcAmounts(d).outstanding > 0.005)
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+  const collectors = [...new Set(rows.map((d) => d.collector || "—"))];
+  const list = rows.filter((d) => collector === "ALL" || (d.collector || "—") === collector);
+  const total = list.reduce((s, d) => s + Workflow.rcAmounts(d).outstanding, 0);
+  const late = list.filter((d) => day(d) > 30);
+  return (
+    <>
+      <div className="grid-4" style={{ margin: "0 0 12px" }}>
+        <div className="card" style={{ padding: 12 }}><div style={{ fontSize: 12, color: "var(--text-secondary)" }}>ใบเสร็จรอเก็บเงิน</div><div style={{ fontSize: 18, fontWeight: 700 }}>{list.length} ใบ</div></div>
+        <div className="card" style={{ padding: 12 }}><div style={{ fontSize: 12, color: "var(--text-secondary)" }}>ยอดที่ต้องเก็บ</div><div style={{ fontSize: 18, fontWeight: 700, color: "var(--accent)" }}>{finMoney(total)}</div></div>
+        <div className="card" style={{ padding: 12 }}><div style={{ fontSize: 12, color: "var(--text-secondary)" }}>เกิน 30 วัน</div><div style={{ fontSize: 18, fontWeight: 700, color: late.length ? "var(--danger)" : "inherit" }}>{late.length} ใบ</div></div>
+        <div className="card" style={{ padding: 12 }}><select className="select" value={collector} onChange={(e) => setCollector(e.target.value)}><option value="ALL">ทุกผู้เก็บเงิน</option>{collectors.map((c) => <option key={c} value={c}>{c === "—" ? "ยังไม่ระบุผู้เก็บเงิน" : c}</option>)}</select></div>
+      </div>
+      <div className="card">
+        <div style={{ padding: "12px 16px", fontSize: 12.5, color: "var(--text-secondary)" }}>ใบเสร็จที่ออกให้ลูกค้าแล้ว (พนักงานพกไปเก็บเงิน) ที่ยังไม่มีการบันทึกรับเงิน — เก็บเงินได้แล้วกด "บันทึกรับเงิน" ระบบเติมลูกค้าและใบกำกับให้ ถ้าลูกค้าไม่จ่าย ให้ยกเลิกใบเสร็จที่หน้าเอกสารขาย</div>
+        <table className="table">
+          <thead><tr><th>ใบเสร็จ</th><th>วันที่ออก</th><th className="num">อายุ (วัน)</th><th>ลูกค้า</th><th>ใบกำกับ</th><th>ผู้เก็บเงิน</th><th className="num">ยอดที่ต้องเก็บ</th><th></th></tr></thead>
+          <tbody>
+            {list.map((d) => {
+              const age = day(d);
+              return (
+                <tr key={d.id}>
+                  <td className="mono"><b>{d.id}</b></td><td>{fmtDate(d.date)}</td>
+                  <td className="num" style={{ fontWeight: 600, color: age > 30 ? "var(--danger)" : age > 14 ? "var(--amber)" : "inherit" }}>{age}</td>
+                  <td>{d.customerName}</td><td className="mono" style={{ fontSize: 12 }}>{rcInvoiceIds(d).join(", ") || "—"}</td>
+                  <td>{d.collector || <span style={{ color: "var(--text-tertiary)" }}>—</span>}</td>
+                  <td className="num"><b>{finMoney(Workflow.rcAmounts(d).outstanding)}</b></td>
+                  <td><button className="btn btn-primary btn-sm" onClick={() => setOpen(d)}>บันทึกรับเงิน</button></td>
+                </tr>
+              );
+            })}
+            {!list.length && <tr><td colSpan={8} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>ไม่มีใบเสร็จรอเก็บเงิน</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {open && <FinReceiptModal accounts={accounts} prefill={rcPrefill(open)} onClose={() => setOpen(null)} onDone={() => { setOpen(null); reload(); }}/>}
+    </>
+  );
+}
+window.FinRcWaiting = FinRcWaiting;

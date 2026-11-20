@@ -269,3 +269,24 @@ $$ language plpgsql;
 drop trigger if exists trg_fin_pay_items_guard on fin_pay_items;
 create trigger trg_fin_pay_items_guard before update or delete on fin_pay_items
   for each row execute function fin_pay_items_guard();
+
+-- ==========================================================================
+-- การเงิน (ขั้น A4): ผูกใบรับเงิน (RV) กับใบเสร็จรับเงิน (RC) ที่ออกให้ลูกค้าไว้ก่อน (พนักงานพกไปเก็บเงิน)
+--   สถานะเก็บเงินของใบเสร็จคำนวณจากใบรับเงินที่ผูกอยู่ (pending/confirmed) ไม่เก็บซ้ำในใบเสร็จ
+-- ==========================================================================
+create table if not exists fin_receipt_rcs (
+  id         bigserial primary key,
+  receipt_id text not null references fin_receipts(id),
+  rc_id      text not null
+);
+create index if not exists idx_fin_receipt_rcs_rc on fin_receipt_rcs (rc_id);
+create index if not exists idx_fin_receipt_rcs_rv on fin_receipt_rcs (receipt_id);
+
+create or replace function fin_receipt_rcs_guard() returns trigger as $$
+begin
+  raise exception 'fin_receipt_rcs is append-only';
+end;
+$$ language plpgsql;
+drop trigger if exists trg_fin_receipt_rcs_guard on fin_receipt_rcs;
+create trigger trg_fin_receipt_rcs_guard before update or delete on fin_receipt_rcs
+  for each row execute function fin_receipt_rcs_guard();

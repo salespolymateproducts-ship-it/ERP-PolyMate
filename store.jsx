@@ -38,6 +38,8 @@ const Store = (function () {
     users: [],
     settings: { company: null },
     counters: {}, // { "IV202611": 3, ... }
+    rcLinked: [],      // เลขที่ใบเสร็จ (RC) ที่ผูกกับใบรับเงิน (RV) แล้ว — ไม่ซิงก์กับเซิร์ฟเวอร์ (อ่านจาก API การเงิน)
+    whtInvoices: [],   // ใบกำกับที่ภาษีถูกหักถูกบันทึกผ่านใบรับเงินแล้ว
   };
   const ARRAY_KEYS = ["docs", "customers", "suppliers", "workOrders", "purchaseOrders", "expenses", "employees",
     "materials", "finished", "boms", "qc", "molds", "machines", "stockMovements", "auditLogs", "users"];
@@ -547,6 +549,15 @@ const Store = (function () {
   // เรียก server ตรง ๆ (ตรวจกฎและตอบ error ทันที) แล้วโหลดข้อมูลใหม่
   // การเงิน (บัญชีเงิน/สมุดเงิน/รับ-จ่ายอื่น ๆ): เรียก API ตรง — กฎทั้งหมดอยู่ที่เซิร์ฟเวอร์
   const finApi = (method, path, body) => api(method, "/finance" + path, body);
+  // ใบเสร็จ/ใบกำกับที่การเงินติดตามแล้ว (ใช้ซ่อนการติดตาม 50 ทวิ แบบเก่า) — ผู้ไม่มีสิทธิ์การเงินจะได้ 403 แล้วใช้แบบเดิม
+  async function refreshRcLinks() {
+    if (!token) return;
+    try {
+      const [l, w] = await Promise.all([api("GET", "/finance/receipts/rc-status"), api("GET", "/finance/receipts/wht-invoices")]);
+      state.rcLinked = l.map((x) => x.rcId); state.whtInvoices = w; notify();
+    } catch (e) { /* ไม่มีสิทธิ์/เชื่อมต่อไม่ได้ */ }
+  }
+  try { window.addEventListener("fin-changed", () => refreshRcLinks()); } catch (e) { /* ignore */ }
   async function serverCall(method, path, body) {
     if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
     await settleSync();
@@ -629,6 +640,7 @@ const Store = (function () {
     syncEnabled = true;
     await bootstrap();
     startPolling();
+    refreshRcLinks();
   }
   async function login(username, pw) {
     const r = await api("POST", "/auth/login", { username, password: pw });
@@ -754,7 +766,7 @@ const Store = (function () {
   function resetAll() { logout(); location.reload(); }
 
   return {
-    state, subscribe, getVersion: () => version,
+    state, subscribe, getVersion: () => version, refreshRcLinks,
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
     adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, adjustWoBom, woMaterial, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,

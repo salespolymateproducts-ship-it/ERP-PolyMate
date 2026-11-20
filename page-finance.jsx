@@ -160,6 +160,7 @@ function PageFinance({ view }) {
   const addBtn = (kind, label) => <button className="btn btn-outline btn-sm" onClick={() => setModal({ t: "txn", kind })}><I.Plus size={14}/> {label}</button>;
   const META = {
     ACC: { title: "บัญชีเงิน", sub: "เงินสดย่อย · ธนาคาร — ยอดคงเหลือคำนวณจากสมุดเงิน", actions: <button className="btn btn-primary btn-sm" onClick={() => setModal({ t: "acc" })}><I.Plus size={14}/> เพิ่มบัญชีเงิน</button> },
+    RCW: { title: "ใบเสร็จรอเก็บเงิน", sub: "ใบเสร็จที่ออกให้ลูกค้าแล้วแต่ยังไม่มีการบันทึกรับเงินจริง — ติดตามตามอายุและผู้เก็บเงิน" },
     LED: { title: "สมุดเงิน", sub: "ทุกรายการเงินเข้า/ออกของแต่ละบัญชี ยืนยันแล้วลบไม่ได้ (กลับรายการเท่านั้น)" },
     RCV: { title: "รับเงินลูกค้า", sub: "รับเงินตามใบกำกับภาษี · ค่าธรรมเนียมธนาคาร · ภาษีถูกหัก ณ ที่จ่าย (รอ 50 ทวิ) · เงินรอคืนลูกค้า" },
     PAYV: { title: "จ่ายเงิน (ใบสำคัญจ่าย)", sub: "ค่าใช้จ่าย → ใบสำคัญจ่าย → อนุมัติ → จ่ายเงิน · หัก ณ ที่จ่ายออกเลขหนังสือตามวันที่จ่ายจริง" },
@@ -184,6 +185,7 @@ function PageFinance({ view }) {
 
       {tab === "ACC" && <FinAccounts accounts={accounts} onEdit={(a) => setModal({ t: "acc", acc: a })}/>}
       {tab === "LED" && <FinLedger accounts={accounts} tick={tick}/>}
+      {tab === "RCW" && <FinRcWaiting accounts={accounts} reload={reload} tick={tick}/>}
       {tab === "RCV" && <FinReceipts accounts={accounts} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload} tick={tick}/>}
       {tab === "PAYV" && <FinPayments accounts={accounts} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload} tick={tick}/>}
       {tab === "TX" && <FinTxnList txns={txns} accName={accName} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload}/>}
@@ -348,6 +350,7 @@ window.PageFinance = PageFinance;
 // หน้าย่อยของเมนู "การเงิน" (เมนูซ้ายแต่ละรายการเปิดหน้าเดียวกันแต่ต่างมุมมอง)
 window.PageFinApprovals = () => <PageFinance view="APR"/>;
 window.PageFinReceipts = () => <PageFinance view="RCV"/>;
+window.PageFinRcWait = () => <PageFinance view="RCW"/>;
 window.PageFinPayments = () => <PageFinance view="PAYV"/>;
 window.PageFinOther = () => <PageFinance view="TX"/>;
 window.PageFinLedger = () => <PageFinance view="LED"/>;

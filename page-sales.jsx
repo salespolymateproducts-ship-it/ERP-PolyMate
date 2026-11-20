@@ -45,6 +45,7 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
   });
   const [editor, setEditor] = useState(null); // { id } | { type } (new)
   const [convert, setConvert] = useState(null); // { sourceId, targetType, approveSources }
+  const [rvFor, setRvFor] = useState(null);      // เลขที่ใบเสร็จที่กำลังบันทึกรับเงิน (หน้ารับเงินใหม่ แทน "สร้างรับชำระ" แบบเดิม)
 
   const tabs = types.length > 1 ? [{ id: "ALL", label: "ทั้งหมด", count: all.length },
     ...types.map((t) => ({ id: t, label: DOC_LABEL[t].th, count: all.filter((d) => d.type === t).length }))] : null;
@@ -120,7 +121,8 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
       </div>
 
       {openId && <DocDrawer id={openId} onClose={() => setOpenId(null)} onOpen={setOpenId}
-        onEdit={(id) => setEditor({ id })} onConvert={(c) => setConvert(c)}/>}
+        onEdit={(id) => setEditor({ id })} onConvert={(c) => (c.targetType === "PAY" ? setRvFor(c.sourceId) : setConvert(c))}/>}
+      {rvFor && <RvFromRc rcId={rvFor} onClose={() => setRvFor(null)}/>}
 
       <Drawer open={!!editor} onClose={() => setEditor(null)} width={920}
         title={editor ? (editor.id ? `แก้ไข · ${editor.id}` : "สร้างเอกสารใหม่") : ""}>
@@ -229,6 +231,7 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
         onRelated={() => setView("related")}
         onPrint={() => { setView("doc"); printDoc(doc.id); }}/>
 
+      {doc.type === "RC" && window.RcCollectBadge && <RcCollectBadge doc={doc}/>}
       {doc.type === "SO" && live && <TradeStockBanner doc={doc}/>}
       <div style={{ padding: "12px 18px 0" }}>
         <DocFlowStrip doc={doc} rel={rel} onOpen={onOpen}/>
@@ -553,6 +556,20 @@ function PaperRow({ k, v }) {
   return <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 8px" }}><span style={{ color: "#5B6478" }}>{k}</span><span className="num">{v}</span></div>;
 }
 
+// =================== บันทึกรับเงินจากใบเสร็จ → เปิดหน้ารับเงินใหม่ของการเงิน (เลือกบัญชี · เข้าสมุดเงินจริง) ===================
+function RvFromRc({ rcId, onClose }) {
+  const [accounts, setAccounts] = useState(null);
+  const rc = Workflow.get(rcId);
+  useEffect(() => {
+    let live = true;
+    Store.finApi("GET", "/accounts").then((a) => { if (live) setAccounts(a); })
+      .catch(() => { notify("การบันทึกรับเงินเป็นหน้าที่ของฝ่ายบัญชีและผู้ดูแลระบบ", "error"); onClose(); });
+    return () => { live = false; };
+  }, []);
+  if (!accounts || !rc) return null;
+  return <FinReceiptModal accounts={accounts} prefill={rcPrefill(rc)} onClose={onClose} onDone={() => { try { window.dispatchEvent(new Event("fin-changed")); } catch (e) { /* ignore */ } onClose(); }}/>;
+}
+
 // =================== สร้างเอกสารถัดไป (เลือกรายการ / จำนวนบางส่วน) ===================
 function ConvertModal({ sourceId, targetType, approveSources, onClose, onDone }) {
   useStore();
@@ -784,6 +801,7 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
         <div><label style={lbl}>กำหนดชำระ / ครบกำหนด <span style={{ color: "var(--text-tertiary)" }}>(ว่าง = คำนวณจากเครดิตลูกค้า)</span></label>
           <DateInput className="input" value={f.due && f.due !== "—" ? f.due : ""} onChange={(e) => set({ due: e.target.value })}/></div>
         {!isPay && <div><label style={lbl}>เลขที่ PO ลูกค้า / อ้างอิง</label><input className="input" value={f.refNo || ""} onChange={(e) => set({ refNo: e.target.value })}/></div>}
+        {f.type === "RC" && <div><label style={lbl}>ผู้เก็บเงิน (พนักงานที่พกใบเสร็จไปเก็บ)</label><input className="input" value={f.collector || ""} placeholder="เช่น ชื่อพนักงานขาย/ส่งของ" onChange={(e) => set({ collector: e.target.value })}/></div>}
         {!isPay && <div><label style={lbl}>หัก ณ ที่จ่าย</label>
           <select className="input" value={f.whtRate || 0} onChange={(e) => set({ whtRate: Number(e.target.value) })}>
             {Object.keys(WHT_RATES).map((r) => <option key={r} value={r}>{WHT_RATES[r]}</option>)}

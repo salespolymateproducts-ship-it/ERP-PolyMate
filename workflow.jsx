@@ -319,6 +319,7 @@ const Workflow = (function () {
         vatOn: form.vatOn != null ? !!form.vatOn : !NO_VAT_DEFAULT.includes(form.type),
         whtRate: Number(form.whtRate) || 0, billDisc: r2(form.billDisc || 0),
       };
+      if (doc.type === "RC") fields.collector = String(form.collector || "").trim();   // ผู้เก็บเงิน (พนักงานที่พกใบเสร็จไปเก็บเงิน)
       if (doc.type === "PAY") Object.assign(fields, { amount: r2(form.amount), method: form.method || "โอนเงิน", bankRef: form.bankRef || "", vatOn: false, whtRate: 0, lines: [] });
       else fields.lines = normalizeLines(form.lines);
       const candidate = { ...doc, ...fields };
@@ -567,6 +568,10 @@ const Workflow = (function () {
   function whtCertStatus(rc) {
     if (!rc || rc.type !== "RC" || !isLive(rc) || !(rc.wht > 0)) return null;
     if (rc.whtCert) return { state: "received", cert: rc.whtCert };
+    // ใบเสร็จที่ผูก/ตัดผ่านใบรับเงิน (RV) แล้ว: ติดตามหนังสือ 50 ทวิ ที่ใบรับเงินแทน (ที่เดียว) — ซ่อนการติดตามแบบเก่า
+    if ((S.state.rcLinked || []).includes(rc.id)) return null;
+    const inv = typeof window.rcInvoiceIds === "function" ? window.rcInvoiceIds(rc) : [];
+    if (inv.some((i) => (S.state.whtInvoices || []).includes(i))) return null;
     const days = Math.floor((new Date(S.today() + "T00:00:00") - new Date(rc.date + "T00:00:00")) / 86400000);
     return { state: "pending", days, overdue: days > WHT_CERT_DAYS };
   }

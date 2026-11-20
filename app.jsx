@@ -1,6 +1,6 @@
 /* global React, ReactDOM, I, Sidebar, Topbar, PageDashboard, PageSales, PageCustomers, PageCustomerPO,
    PageProduction, PageInventory, PageMolds, PageShipping, PageProcurement, PageQC,
-   PageAccounting, PageFinance, PageFinApprovals, PageFinReceipts, PageFinPayments, PageFinOther, PageFinLedger, PageFinSettings, PageHR, PageReports, PageDocs, PageAuditLog, PageSettings, LoginScreen,
+   PageAccounting, PageFinance, PageFinApprovals, PageFinReceipts, PageFinRcWait, PageFinPayments, PageFinOther, PageFinLedger, PageFinSettings, PageHR, PageReports, PageDocs, PageAuditLog, PageSettings, LoginScreen,
    useTweaks, TweaksPanel, TweakSection, TweakRadio, TweakColor, TweakToggle,
    useState, useEffect */
 
@@ -18,6 +18,7 @@ const PAGES = {
   accounting:   { title: "บัญชี",         crumb: ["PolyMate", "การเงิน", "บัญชี"], Comp: PageAccounting },
   finance:      { title: "บัญชีเงิน", crumb: ["PolyMate", "การเงิน", "บัญชีเงิน"], Comp: PageFinance },
   "fin-approvals": { title: "รออนุมัติ", crumb: ["PolyMate", "การเงิน", "รออนุมัติ"], Comp: PageFinApprovals },
+  "fin-rc-wait":   { title: "ใบเสร็จรอเก็บเงิน", crumb: ["PolyMate", "การเงิน", "ใบเสร็จรอเก็บเงิน"], Comp: PageFinRcWait },
   "fin-receipts":  { title: "รับเงินลูกค้า", crumb: ["PolyMate", "การเงิน", "รับเงินลูกค้า"], Comp: PageFinReceipts },
   "fin-payments":  { title: "จ่ายเงิน (ใบสำคัญจ่าย)", crumb: ["PolyMate", "การเงิน", "จ่ายเงิน"], Comp: PageFinPayments },
   "fin-other":     { title: "รับ/จ่าย/โอนอื่น ๆ", crumb: ["PolyMate", "การเงิน", "รับ/จ่าย/โอนอื่น ๆ"], Comp: PageFinOther },
