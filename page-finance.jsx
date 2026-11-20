@@ -168,11 +168,12 @@ function PageFinance() {
         <FinStat label="รออนุมัติ" value={pending.length + " รายการ"} tone={pending.length ? "amber" : "neutral"}/>
         <FinStat label="ล็อกงวดถึง" value={settings.lockDate ? fmtDate(settings.lockDate) : "ยังไม่ล็อก"} tone="violet"/>
       </div>
-      <Tabs items={[{ id: "ACC", label: "บัญชีเงิน", count: accounts.length }, { id: "LED", label: "สมุดเงิน" }, { id: "TX", label: "รายการรับ/จ่าย/โอน", count: txns.length },
+      <Tabs items={[{ id: "ACC", label: "บัญชีเงิน", count: accounts.length }, { id: "LED", label: "สมุดเงิน" }, { id: "RCV", label: "รับเงินลูกค้า" }, { id: "TX", label: "รายการรับ/จ่าย/โอน", count: txns.length },
         { id: "APR", label: "รออนุมัติ", count: pending.length }, ...(isAdmin ? [{ id: "SET", label: "ตั้งค่า" }] : [])]} value={tab} onChange={setTab}/>
 
       {tab === "ACC" && <FinAccounts accounts={accounts} onEdit={(a) => setModal({ t: "acc", acc: a })}/>}
       {tab === "LED" && <FinLedger accounts={accounts} tick={tick}/>}
+      {tab === "RCV" && <FinReceipts accounts={accounts} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload} tick={tick}/>}
       {tab === "TX" && <FinTxnList txns={txns} accName={accName} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload}/>}
       {tab === "APR" && <FinTxnList txns={pending} accName={accName} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload} emptyText="ไม่มีรายการรออนุมัติ"/>}
       {tab === "SET" && isAdmin && <FinSettings settings={settings} onSaved={reload}/>}
@@ -183,6 +184,12 @@ function PageFinance() {
         onSubmit={async (reason) => { await Store.finApi("POST", "/txns/" + modal.id + "/reject", { reason }); notify("ไม่อนุมัติ " + modal.id + " แล้ว", "success"); done(); }}/>}
       {modal && modal.t === "cancel" && <FinReasonModal title={"ยกเลิก " + modal.id} label="เหตุผลที่ยกเลิก" onClose={close}
         onSubmit={async (reason) => { await Store.finApi("POST", "/txns/" + modal.id + "/cancel", { reason }); notify("ยกเลิก " + modal.id + " แล้ว", "success"); done(); }}/>}
+      {modal && modal.t === "rvreject" && <FinReasonModal title={"ไม่อนุมัติ " + modal.id} label="เหตุผลที่ไม่อนุมัติ" onClose={close}
+        onSubmit={async (reason) => { await Store.finApi("POST", "/receipts/" + modal.id + "/reject", { reason }); notify("ไม่อนุมัติ " + modal.id + " แล้ว", "success"); done(); }}/>}
+      {modal && modal.t === "rvcancel" && <FinReasonModal title={"ยกเลิก " + modal.id} label="เหตุผลที่ยกเลิก" onClose={close}
+        onSubmit={async (reason) => { await Store.finApi("POST", "/receipts/" + modal.id + "/cancel", { reason }); notify("ยกเลิก " + modal.id + " แล้ว", "success"); done(); }}/>}
+      {modal && modal.t === "rvvoid" && <FinReasonModal title={"กลับรายการ " + modal.id} label="เหตุผลการกลับรายการ" withDate onClose={close}
+        onSubmit={async (reason, date) => { await Store.finApi("POST", "/receipts/" + modal.id + "/void", { reason, date }); notify("กลับรายการ " + modal.id + " แล้ว", "success"); done(); }}/>}
       {modal && modal.t === "void" && <FinReasonModal title={"กลับรายการ " + modal.id} label="เหตุผลการกลับรายการ" withDate onClose={close}
         onSubmit={async (reason, date) => { await Store.finApi("POST", "/txns/" + modal.id + "/void", { reason, date }); notify("กลับรายการ " + modal.id + " แล้ว", "success"); done(); }}/>}
     </>

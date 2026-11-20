@@ -155,3 +155,61 @@ $$ language plpgsql;
 drop trigger if exists trg_fin_movements_guard on fin_movements;
 create trigger trg_fin_movements_guard before update or delete on fin_movements
   for each row execute function fin_movements_guard();
+
+-- ==========================================================================
+-- การเงิน (ขั้น A2): รับเงินลูกค้า (RV) · จัดสรรเข้าใบกำกับภาษี · ภาษีถูกหัก ณ ที่จ่าย · ค่าธรรมเนียมธนาคาร · เงินรอคืนลูกค้า
+--   received + bank_fee = Σ alloc.amount + excess   (alloc.amount = ส่วนที่ตัดใบกำกับ ไม่รวมภาษีถูกหัก)
+--   ใบกำกับถูกตัด = Σ (alloc.amount + alloc.wht) เทียบกับยอดรวม (total) ของใบกำกับ
+-- ==========================================================================
+create table if not exists fin_receipts (
+  id            text primary key,
+  rcv_date      date not null,
+  customer_id   text not null,
+  customer_name text not null default '',
+  account_id    text not null references fin_accounts(id),
+  received      numeric(14,2) not null check (received >= 0),
+  bank_fee      numeric(14,2) not null default 0 check (bank_fee >= 0),
+  wht           numeric(14,2) not null default 0 check (wht >= 0),
+  excess        numeric(14,2) not null default 0 check (excess >= 0),
+  ref_no        text not null default '',
+  note          text not null default '',
+  wht_cert_no   text,
+  wht_cert_date date,
+  wht_cert_amount numeric(14,2),
+  status        text not null check (status in ('pending','confirmed','rejected','void')),
+  created_by    text not null,
+  created_by_id text not null,
+  created_at    timestamptz not null default now(),
+  approved_by   text,
+  approved_by_id text,
+  approved_at   timestamptz,
+  self_approved boolean not null default false,
+  reject_reason text,
+  void_reason   text,
+  voided_by     text,
+  voided_at     timestamptz,
+  void_date     date,
+  check (received + bank_fee + wht > 0)
+);
+create index if not exists idx_fin_receipts_cust on fin_receipts (customer_id, rcv_date desc);
+create index if not exists idx_fin_receipts_status on fin_receipts (status, rcv_date desc);
+
+create table if not exists fin_receipt_allocs (
+  id         bigserial primary key,
+  receipt_id text not null references fin_receipts(id),
+  invoice_id text not null,
+  amount     numeric(14,2) not null check (amount >= 0),
+  wht        numeric(14,2) not null default 0 check (wht >= 0),
+  check (amount + wht > 0)
+);
+create index if not exists idx_fin_allocs_inv on fin_receipt_allocs (invoice_id);
+create index if not exists idx_fin_allocs_rcpt on fin_receipt_allocs (receipt_id);
+
+create or replace function fin_allocs_guard() returns trigger as $$
+begin
+  raise exception 'fin_receipt_allocs is append-only';
+end;
+$$ language plpgsql;
+drop trigger if exists trg_fin_allocs_guard on fin_receipt_allocs;
+create trigger trg_fin_allocs_guard before update or delete on fin_receipt_allocs
+  for each row execute function fin_allocs_guard();

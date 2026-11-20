@@ -40,20 +40,20 @@ public class FinanceService {
 	}
 
 	// ---------- สิทธิ์ ----------
-	private static void needRead(AuthUser u) {
+	static void needRead(AuthUser u) {
 		if (u == null || !(u.isAdmin() || "accounting".equals(u.role()))) throw ApiException.forbidden("เฉพาะผู้ดูแลระบบและฝ่ายบัญชีเข้าถึงข้อมูลการเงินได้");
 	}
-	private static void needAdmin(AuthUser u) {
+	static void needAdmin(AuthUser u) {
 		if (u == null || !u.isAdmin()) throw ApiException.forbidden("เฉพาะผู้ดูแลระบบ (admin) ทำรายการนี้ได้");
 	}
-	private static LocalDate today() { return LocalDate.now(BKK); }
+	static LocalDate today() { return LocalDate.now(BKK); }
 
-	private static LocalDate parseDate(Object v, String label) {
+	static LocalDate parseDate(Object v, String label) {
 		try { return LocalDate.parse(Json.s(v).substring(0, 10)); }
 		catch (Exception e) { throw ApiException.badRequest(label + " ไม่ถูกต้อง (ต้องเป็น yyyy-mm-dd)"); }
 	}
 
-	private static BigDecimal money(Object v, String label, boolean allowZero) {
+	static BigDecimal money(Object v, String label, boolean allowZero) {
 		BigDecimal b;
 		try { b = new BigDecimal(Json.s(v).trim()); } catch (Exception e) { throw ApiException.badRequest(label + " ไม่ถูกต้อง"); }
 		if (b.scale() > 2 && b.stripTrailingZeros().scale() > 2) throw ApiException.badRequest(label + " ต้องมีทศนิยมไม่เกิน 2 ตำแหน่ง");
@@ -69,7 +69,7 @@ public class FinanceService {
 		return settings();
 	}
 
-	private Map<String, Object> settings() {
+	Map<String, Object> settings() {
 		Map<String, Object> m = new LinkedHashMap<>();
 		m.put("lockDate", setting("fin.lockDate"));
 		Object th = setting("fin.approvalThreshold");
@@ -114,7 +114,7 @@ public class FinanceService {
 		return settings();
 	}
 
-	private void assertOpenPeriod(LocalDate d) {
+	void assertOpenPeriod(LocalDate d) {
 		Object ld = setting("fin.lockDate");
 		if (ld != null && !d.isAfter(LocalDate.parse(String.valueOf(ld)))) throw ApiException.conflict("PERIOD_LOCKED", "วันที่ " + d + " อยู่ในงวดที่ล็อกแล้ว (ล็อกถึง " + ld + ")");
 	}
@@ -204,7 +204,7 @@ public class FinanceService {
 		return m;
 	}
 
-	private void addMovement(AuthUser u, String accountId, LocalDate date, String direction, BigDecimal amount, String sourceType, String sourceId, String desc, Long reversalOf) {
+	void addMovement(AuthUser u, String accountId, LocalDate date, String direction, BigDecimal amount, String sourceType, String sourceId, String desc, Long reversalOf) {
 		jdbc.update("insert into fin_movements(account_id,mv_date,direction,amount,source_type,source_id,description,reversal_of,created_by) values (?,?,?,?,?,?,?,?,?)",
 			accountId, date, direction, amount, sourceType, sourceId, desc, reversalOf, u.fullName());
 	}
@@ -214,7 +214,7 @@ public class FinanceService {
 	}
 
 	/** ล็อกแถวบัญชี (เรียงตามรหัส กัน deadlock) แล้วตรวจสถานะ/วันที่เปิดบัญชี */
-	private Map<String, Map<String, Object>> lockAccounts(List<String> ids, LocalDate txnDate, boolean requireActive) {
+	Map<String, Map<String, Object>> lockAccounts(List<String> ids, LocalDate txnDate, boolean requireActive) {
 		Map<String, Map<String, Object>> out = new LinkedHashMap<>();
 		for (String id : ids.stream().distinct().sorted().toList()) {
 			List<Map<String, Object>> r = jdbc.queryForList("select id, type, active, to_char(opening_date,'YYYY-MM-DD') as od, name from fin_accounts where id = ? for update", id);
@@ -227,7 +227,7 @@ public class FinanceService {
 		return out;
 	}
 
-	private void assertEnough(Map<String, Object> acc, BigDecimal outflow) {
+	void assertEnough(Map<String, Object> acc, BigDecimal outflow) {
 		String type = Json.s(acc.get("type"));
 		if (type.equals("bank")) return; // ธนาคาร: เบิกเกินบัญชีได้ (UI เตือน)
 		BigDecimal bal = balanceOf(Json.s(acc.get("id")));
@@ -250,7 +250,7 @@ public class FinanceService {
 		return jdbc.queryForList(sql.toString(), args.toArray());
 	}
 
-	private Map<String, Object> txn(String id) {
+	Map<String, Object> txn(String id) {
 		List<Map<String, Object>> r = jdbc.queryForList(TXN_SEL + " where t.id = ?", id);
 		if (r.isEmpty()) throw ApiException.notFound("ไม่พบรายการ " + id);
 		return r.get(0);
