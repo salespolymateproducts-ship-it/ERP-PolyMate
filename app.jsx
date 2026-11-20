@@ -1,7 +1,7 @@
 /* global React, ReactDOM, I, Sidebar, Topbar, PageDashboard, PageSales, PageCustomers, PageCustomerPO,
    PageProduction, PageInventory, PageMolds, PageShipping, PageProcurement, PageQC,
    PageAccounting, PageFinance, PageFinApprovals, PageFinReceipts, PageFinRcWait, PageFinPayments, PageFinOther, PageFinLedger, PageFinSettings, PageHR, PageReports, PageDocs, PageAuditLog, PageSettings, LoginScreen,
-   useTweaks, TweaksPanel, TweakSection, TweakRadio, TweakColor, TweakToggle,
+   useThemeSettings, ThemePanel,
    useState, useEffect */
 
 const PAGES = {
@@ -32,11 +32,7 @@ const PAGES = {
   settings:     { title: "ตั้งค่า",        crumb: ["PolyMate", "ตั้งค่า"], Comp: PageSettings },
 };
 
-const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "accent": "#2D6CDF",
-  "density": "default",
-  "theme": "light"
-}/*EDITMODE-END*/;
+const THEME_DEFAULTS = { accent: "#2D6CDF", density: "default", theme: "light" };
 
 function App() {
   const [user, setUser] = useState(null); // บัญชีที่เข้าสู่ระบบ (จาก Backend)
@@ -50,8 +46,8 @@ function App() {
   }, []);
   const [page, setPage] = useState("dashboard");
   const [navTick, setNavTick] = useState(0); // บังคับเปิดหน้าใหม่เมื่อกดลิงก์จากการค้นหา/แจ้งเตือน
-  const [theme, setTheme] = useState("light");
-  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [t, setThemeSetting] = useThemeSettings(THEME_DEFAULTS);
+  const theme = t.theme;
 
   const roleKey = user ? user.role : "admin";
   const role = user ? { ...window.ROLES[roleKey], user: { name: user.fullName, initial: (user.fullName || "?").slice(0, 2), title: window.ROLES[roleKey].label } } : null;
@@ -63,7 +59,6 @@ function App() {
   }, [roleKey, page]);
 
   useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
-  useEffect(() => { setTheme(t.theme); }, [t.theme]);
   useEffect(() => { document.documentElement.setAttribute("data-density", t.density); }, [t.density]);
   useEffect(() => {
     document.documentElement.style.setProperty("--accent", t.accent);
@@ -85,11 +80,7 @@ function App() {
         <Topbar
           crumb={crumb}
           theme={theme}
-          onToggleTheme={() => {
-            const next = theme === "light" ? "dark" : "light";
-            setTheme(next);
-            setTweak("theme", next);
-          }}
+          onToggleTheme={() => setThemeSetting("theme", theme === "light" ? "dark" : "light")}
           role={role}
           onLogout={() => { Store.logout(); setUser(null); setPage("dashboard"); }}
           onNav={(p, focus) => { window.ERP_FOCUS = focus || null; setPage(p); setNavTick((n) => n + 1); }}
@@ -100,27 +91,7 @@ function App() {
         <ToastHost/>
       </div>
 
-      <TweaksPanel title="Tweaks">
-        <TweakSection label="ธีม">
-          <TweakRadio label="โหมด" value={t.theme} onChange={(v) => setTweak("theme", v)}
-            options={[
-              { value: "light", label: "Light" },
-              { value: "dark", label: "Dark" },
-            ]}/>
-        </TweakSection>
-        <TweakSection label="Accent color">
-          <TweakColor label="สี" value={t.accent} onChange={(v) => setTweak("accent", v)}
-            options={["#2D6CDF", "#0F9F8F", "#7C3AED", "#D97706"]}/>
-        </TweakSection>
-        <TweakSection label="Density">
-          <TweakRadio label="ความหนาแน่น" value={t.density} onChange={(v) => setTweak("density", v)}
-            options={[
-              { value: "compact", label: "Compact" },
-              { value: "default", label: "Default" },
-              { value: "comfortable", label: "Comfy" },
-            ]}/>
-        </TweakSection>
-      </TweaksPanel>
+      <ThemePanel settings={t} onChange={setThemeSetting}/>
     </div>
   );
 }
