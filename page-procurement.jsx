@@ -14,6 +14,15 @@ function PageProcurement() {
   const totalSpend = PURCHASE_ORDERS.reduce((s, p) => s + p.total, 0);
   const pending = PURCHASE_ORDERS.filter((p) => p.status === "pending").length;
   const received = PURCHASE_ORDERS.filter((p) => p.status === "received").length;
+  // ใบสั่งซื้อ: ค้นหา (เลขที่ PO / Supplier / รายการสินค้า / ผู้ออก) · สถานะ · ช่วงวันที่ · เรียง · แบ่งหน้า
+  const [poStatus, setPoStatus] = useState("ALL");
+  const poView = useListView(PURCHASE_ORDERS, {
+    text: (p) => [p.id, p.supplierName, p.supplier, p.createdBy, p.note, (p.lines || []).map((l) => l.name + " " + (l.code || "")).join(" ")].join(" "),
+    dateKey: (p) => p.date,
+    filter: (p) => poStatus === "ALL" || p.status === poStatus, filterKey: poStatus,
+    defaultSort: { key: "date", dir: "desc" },
+    sorts: { id: (p) => p.id, date: (p) => p.date, supplier: (p) => p.supplierName, expected: (p) => p.expectedDate, wht: (p) => (p.whtRate ? whtAmount(p.subtotal, p.whtRate) : 0), total: (p) => p.total || 0, status: (p) => (PO_STATUS[p.status] || {}).th || p.status },
+  });
 
   const role = Store.user() ? ROLES[Store.user().role] : null;
   const canApprovePO = !!role && (role.approve === "*" || (role.canEdit || []).includes("procurement"));
@@ -65,7 +74,7 @@ function PageProcurement() {
         subtitle="ใบสั่งซื้อ (PO) · ทะเบียน Supplier · รับเข้าวัตถุดิบ"
         actions={
           <>
-            <button className="btn btn-outline btn-sm" disabled={!PURCHASE_ORDERS.length} onClick={() => exportCSV(`ใบสั่งซื้อ-${Store.today()}.csv`, ["เลขที่", "วันที่", "Supplier", "รายการ", "ก่อน VAT", "VAT", "รวม", "กำหนดรับ", "สถานะ", "ผู้ออก"], PURCHASE_ORDERS.map((p) => [p.id, p.date, p.supplierName, p.items, p.subtotal, p.vat, p.total, p.expectedDate, (PO_STATUS[p.status] || {}).th, p.createdBy]))}><I.Download size={14}/> ส่งออก CSV</button>
+            <button className="btn btn-outline btn-sm" disabled={!PURCHASE_ORDERS.length} onClick={() => exportCSV(`ใบสั่งซื้อ-${Store.today()}.csv`, ["เลขที่", "วันที่", "Supplier", "รายการ", "ก่อน VAT", "VAT", "รวม", "กำหนดรับ", "สถานะ", "ผู้ออก"], poView.sorted.map((p) => [p.id, p.date, p.supplierName, p.items, p.subtotal, p.vat, p.total, p.expectedDate, (PO_STATUS[p.status] || {}).th, p.createdBy]))}><I.Download size={14}/> ส่งออก CSV</button>
             <button className="btn btn-primary btn-sm" onClick={() => { setTab("PO"); setAddOpen(true); }}><I.Plus size={14}/> เปิด PO ใหม่</button>
           </>
         }
@@ -90,22 +99,27 @@ function PageProcurement() {
 
       {tab === "PO" && (
         <div className="card">
+          <ListToolbar view={poView} placeholder="เลขที่ PO / Supplier / สินค้า / ผู้ออก…">
+            <select className="select" style={{ width: 160 }} value={poStatus} onChange={(e) => setPoStatus(e.target.value)}>
+              <option value="ALL">ทุกสถานะ</option>{Object.keys(PO_STATUS).map((k) => <option key={k} value={k}>{PO_STATUS[k].th}</option>)}
+            </select>
+          </ListToolbar>
           <div style={{ overflow: "auto" }}>
             <table className="table">
               <thead>
                 <tr>
-                  <th>เลขที่ PO</th>
-                  <th>วันที่</th>
-                  <th>Supplier</th>
+                  <SortTh view={poView} k="id">เลขที่ PO</SortTh>
+                  <SortTh view={poView} k="date">วันที่</SortTh>
+                  <SortTh view={poView} k="supplier">Supplier</SortTh>
                   <th>รายการ</th>
-                  <th>กำหนดรับ</th>
-                  <th className="num">หัก ณ ที่จ่าย</th>
-                  <th className="num">มูลค่า</th>
-                  <th>สถานะ</th>
+                  <SortTh view={poView} k="expected">กำหนดรับ</SortTh>
+                  <SortTh view={poView} k="wht" className="num">หัก ณ ที่จ่าย</SortTh>
+                  <SortTh view={poView} k="total" className="num">มูลค่า</SortTh>
+                  <SortTh view={poView} k="status">สถานะ</SortTh>
                 </tr>
               </thead>
               <tbody>
-                {PURCHASE_ORDERS.map((p) => {
+                {poView.pageRows.map((p) => {
                   const meta = PO_STATUS[p.status];
                   return (
                     <tr key={p.id} style={{ cursor: "pointer" }} onClick={() => setOpenPO(p)}>
@@ -125,9 +139,11 @@ function PageProcurement() {
                     </tr>
                   );
                 })}
+                {!poView.total && <tr><td colSpan={8} style={{ textAlign: "center", padding: 32, color: "var(--text-tertiary)" }}>{PURCHASE_ORDERS.length ? "ไม่พบใบสั่งซื้อตามเงื่อนไข" : "ยังไม่มีใบสั่งซื้อ"}</td></tr>}
               </tbody>
             </table>
           </div>
+          <Pager view={poView}/>
         </div>
       )}
 

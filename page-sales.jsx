@@ -38,7 +38,6 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
   const all = Store.state.docs.filter((d) => types.includes(d.type));
   const [tab, setTab] = useState(types.length > 1 ? "ALL" : types[0]);
   const [statusF, setStatusF] = useState("all");
-  const [search, setSearch] = useState("");
   const [openId, setOpenId] = useState(() => {
     const id = window.takeFocus("doc"); const d = id && Workflow.get(id);
     return d && types.includes(d.type) ? id : null;
@@ -50,13 +49,20 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
   const tabs = types.length > 1 ? [{ id: "ALL", label: "ทั้งหมด", count: all.length },
     ...types.map((t) => ({ id: t, label: DOC_LABEL[t].th, count: all.filter((d) => d.type === t).length }))] : null;
 
-  let list = tab === "ALL" ? all : all.filter((d) => d.type === tab);
+  const baseRows = tab === "ALL" ? all : all.filter((d) => d.type === tab);
   const sf = STATUS_FILTERS.find((f) => f.id === statusF);
-  list = list.filter(sf.test);
-  if (search.trim()) {
-    const q = search.trim().toLowerCase();
-    list = list.filter((d) => [d.id, d.customerName, d.customer, d.refNo, (d.sourceIds || []).join(" ")].join(" ").toLowerCase().includes(q));
-  }
+  // ค้นหา (เลขที่/ลูกค้า/เลขอ้างอิง/เอกสารต้นทาง/สินค้า/หมายเหตุ) · ช่วงวันที่ · เรียงตามหัวคอลัมน์ · แบ่งหน้า
+  const view = useListView(baseRows, {
+    text: (d) => [d.id, DOC_LABEL[d.type] ? DOC_LABEL[d.type].th : "", d.customerName, d.customer, d.refNo, (d.sourceIds || []).join(" "), d.note, (d.lines || []).map((l) => l.name + " " + (l.code || "")).join(" ")].join(" "),
+    dateKey: (d) => d.date,
+    filter: sf.test, filterKey: tab + "|" + statusF,
+    defaultSort: { key: "date", dir: "desc" },
+    sorts: {
+      id: (d) => d.id, type: (d) => d.type, customer: (d) => d.customerName, date: (d) => d.date, due: (d) => (d.due && d.due !== "—" ? d.due : ""),
+      total: (d) => d.total || 0, outstanding: (d) => { const p = d.type === "INV" ? Workflow.paymentInfo(d) : null; return p ? p.outstanding : 0; }, status: (d) => Workflow.statusInfo(d).th,
+    },
+  });
+  const list = view.sorted;
 
   const canCreate = types.some((t) => t !== "PAY" && Workflow.canEditType(t));
 
@@ -79,26 +85,21 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
 
       <div className="card">
         {tabs && <div style={{ padding: "12px 16px 0" }}><Tabs items={tabs} value={tab} onChange={setTab}/></div>}
-        <div style={{ display: "flex", gap: 8, padding: "12px 16px", alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 320 }}>
-            <I.Search size={14} style={{ position: "absolute", left: 10, top: 9, color: "var(--text-tertiary)" }}/>
-            <input className="input" aria-label="ค้นหา" placeholder="เลขที่เอกสาร / ลูกค้า / เลขอ้างอิง…" style={{ paddingLeft: 32 }} value={search} onChange={(e) => setSearch(e.target.value)}/>
-          </div>
+        <ListToolbar view={view} placeholder="เลขที่เอกสาร / ลูกค้า / เลขอ้างอิง / สินค้า…">
           {STATUS_FILTERS.map((f) => (
             <button key={f.id} className={"btn btn-sm " + (statusF === f.id ? "btn-primary" : "btn-outline")} onClick={() => setStatusF(f.id)}>{f.label}</button>
           ))}
-          <span className="badge badge-neutral">{list.length} รายการ</span>
-        </div>
+        </ListToolbar>
         <div style={{ overflow: "auto" }}>
           <table className="table">
             <thead>
               <tr>
-                <th>เลขที่เอกสาร</th><th>ประเภท</th><th>ลูกค้า</th><th>วันที่</th><th>ครบกำหนด</th><th>อ้างอิงจาก</th>
-                <th className="num">ยอดรวม</th><th className="num">ค้างรับ</th><th>สถานะ</th>
+                <SortTh view={view} k="id">เลขที่เอกสาร</SortTh><SortTh view={view} k="type">ประเภท</SortTh><SortTh view={view} k="customer">ลูกค้า</SortTh><SortTh view={view} k="date">วันที่</SortTh><SortTh view={view} k="due">ครบกำหนด</SortTh><th>อ้างอิงจาก</th>
+                <SortTh view={view} k="total" className="num">ยอดรวม</SortTh><SortTh view={view} k="outstanding" className="num">ค้างรับ</SortTh><SortTh view={view} k="status">สถานะ</SortTh>
               </tr>
             </thead>
             <tbody>
-              {list.map((d) => {
+              {view.pageRows.map((d) => {
                 const pay = d.type === "INV" ? Workflow.paymentInfo(d) : null;
                 return (
                   <tr key={d.id} style={{ cursor: "pointer", opacity: d.status === "cancelled" ? 0.55 : 1 }} onClick={() => setOpenId(d.id)}>
@@ -118,6 +119,7 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
             </tbody>
           </table>
         </div>
+        <Pager view={view}/>
       </div>
 
       {openId && <DocDrawer id={openId} onClose={() => setOpenId(null)} onOpen={setOpenId}
