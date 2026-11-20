@@ -122,61 +122,73 @@ function FinReasonModal({ title, label, withDate, onClose, onSubmit }) {
   );
 }
 
-function PageFinance() {
+function PageFinance({ view }) {
   useStore();
   const user = Store.user();
   const isAdmin = !!user && user.role === "admin";
-  const [tab, setTab] = React.useState("ACC");
+  const tab = view || "ACC";   // หน้าย่อยเลือกจากเมนูซ้าย (ไม่ใช้แท็บในหน้าแล้ว)
   const [accounts, setAccounts] = React.useState([]);
   const [txns, setTxns] = React.useState([]);
   const [summary, setSummary] = React.useState(null);
+  const [pendRc, setPendRc] = React.useState([]);
+  const [pendPv, setPendPv] = React.useState([]);
   const [tick, setTick] = React.useState(0);
   const [loadErr, setLoadErr] = React.useState("");
   const [modal, setModal] = React.useState(null);
-  const reload = () => setTick((n) => n + 1);
+  const reload = () => { setTick((n) => n + 1); try { window.dispatchEvent(new Event("fin-changed")); } catch (e) { /* ignore */ } };
 
   React.useEffect(() => {
     let live = true;
     (async () => {
       try {
-        const [a, t, s] = await Promise.all([Store.finApi("GET", "/accounts"), Store.finApi("GET", "/txns"), Store.finApi("GET", "/summary")]);
-        if (live) { setAccounts(a); setTxns(t); setSummary(s); setLoadErr(""); }
+        const [a, t, s, rp, pp] = await Promise.all([Store.finApi("GET", "/accounts"), Store.finApi("GET", "/txns"), Store.finApi("GET", "/summary"),
+          Store.finApi("GET", "/receipts?status=pending"), Store.finApi("GET", "/payments?status=pending")]);
+        if (live) { setAccounts(a); setTxns(t); setSummary(s); setPendRc(rp); setPendPv(pp); setLoadErr(""); }
       } catch (e) { if (live) setLoadErr(e && e.message ? e.message : String(e)); }
     })();
     return () => { live = false; };
   }, [tick]);
 
   if (loadErr) return <div className="card" style={{ padding: 24, color: "var(--danger)" }}>{loadErr}</div>;
-  const pending = txns.filter((t) => t.status === "pending");
+  const pendingTx = txns.filter((t) => t.status === "pending");
+  const pending = { length: pendingTx.length + pendRc.length + pendPv.length };   // รวมทุกชนิดเอกสารที่รออนุมัติ
   const settings = summary ? summary.settings : { lockDate: null, approvalThreshold: 0 };
   const accName = (id) => { const a = accounts.find((x) => x.id === id); return a ? a.code : id; };
   const close = () => setModal(null);
   const done = () => { setModal(null); reload(); };
 
+  const addBtn = (kind, label) => <button className="btn btn-outline btn-sm" onClick={() => setModal({ t: "txn", kind })}><I.Plus size={14}/> {label}</button>;
+  const META = {
+    ACC: { title: "บัญชีเงิน", sub: "เงินสดย่อย · ธนาคาร — ยอดคงเหลือคำนวณจากสมุดเงิน", actions: <button className="btn btn-primary btn-sm" onClick={() => setModal({ t: "acc" })}><I.Plus size={14}/> เพิ่มบัญชีเงิน</button> },
+    LED: { title: "สมุดเงิน", sub: "ทุกรายการเงินเข้า/ออกของแต่ละบัญชี ยืนยันแล้วลบไม่ได้ (กลับรายการเท่านั้น)" },
+    RCV: { title: "รับเงินลูกค้า", sub: "รับเงินตามใบกำกับภาษี · ค่าธรรมเนียมธนาคาร · ภาษีถูกหัก ณ ที่จ่าย (รอ 50 ทวิ) · เงินรอคืนลูกค้า" },
+    PAYV: { title: "จ่ายเงิน (ใบสำคัญจ่าย)", sub: "ค่าใช้จ่าย → ใบสำคัญจ่าย → อนุมัติ → จ่ายเงิน · หัก ณ ที่จ่ายออกเลขหนังสือตามวันที่จ่ายจริง" },
+    TX: { title: "รับ/จ่าย/โอนอื่น ๆ", sub: "รายการที่ไม่เกี่ยวกับใบกำกับหรือค่าใช้จ่าย เช่น เงินทุนเจ้าของ เงินเดือน นำส่งภาษี โอนระหว่างบัญชี",
+      actions: <>{addBtn("other_in", "รับเงินอื่น ๆ")}{addBtn("other_out", "จ่ายเงินอื่น ๆ")}{addBtn("transfer", "โอนระหว่างบัญชี")}</> },
+    APR: { title: "รออนุมัติ", sub: "รวมทุกเอกสารการเงินที่รอ admin อนุมัติ — กด \"รายละเอียด\" เพื่อดูที่มาก่อนอนุมัติ" },
+    SET: { title: "ตั้งค่าการเงิน", sub: "วันล็อกงวด · เกณฑ์ยอดอนุมัติ (เฉพาะ admin)" },
+  };
+  const meta = META[tab] || META.ACC;
+
   return (
     <>
-      <PageHeader title="บัญชีเงิน / สมุดเงิน" subtitle="เงินสดย่อย · ธนาคาร · รับ/จ่ายเงินอื่น ๆ · โอนระหว่างบัญชี — ยอดคงเหลือคำนวณจากสมุดเงิน ยืนยันแล้วลบไม่ได้ (กลับรายการเท่านั้น)"
-        actions={<>
-          <button className="btn btn-outline btn-sm" onClick={() => setModal({ t: "txn", kind: "other_in" })}><I.Plus size={14}/> รับเงินอื่น ๆ</button>
-          <button className="btn btn-outline btn-sm" onClick={() => setModal({ t: "txn", kind: "other_out" })}><I.Plus size={14}/> จ่ายเงินอื่น ๆ</button>
-          <button className="btn btn-outline btn-sm" onClick={() => setModal({ t: "txn", kind: "transfer" })}><I.Plus size={14}/> โอนระหว่างบัญชี</button>
-          <button className="btn btn-primary btn-sm" onClick={() => setModal({ t: "acc" })}><I.Plus size={14}/> เพิ่มบัญชีเงิน</button>
-        </>}/>
-      <div className="grid-4" style={{ marginBottom: 14 }}>
-        <FinStat label="เงินรวมทุกบัญชี (ที่ใช้งาน)" value={baht(Number(summary && summary.totalBalance) || 0, 2)} tone="success"/>
-        <FinStat label="บัญชีเงิน" value={accounts.filter((a) => a.active).length + " บัญชี"} tone="accent"/>
-        <FinStat label="รออนุมัติ" value={pending.length + " รายการ"} tone={pending.length ? "amber" : "neutral"}/>
-        <FinStat label="ล็อกงวดถึง" value={settings.lockDate ? fmtDate(settings.lockDate) : "ยังไม่ล็อก"} tone="violet"/>
-      </div>
-      <Tabs items={[{ id: "ACC", label: "บัญชีเงิน", count: accounts.length }, { id: "LED", label: "สมุดเงิน" }, { id: "RCV", label: "รับเงินลูกค้า" }, { id: "TX", label: "รายการรับ/จ่าย/โอน", count: txns.length },
-        { id: "APR", label: "รออนุมัติ", count: pending.length }, ...(isAdmin ? [{ id: "SET", label: "ตั้งค่า" }] : [])]} value={tab} onChange={setTab}/>
+      <PageHeader title={meta.title} subtitle={meta.sub} actions={meta.actions}/>
+      {tab === "ACC" && (
+        <div className="grid-4" style={{ marginBottom: 14 }}>
+          <FinStat label="เงินรวมทุกบัญชี (ที่ใช้งาน)" value={baht(Number(summary && summary.totalBalance) || 0, 2)} tone="success"/>
+          <FinStat label="บัญชีเงิน" value={accounts.filter((a) => a.active).length + " บัญชี"} tone="accent"/>
+          <FinStat label="รออนุมัติ (ทุกเอกสาร)" value={pending.length + " รายการ"} tone={pending.length ? "amber" : "neutral"}/>
+          <FinStat label="ล็อกงวดถึง" value={settings.lockDate ? fmtDate(settings.lockDate) : "ยังไม่ล็อก"} tone="violet"/>
+        </div>
+      )}
 
       {tab === "ACC" && <FinAccounts accounts={accounts} onEdit={(a) => setModal({ t: "acc", acc: a })}/>}
       {tab === "LED" && <FinLedger accounts={accounts} tick={tick}/>}
       {tab === "RCV" && <FinReceipts accounts={accounts} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload} tick={tick}/>}
+      {tab === "PAYV" && <FinPayments accounts={accounts} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload} tick={tick}/>}
       {tab === "TX" && <FinTxnList txns={txns} accName={accName} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload}/>}
-      {tab === "APR" && <FinTxnList txns={pending} accName={accName} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload} emptyText="ไม่มีรายการรออนุมัติ"/>}
-      {tab === "SET" && isAdmin && <FinSettings settings={settings} onSaved={reload}/>}
+      {tab === "APR" && <FinApprovals txns={pendingTx} receipts={pendRc} vouchers={pendPv} accName={accName} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload}/>}
+      {tab === "SET" && (isAdmin ? <FinSettings settings={settings} onSaved={reload}/> : <div className="card" style={{ padding: 24, color: "var(--text-tertiary)" }}>เฉพาะผู้ดูแลระบบ (admin) ตั้งค่าได้</div>)}
 
       {modal && modal.t === "acc" && <FinAccountModal acc={modal.acc} onClose={close} onDone={done}/>}
       {modal && modal.t === "txn" && <FinTxnModal kind={modal.kind} accounts={accounts} onClose={close} onDone={done}/>}
@@ -188,6 +200,12 @@ function PageFinance() {
         onSubmit={async (reason) => { await Store.finApi("POST", "/receipts/" + modal.id + "/reject", { reason }); notify("ไม่อนุมัติ " + modal.id + " แล้ว", "success"); done(); }}/>}
       {modal && modal.t === "rvcancel" && <FinReasonModal title={"ยกเลิก " + modal.id} label="เหตุผลที่ยกเลิก" onClose={close}
         onSubmit={async (reason) => { await Store.finApi("POST", "/receipts/" + modal.id + "/cancel", { reason }); notify("ยกเลิก " + modal.id + " แล้ว", "success"); done(); }}/>}
+      {modal && modal.t === "pvreject" && <FinReasonModal title={"ไม่อนุมัติ " + modal.id} label="เหตุผลที่ไม่อนุมัติ" onClose={close}
+        onSubmit={async (reason) => { await Store.finApi("POST", "/payments/" + modal.id + "/reject", { reason }); notify("ไม่อนุมัติ " + modal.id + " แล้ว", "success"); done(); }}/>}
+      {modal && modal.t === "pvcancel" && <FinReasonModal title={"ยกเลิก " + modal.id} label="เหตุผลที่ยกเลิก" onClose={close}
+        onSubmit={async (reason) => { await Store.finApi("POST", "/payments/" + modal.id + "/cancel", { reason }); notify("ยกเลิก " + modal.id + " แล้ว", "success"); done(); }}/>}
+      {modal && modal.t === "pvvoid" && <FinReasonModal title={"กลับรายการ " + modal.id} label="เหตุผลการกลับรายการ" withDate onClose={close}
+        onSubmit={async (reason, date) => { await Store.finApi("POST", "/payments/" + modal.id + "/void", { reason, date }); notify("กลับรายการ " + modal.id + " แล้ว", "success"); done(); }}/>}
       {modal && modal.t === "rvvoid" && <FinReasonModal title={"กลับรายการ " + modal.id} label="เหตุผลการกลับรายการ" withDate onClose={close}
         onSubmit={async (reason, date) => { await Store.finApi("POST", "/receipts/" + modal.id + "/void", { reason, date }); notify("กลับรายการ " + modal.id + " แล้ว", "success"); done(); }}/>}
       {modal && modal.t === "void" && <FinReasonModal title={"กลับรายการ " + modal.id} label="เหตุผลการกลับรายการ" withDate onClose={close}
@@ -327,3 +345,10 @@ function FinSettings({ settings, onSaved }) {
 }
 
 window.PageFinance = PageFinance;
+// หน้าย่อยของเมนู "การเงิน" (เมนูซ้ายแต่ละรายการเปิดหน้าเดียวกันแต่ต่างมุมมอง)
+window.PageFinApprovals = () => <PageFinance view="APR"/>;
+window.PageFinReceipts = () => <PageFinance view="RCV"/>;
+window.PageFinPayments = () => <PageFinance view="PAYV"/>;
+window.PageFinOther = () => <PageFinance view="TX"/>;
+window.PageFinLedger = () => <PageFinance view="LED"/>;
+window.PageFinSettings = () => <PageFinance view="SET"/>;

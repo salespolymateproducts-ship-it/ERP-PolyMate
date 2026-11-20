@@ -213,3 +213,59 @@ $$ language plpgsql;
 drop trigger if exists trg_fin_allocs_guard on fin_receipt_allocs;
 create trigger trg_fin_allocs_guard before update or delete on fin_receipt_allocs
   for each row execute function fin_allocs_guard();
+
+-- ==========================================================================
+-- การเงิน (ขั้น A3): ใบสำคัญจ่าย (PV) · จ่ายเงินตามค่าใช้จ่าย · หัก ณ ที่จ่าย (WT) ณ วันจ่ายจริง
+--   สถานะ: pending (รออนุมัติ) → approved → paid (เงินออกสมุดเงิน) · rejected · void (กลับรายการหลังจ่าย)
+--   net = Σ(base + vat − wht) ของค่าใช้จ่ายที่ผูก · ผู้รับเงินคนเดียวต่อหนึ่งใบสำคัญจ่าย
+-- ==========================================================================
+create table if not exists fin_pay_vouchers (
+  id            text primary key,
+  pv_date       date not null,
+  payee         text not null,
+  gross         numeric(14,2) not null check (gross > 0),
+  wht           numeric(14,2) not null default 0 check (wht >= 0),
+  net           numeric(14,2) not null check (net >= 0),
+  note          text not null default '',
+  status        text not null check (status in ('pending','approved','paid','rejected','void')),
+  account_id    text references fin_accounts(id),
+  pay_date      date,
+  ref_no        text not null default '',
+  wht_cert_no   text,
+  wht_cert_date date,
+  created_by    text not null,
+  created_by_id text not null,
+  created_at    timestamptz not null default now(),
+  approved_by   text,
+  approved_by_id text,
+  approved_at   timestamptz,
+  self_approved boolean not null default false,
+  paid_by       text,
+  paid_at       timestamptz,
+  reject_reason text,
+  void_reason   text,
+  voided_by     text,
+  voided_at     timestamptz,
+  void_date     date
+);
+create index if not exists idx_fin_pv_status on fin_pay_vouchers (status, pv_date desc);
+
+create table if not exists fin_pay_items (
+  id         bigserial primary key,
+  voucher_id text not null references fin_pay_vouchers(id),
+  expense_id text not null,
+  base       numeric(14,2) not null check (base > 0),
+  vat        numeric(14,2) not null default 0 check (vat >= 0),
+  wht        numeric(14,2) not null default 0 check (wht >= 0)
+);
+create index if not exists idx_fin_pay_items_exp on fin_pay_items (expense_id);
+create index if not exists idx_fin_pay_items_pv on fin_pay_items (voucher_id);
+
+create or replace function fin_pay_items_guard() returns trigger as $$
+begin
+  raise exception 'fin_pay_items is append-only';
+end;
+$$ language plpgsql;
+drop trigger if exists trg_fin_pay_items_guard on fin_pay_items;
+create trigger trg_fin_pay_items_guard before update or delete on fin_pay_items
+  for each row execute function fin_pay_items_guard();

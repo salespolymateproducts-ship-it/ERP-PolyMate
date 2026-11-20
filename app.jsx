@@ -1,6 +1,6 @@
 /* global React, ReactDOM, I, Sidebar, Topbar, PageDashboard, PageSales, PageCustomers, PageCustomerPO,
    PageProduction, PageInventory, PageMolds, PageShipping, PageProcurement, PageQC,
-   PageAccounting, PageHR, PageReports, PageDocs, PageAuditLog, PageSettings, LoginScreen,
+   PageAccounting, PageFinance, PageFinApprovals, PageFinReceipts, PageFinPayments, PageFinOther, PageFinLedger, PageFinSettings, PageHR, PageReports, PageDocs, PageAuditLog, PageSettings, LoginScreen,
    useTweaks, TweaksPanel, TweakSection, TweakRadio, TweakColor, TweakToggle,
    useState, useEffect */
 
@@ -16,7 +16,13 @@ const PAGES = {
   inventory:    { title: "คลังสินค้า",     crumb: ["PolyMate", "คลัง", "สต๊อก"], Comp: PageInventory },
   procurement:  { title: "ฝ่ายจัดซื้อ",     crumb: ["PolyMate", "จัดซื้อ", "PO / Supplier"], Comp: PageProcurement },
   accounting:   { title: "บัญชี",         crumb: ["PolyMate", "การเงิน", "บัญชี"], Comp: PageAccounting },
-  finance:      { title: "บัญชีเงิน / สมุดเงิน", crumb: ["PolyMate", "การเงิน", "บัญชีเงิน"], Comp: PageFinance },
+  finance:      { title: "บัญชีเงิน", crumb: ["PolyMate", "การเงิน", "บัญชีเงิน"], Comp: PageFinance },
+  "fin-approvals": { title: "รออนุมัติ", crumb: ["PolyMate", "การเงิน", "รออนุมัติ"], Comp: PageFinApprovals },
+  "fin-receipts":  { title: "รับเงินลูกค้า", crumb: ["PolyMate", "การเงิน", "รับเงินลูกค้า"], Comp: PageFinReceipts },
+  "fin-payments":  { title: "จ่ายเงิน (ใบสำคัญจ่าย)", crumb: ["PolyMate", "การเงิน", "จ่ายเงิน"], Comp: PageFinPayments },
+  "fin-other":     { title: "รับ/จ่าย/โอนอื่น ๆ", crumb: ["PolyMate", "การเงิน", "รับ/จ่าย/โอนอื่น ๆ"], Comp: PageFinOther },
+  "fin-ledger":    { title: "สมุดเงิน", crumb: ["PolyMate", "การเงิน", "สมุดเงิน"], Comp: PageFinLedger },
+  "fin-settings":  { title: "ตั้งค่าการเงิน", crumb: ["PolyMate", "การเงิน", "ตั้งค่า"], Comp: PageFinSettings },
   hr:           { title: "พนักงาน",       crumb: ["PolyMate", "บุคคล", "พนักงาน"], Comp: PageHR },
   reports:      { title: "รายงาน",        crumb: ["PolyMate", "วิเคราะห์", "รายงาน"], Comp: PageReports },
   docs:         { title: "เอกสารระบบ",     crumb: ["PolyMate", "เอกสารระบบ", "DB / API / Workflow"], Comp: PageDocs },

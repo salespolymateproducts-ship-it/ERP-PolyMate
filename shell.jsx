@@ -19,9 +19,18 @@ const NAV = [
   { id: "procurement", label: "ใบสั่งซื้อ / Supplier", icon: "Truck" },
   { section: "การจัดส่ง" },
   { id: "shipping", label: "การจัดส่งสินค้า", icon: "Truck" },
-  { section: "การเงิน" },
-  { id: "accounting", label: "บัญชี / ภพ.30", icon: "Wallet" },
-  { id: "finance", label: "บัญชีเงิน / สมุดเงิน", icon: "Wallet" },
+  { section: "การเงิน", grp: "fin" },
+  { id: "fin-approvals", label: "รออนุมัติ", icon: "Check", grp: "fin" },
+  { sub: "รายรับ", grp: "fin" },
+  { id: "fin-receipts", label: "รับเงินลูกค้า", icon: "Wallet", grp: "fin" },
+  { sub: "รายจ่าย", grp: "fin" },
+  { id: "accounting", label: "บัญชี / ภพ.30 (ค่าใช้จ่าย)", icon: "Wallet", grp: "fin" },
+  { id: "fin-payments", label: "จ่ายเงิน (ใบสำคัญจ่าย)", icon: "Wallet", grp: "fin" },
+  { sub: "เงินและบัญชี", grp: "fin" },
+  { id: "fin-other", label: "รับ/จ่าย/โอนอื่น ๆ", icon: "Wallet", grp: "fin" },
+  { id: "fin-ledger", label: "สมุดเงิน", icon: "Wallet", grp: "fin" },
+  { id: "finance", label: "บัญชีเงิน", icon: "Wallet", grp: "fin" },
+  { id: "fin-settings", label: "ตั้งค่าการเงิน", icon: "Settings", grp: "fin" },
   { section: "บุคคล" },
   { id: "hr", label: "พนักงาน", icon: "Badge" },
   { section: "วิเคราะห์" },
@@ -35,20 +44,37 @@ const NAV = [
 
 function Sidebar({ active, onNav, role }) {
   useStore();
+  // กลุ่ม "การเงิน" พับเก็บได้ (จำค่าไว้ในเครื่อง) · ตัวเลขรออนุมัติรวมทุกเอกสารการเงินจากเซิร์ฟเวอร์
+  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("erp.nav.fin.collapsed") === "1"; } catch (e) { return false; } });
+  const [finPend, setFinPend] = useState(0);
+  const toggleFin = () => setCollapsed((c) => { const n = !c; try { localStorage.setItem("erp.nav.fin.collapsed", n ? "1" : "0"); } catch (e) { /* ignore */ } return n; });
+  useEffect(() => { if (NAV.some((x) => x.grp === "fin" && x.id === active)) setCollapsed(false); }, [active]);
+  const canFin = !role || role.pages === "*" || (role.pages || []).includes("fin-approvals");
+  useEffect(() => {
+    if (!canFin || !window.Store || !Store.finApi) return undefined;
+    let live = true;
+    const load = () => Promise.all([Store.finApi("GET", "/summary"), Store.finApi("GET", "/receipts/summary"), Store.finApi("GET", "/payments/summary")])
+      .then(([a, b, c]) => { if (live) setFinPend((a.pendingCount || 0) + (b.pendingCount || 0) + (c.pendingCount || 0)); }).catch(() => {});
+    load();
+    window.addEventListener("fin-changed", load);
+    return () => { live = false; window.removeEventListener("fin-changed", load); };
+  }, [active, canFin]);
   const allowed = !role || role.pages === "*"
     ? null
     : new Set(role.pages);
   const items = NAV.filter((item) => {
-    if (item.section || !allowed) return true;
+    if (item.section || item.sub || !allowed) return true;
     return allowed.has(item.id);
   });
-  // also skip section headers that have no following items
+  // also skip section/sub headers that have no following items
+  const isHead = (x) => x.section || x.sub;
   const filtered = items.filter((item, i) => {
-    if (!item.section) return true;
-    const next = items.slice(i + 1).find((x) => !x.section);
-    const nextSection = items.slice(i + 1).find((x) => x.section);
+    if (!isHead(item)) return !(item.grp === "fin" && collapsed && active !== item.id);
+    const next = items.slice(i + 1).find((x) => !isHead(x));
+    const nextHead = items.slice(i + 1).find((x) => isHead(x) && (item.section || x.section || x.sub));
     if (!next) return false;
-    if (nextSection && items.indexOf(nextSection) < items.indexOf(next)) return false;
+    if (nextHead && items.indexOf(nextHead) < items.indexOf(next)) return false;
+    if (item.sub && collapsed) return false;
     return true;
   });
 
@@ -63,7 +89,9 @@ function Sidebar({ active, onNav, role }) {
       </div>
       <nav className="sidebar-nav">
         {filtered.map((item, idx) => {
+          if (item.section && item.grp === "fin") return <div className="sidebar-section" key={"s" + idx} onClick={toggleFin} style={{ cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center" }} title="กดเพื่อพับ/ขยายเมนูการเงิน"><span>{item.section}</span><span style={{ fontSize: 10, opacity: 0.7 }}>{collapsed ? "▸" : "▾"}</span></div>;
           if (item.section) return <div className="sidebar-section" key={"s" + idx}>{item.section}</div>;
+          if (item.sub) return <div key={"u" + idx} style={{ fontSize: 10.5, color: "var(--text-tertiary)", padding: "8px 14px 2px 38px", letterSpacing: 0.3 }}>{item.sub}</div>;
           const Ico = I[item.icon] || I.Dashboard;
           return (
             <div
@@ -73,7 +101,7 @@ function Sidebar({ active, onNav, role }) {
             >
               <Ico className="si-ico" />
               <span>{item.label}</span>
-              {(() => { const n = window.navCount(item.id); return n ? <span className={"si-count" + (n.alert ? " alert" : "")}>{n.v}</span> : null; })()}
+              {(() => { const n = item.id === "fin-approvals" ? (finPend ? { v: finPend, alert: true } : null) : window.navCount(item.id); return n ? <span className={"si-count" + (n.alert ? " alert" : "")}>{n.v}</span> : null; })()}
             </div>
           );
         })}

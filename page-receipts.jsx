@@ -146,6 +146,45 @@ function FinRefundModal({ rc, accounts, onClose, onDone }) {
   );
 }
 
+/** รายละเอียดใบรับเงิน: ลูกค้า · เงินเข้าบัญชีไหน · ตัดใบกำกับใบใด — ให้ผู้อนุมัติตรวจก่อนกด */
+function FinReceiptDetailModal({ r, isAdmin, user, onClose, onApprove, onReject, onCancel }) {
+  const st = FIN_STATUS[r.status] || { th: r.status, cls: "badge-neutral" };
+  const mine = user && r.createdBy === user.fullName;
+  const cell = { fontSize: 12.5, padding: "2px 0" };
+  return (
+    <ErpModal title={"ใบรับเงิน " + r.id} width={860} onClose={onClose}
+      footer={<>
+        <button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button>
+        {r.status === "pending" && isAdmin && <><button className="btn btn-outline btn-sm" onClick={() => onReject(r)}>ไม่อนุมัติ</button><button className="btn btn-primary btn-sm" onClick={() => onApprove(r)}>อนุมัติ</button></>}
+        {r.status === "pending" && (mine || isAdmin) && <button className="btn btn-ghost btn-sm" onClick={() => onCancel(r)}>ยกเลิก</button>}
+      </>}>
+      <div className="grid-2" style={{ gap: 6 }}>
+        <div style={cell}>ลูกค้า: <b>{r.customerName}</b></div><div style={cell}>สถานะ: <span className={"badge " + st.cls}>{st.th}</span></div>
+        <div style={cell}>วันที่รับเงิน: {fmtDate(r.date)}</div><div style={cell}>เข้าบัญชี: <b>{r.accountId}</b>{r.refNo ? " · อ้างอิง " + r.refNo : ""}</div>
+        <div style={cell}>ผู้บันทึก: {r.createdBy} · {r.createdAt}</div>
+        <div style={cell}>เงินเข้าบัญชี <b>{finMoney(r.received)}</b> · ค่าธรรมเนียม {finMoney(r.bankFee)} · ภาษีถูกหัก {finMoney(r.wht)}{r.excess ? " · เงินรอคืน " + finMoney(r.excess) : ""}</div>
+        {r.note ? <div style={{ ...cell, gridColumn: "1 / -1" }}>หมายเหตุ: {r.note}</div> : null}
+      </div>
+      <table className="table" style={{ marginTop: 10 }}>
+        <thead><tr><th>ใบกำกับภาษี</th><th>วันที่ออก</th><th>ครบกำหนด</th><th>อ้างอิงลูกค้า / หมายเหตุ</th><th>ต้นทาง</th><th className="num">ยอดใบกำกับ</th><th className="num">ตัดยอด (เงินรับ)</th><th className="num">ภาษีถูกหัก</th></tr></thead>
+        <tbody>
+          {r.allocations.map((a) => {
+            let src = []; try { src = JSON.parse(a.sourceIds || "[]"); } catch (e) { src = []; }
+            return (
+              <tr key={a.invoiceId}>
+                <td className="mono"><b>{a.invoiceId}</b></td><td>{a.invoiceDate ? fmtDate(a.invoiceDate) : "—"}</td><td>{a.due && a.due !== "—" ? fmtDate(a.due) : "—"}</td>
+                <td style={{ fontSize: 12 }}>{a.refNo || "—"}{a.note ? <div style={{ color: "var(--text-tertiary)" }}>{a.note}</div> : null}</td>
+                <td className="mono" style={{ fontSize: 11.5 }}>{src.length ? src.join(", ") : "—"}</td>
+                <td className="num">{finMoney(a.total)}</td><td className="num"><b>{finMoney(a.amount)}</b></td><td className="num">{a.wht ? finMoney(a.wht) : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </ErpModal>
+  );
+}
+
 function FinReceipts({ accounts, isAdmin, user, setModal, reload, tick }) {
   const [rows, setRows] = React.useState([]);
   const [sum, setSum] = React.useState(null);
@@ -185,7 +224,7 @@ function FinReceipts({ accounts, isAdmin, user, setModal, reload, tick }) {
                 <tr key={r.id}>
                   <td className="mono"><b>{r.id}</b><div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{r.accountId}{r.refNo ? " · " + r.refNo : ""}</div></td>
                   <td>{fmtDate(r.date)}</td><td>{r.customerName}</td>
-                  <td style={{ fontSize: 12 }}>{r.allocations.map((a) => <div key={a.invoiceId} className="mono">{a.invoiceId} · {finMoney(a.amount + a.wht)}</div>)}</td>
+                  <td style={{ fontSize: 12 }}>{r.allocations.map((a) => <div key={a.invoiceId}><span className="mono">{a.invoiceId}</span> · {finMoney(a.amount + a.wht)}{a.refNo ? <div style={{ color: "var(--text-tertiary)" }}>อ้างอิง {a.refNo}</div> : null}</div>)}</td>
                   <td className="num" style={{ fontWeight: 600, color: "var(--success)" }}>{finMoney(r.received)}</td>
                   <td className="num">{r.bankFee ? finMoney(r.bankFee) : "—"}</td>
                   <td className="num">{r.wht ? <>{finMoney(r.wht)}<div style={{ fontSize: 10.5 }}>{r.whtCertNo ? <span style={{ color: "var(--success)" }}>50 ทวิ {r.whtCertNo}</span> : r.status === "confirmed" ? <span className="badge badge-warning">รอ 50 ทวิ</span> : null}</div></> : "—"}</td>
@@ -193,6 +232,7 @@ function FinReceipts({ accounts, isAdmin, user, setModal, reload, tick }) {
                   <td><span className={"badge " + st.cls}>{st.th}</span>{r.status === "rejected" && r.rejectReason ? <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{r.rejectReason}</div> : null}{r.status === "void" && r.voidReason ? <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{r.voidReason}</div> : null}
                     <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{r.createdBy}{r.selfApproved ? <span className="badge badge-warning" style={{ marginLeft: 4 }}>อนุมัติเอง</span> : null}</div></td>
                   <td style={{ whiteSpace: "nowrap" }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setSub({ t: "detail", rc: r })}>รายละเอียด</button>
                     {r.status === "pending" && isAdmin && <><button className="btn btn-primary btn-sm" onClick={() => approve(r.id)}>อนุมัติ</button> <button className="btn btn-outline btn-sm" onClick={() => setModal({ t: "rvreject", id: r.id })}>ไม่อนุมัติ</button> </>}
                     {r.status === "pending" && (mine || isAdmin) && <button className="btn btn-ghost btn-sm" onClick={() => setModal({ t: "rvcancel", id: r.id })}>ยกเลิก</button>}
                     {r.status === "confirmed" && r.wht > 0 && <button className="btn btn-outline btn-sm" onClick={() => setSub({ t: "wht", rc: r })}>{r.whtCertNo ? "แก้ 50 ทวิ" : "บันทึก 50 ทวิ"}</button>}
@@ -207,6 +247,8 @@ function FinReceipts({ accounts, isAdmin, user, setModal, reload, tick }) {
         </table>
       </div>
       {sub && sub.t === "new" && <FinReceiptModal accounts={accounts} onClose={() => setSub(null)} onDone={done}/>}
+      {sub && sub.t === "detail" && <FinReceiptDetailModal r={sub.rc} isAdmin={isAdmin} user={user} onClose={() => setSub(null)}
+        onApprove={async (x) => { await approve(x.id); setSub(null); }} onReject={(x) => { setSub(null); setModal({ t: "rvreject", id: x.id }); }} onCancel={(x) => { setSub(null); setModal({ t: "rvcancel", id: x.id }); }}/>}
       {sub && sub.t === "wht" && <FinWhtCertModal rc={sub.rc} onClose={() => setSub(null)} onDone={done}/>}
       {sub && sub.t === "refund" && <FinRefundModal rc={sub.rc} accounts={accounts} onClose={() => setSub(null)} onDone={done}/>}
     </>

@@ -57,7 +57,10 @@ public class ReceiptService {
 		List<Map<String, Object>> r = jdbc.queryForList(RC_SEL + " where r.id = ?", id);
 		if (r.isEmpty()) throw ApiException.notFound("ไม่พบใบรับเงิน " + id);
 		Map<String, Object> m = new LinkedHashMap<>(r.get(0));
-		m.put("allocations", jdbc.queryForList("select invoice_id as \"invoiceId\", amount::float8 as amount, wht::float8 as wht from fin_receipt_allocs where receipt_id = ? order by id", id));
+		// ข้อมูลใบกำกับที่ตัดยอด (ให้ผู้อนุมัติรู้ว่ารับเงินค่าอะไร): วันที่ · ครบกำหนด · ยอดรวม · เลขอ้างอิงลูกค้า (เช่น PO ลูกค้า) · เอกสารต้นทาง
+		m.put("allocations", jdbc.queryForList("select a.invoice_id as \"invoiceId\", a.amount::float8 as amount, a.wht::float8 as wht, coalesce(d.data->>'date','') as \"invoiceDate\", coalesce(d.data->>'due','') as due, "
+			+ "coalesce(d.data->>'total','0')::float8 as total, coalesce(d.data->>'refNo','') as \"refNo\", coalesce(d.data->>'note','') as note, coalesce(d.data->>'status','') as \"invoiceStatus\", "
+			+ "coalesce(d.data->'sourceIds','[]'::jsonb)::text as \"sourceIds\" from fin_receipt_allocs a left join erp_records d on d.collection = 'docs' and d.id = a.invoice_id where a.receipt_id = ? order by a.id", id));
 		return m;
 	}
 
