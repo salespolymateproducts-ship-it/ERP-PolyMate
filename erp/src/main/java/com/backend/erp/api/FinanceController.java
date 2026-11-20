@@ -50,8 +50,8 @@ public class FinanceController {
 	}
 
 	@GetMapping("/txns")
-	public List<Map<String, Object>> txns(@RequestParam(required = false) String kind, @RequestParam(required = false) String status, HttpServletRequest req) {
-		return fin.listTxns(AuthInterceptor.user(req), kind, status);
+	public Object txns(@RequestParam(required = false) String kind, @RequestParam(required = false) String status, @RequestParam Map<String, String> params, HttpServletRequest req) {
+		return fin.listTxns(AuthInterceptor.user(req), kind, status, params);
 	}
 
 	@PostMapping("/txns")

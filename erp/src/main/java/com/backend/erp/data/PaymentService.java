@@ -57,15 +57,22 @@ public class PaymentService {
 		return m;
 	}
 
-	public List<Map<String, Object>> list(AuthUser u, String status) {
+	private static final Map<String, String> PV_SORTS = Map.of("id", "v.id", "date", "v.pv_date", "payee", "v.payee", "gross", "v.gross", "net", "v.net", "status", "v.status");
+
+	/** ไม่ส่ง page → คืนทั้งหมด · ส่ง page → {items,total,page,size} ค้นหา/ช่วงวันที่/เรียงที่ฝั่งเซิร์ฟเวอร์ */
+	public Object list(AuthUser u, String status, Map<String, String> params) {
 		FinanceService.needRead(u);
-		StringBuilder sql = new StringBuilder(PV_SEL + " where 1=1");
+		ListQuery lq = ListQuery.of(params);
+		StringBuilder where = new StringBuilder(" where 1=1");
 		List<Object> args = new ArrayList<>();
-		if (status != null && !status.isBlank()) { sql.append(" and v.status = ?"); args.add(status); }
-		sql.append(" order by v.pv_date desc, v.created_at desc limit 500");
+		if (status != null && !status.isBlank()) { where.append(" and v.status = ?"); args.add(status); }
+		lq.where(where, args, "concat_ws(' ', v.id, v.payee, v.note, v.ref_no, v.account_id, v.wht_cert_no, v.created_by, "
+			+ "(select string_agg(i.expense_id || ' ' || coalesce(e.data->>'ref','') || ' ' || coalesce(e.data->>'desc',''), ' ') from fin_pay_items i left join erp_records e on e.collection = 'expenses' and e.id = i.expense_id where i.voucher_id = v.id))", "v.pv_date");
+		long total = lq.paged() ? jdbc.queryForObject("select count(*) from fin_pay_vouchers v" + where, Long.class, args.toArray()) : 0;
+		String sql = "select v.id from fin_pay_vouchers v" + where + lq.orderBy(PV_SORTS, "v.pv_date desc, v.created_at desc, v.id desc", "v.id desc") + lq.limit();
 		List<Map<String, Object>> out = new ArrayList<>();
-		for (Map<String, Object> r : jdbc.queryForList(sql.toString(), args.toArray())) out.add(voucher(String.valueOf(r.get("id"))));
-		return out;
+		for (Map<String, Object> r : jdbc.queryForList(sql, args.toArray())) out.add(voucher(String.valueOf(r.get("id"))));
+		return lq.wrap(out, total);
 	}
 
 	public Map<String, Object> get(AuthUser u, String id) {

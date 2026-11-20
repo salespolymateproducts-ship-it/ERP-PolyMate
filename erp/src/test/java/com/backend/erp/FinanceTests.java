@@ -251,4 +251,30 @@ class FinanceTests {
 		assertFalse(sum.isEmpty());
 		assertEquals(0, ((Number) sum.get("pendingCount")).intValue());
 	}
+
+	@SuppressWarnings("unchecked")
+	@Test @Order(11)
+	void listsPageSearchAndSortOnServerWithoutSilentCap() throws Exception {
+		// เพิ่มรายการเกิน 500 แถวตรง ๆ (ไม่ผ่าน API เพื่อความเร็ว) — ต้องไม่ถูกตัดเงียบ ๆ
+		jdbc.update("insert into fin_txns(id,kind,txn_date,account_id,amount,category,counterparty,status,created_by,created_by_id) select 'ZZ-' || g, 'other_in', ?::date, 'OLD', g, 'หมวดทดสอบ', case when g = 7 then 'บริษัทค้นหาเจอ' else 'x' end, 'confirmed', 'test', 'test' from generate_series(1, 650) g", TODAY.toString());
+		List<Object> all = (List<Object>) call("GET", "/finance/txns?kind=other_in", null, admin, 200).get("_list");
+		assertTrue(all.size() >= 650, "ไม่ส่ง page ต้องได้ครบทุกแถว ไม่ตัดที่ 500 (ได้ " + all.size() + ")");
+		Map<String, Object> p = call("GET", "/finance/txns?kind=other_in&page=2&size=100&sort=amount&dir=desc", null, admin, 200);
+		assertEquals(100, ((List<Object>) p.get("items")).size());
+		assertTrue(((Number) p.get("total")).intValue() >= 650);
+		double first = ((Number) ((Map<String, Object>) ((List<Object>) p.get("items")).get(0)).get("amount")).doubleValue();
+		double last = ((Number) ((Map<String, Object>) ((List<Object>) p.get("items")).get(99)).get("amount")).doubleValue();
+		assertTrue(first >= last, "ต้องเรียงจากมากไปน้อย");
+		Map<String, Object> s = call("GET", "/finance/txns?page=1&size=50&q=" + java.net.URLEncoder.encode("ค้นหาเจอ", "UTF-8"), null, admin, 200);
+		assertEquals(1, ((Number) s.get("total")).intValue());
+		Map<String, Object> pct = call("GET", "/finance/txns?page=1&size=50&q=%25", null, admin, 200);   // "%" ต้องค้นเป็นตัวอักษร ไม่ใช่ wildcard
+		assertEquals(0, ((Number) pct.get("total")).intValue());
+		Map<String, Object> d = call("GET", "/finance/txns?page=1&size=5&from=" + TODAY.plusDays(1) + "&to=" + TODAY.plusDays(2), null, admin, 200);
+		assertEquals(0, ((Number) d.get("total")).intValue());
+		call("GET", "/finance/txns?page=1&from=2026-13-45", null, admin, 400);
+		call("GET", "/finance/txns?page=1&sort=id;drop%20table", null, admin, 200);                       // คีย์เรียงที่ไม่รู้จัก → ใช้ค่าเริ่มต้น ไม่หลุดเข้า SQL
+		call("GET", "/finance/receipts?page=1&size=10&status=WHT", null, admin, 200);
+		call("GET", "/finance/receipts?page=1&size=10&status=REFUND&q=abc", null, admin, 200);
+		call("GET", "/finance/payments?page=1&size=10&q=abc&sort=net&dir=asc", null, admin, 200);
+	}
 }

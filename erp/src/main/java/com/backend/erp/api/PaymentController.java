@@ -26,7 +26,7 @@ public class PaymentController {
 	public PaymentController(PaymentService pay) { this.pay = pay; }
 
 	@GetMapping
-	public List<Map<String, Object>> list(@RequestParam(required = false) String status, HttpServletRequest req) { return pay.list(AuthInterceptor.user(req), status); }
+	public Object list(@RequestParam(required = false) String status, @RequestParam Map<String, String> params, HttpServletRequest req) { return pay.list(AuthInterceptor.user(req), status, params); }
 
 	@GetMapping("/summary")
 	public Map<String, Object> summary(HttpServletRequest req) { return pay.summary(AuthInterceptor.user(req)); }

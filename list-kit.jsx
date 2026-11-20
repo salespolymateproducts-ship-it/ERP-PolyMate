@@ -85,6 +85,59 @@ function useListView(rows, opts) {
   return { q, setQ, from, setFrom, to, setTo, sort, setSort, toggleSort, page: cur, setPage, pageSize, setPageSize, pages, total, all: rows.length, sorted, pageRows, reset, active, hasDate: !!o.dateKey, dateLabel: o.dateLabel || "วันที่" };
 }
 
+/**
+  รุ่นฝั่งเซิร์ฟเวอร์ของ useListView (ใช้กับหน้าการเงินที่ข้อมูลโตไม่จำกัด): ค้นหา/ช่วงวันที่/เรียง/แบ่งหน้าทำที่ API
+  path = เช่น "/receipts" · opts: { params: {status:..}, tick, pageSize, dateLabel, hasDate, onError }
+  คืนค่ารูปเดียวกับ useListView → ใช้กับ ListToolbar / SortTh / Pager ได้เหมือนเดิม; แถวของหน้านี้อยู่ใน pageRows
+  คีย์เรียง (SortTh k=...) ต้องตรงกับที่เซิร์ฟเวอร์รองรับ (id, date, ...)
+*/
+function useServerListView(path, opts) {
+  const o = opts || {};
+  const [q, setQ] = React.useState("");
+  const [dq, setDq] = React.useState("");
+  const [from, setFrom] = React.useState("");
+  const [to, setTo] = React.useState("");
+  const [sort, setSort] = React.useState(null);
+  const [pageSize, setPageSize] = React.useState(o.pageSize || 50);
+  const [page, setPage] = React.useState(1);
+  const [data, setData] = React.useState({ items: [], total: 0 });
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => { const t = setTimeout(() => setDq(q.trim()), 300); return () => clearTimeout(t); }, [q]);
+  const extra = JSON.stringify(o.params || {});
+  const resetKey = [dq, from, to, sort && sort.key, sort && sort.dir, pageSize, extra].join("|");
+  const lastKey = React.useRef(resetKey);
+  React.useEffect(() => { if (lastKey.current !== resetKey) { lastKey.current = resetKey; setPage(1); } }, [resetKey]);
+
+  React.useEffect(() => {
+    let live = true;
+    const p = new URLSearchParams();
+    Object.entries(o.params || {}).forEach(([k, v]) => { if (v != null && v !== "" && v !== "ALL") p.set(k, v); });
+    if (dq) p.set("q", dq);
+    if (from) p.set("from", from);
+    if (to) p.set("to", to);
+    if (sort) { p.set("sort", sort.key); p.set("dir", sort.dir); }
+    p.set("page", String(page)); p.set("size", String(pageSize));
+    setLoading(true);
+    Store.finApi("GET", path + "?" + p.toString())
+      .then((r) => {
+        if (!live) return;
+        if (Array.isArray(r)) { setLoading(false); if (o.onError) o.onError(new Error("เซิร์ฟเวอร์ยังเป็นเวอร์ชันเก่า (ไม่รองรับแบ่งหน้า) — รีสตาร์ท backend")); return; }
+        setData(r); setLoading(false);
+      })
+      .catch((e) => { if (live) { setLoading(false); if (o.onError) o.onError(e); } });
+    return () => { live = false; };
+  }, [path, resetKey, page, o.tick]);
+
+  const total = data.total || 0;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const cur = Math.min(page, pages);
+  const toggleSort = (key) => setSort((s) => (s && s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
+  const reset = () => { setQ(""); setFrom(""); setTo(""); setSort(null); };
+  const active = !!(dq || from || to);
+  return { q, setQ, from, setFrom, to, setTo, sort, setSort, toggleSort, page: cur, setPage, pageSize, setPageSize, pages, total, all: total, pageRows: data.items || [], loading, reset, active, hasDate: o.hasDate !== false, dateLabel: o.dateLabel || "วันที่" };
+}
+
 /** แถบค้นหา + ช่วงวันที่ — children = ตัวกรองเฉพาะหน้า (ปุ่มสถานะ ฯลฯ) */
 function ListToolbar({ view: v, placeholder, children }) {
   const presetBtn = (name, label) => {
@@ -138,4 +191,4 @@ function Pager({ view: v }) {
   );
 }
 
-Object.assign(window, { useListView, ListToolbar, SortTh, Pager, lkPreset });
+Object.assign(window, { useServerListView, useListView, ListToolbar, SortTh, Pager, lkPreset });

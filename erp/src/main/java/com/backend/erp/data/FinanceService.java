@@ -240,14 +240,20 @@ public class FinanceService {
 		+ "t.created_by as \"createdBy\", to_char(t.created_at at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI') as \"createdAt\", t.approved_by as \"approvedBy\", to_char(t.approved_at at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI') as \"approvedAt\", "
 		+ "t.self_approved as \"selfApproved\", t.reject_reason as \"rejectReason\", t.void_reason as \"voidReason\", t.voided_by as \"voidedBy\", to_char(t.void_date,'YYYY-MM-DD') as \"voidDate\" from fin_txns t";
 
-	public List<Map<String, Object>> listTxns(AuthUser u, String kind, String status) {
+	private static final Map<String, String> TXN_SORTS = Map.of("id", "t.id", "date", "t.txn_date", "amount", "t.amount", "category", "t.category", "status", "t.status", "createdBy", "t.created_by");
+
+	/** ไม่ส่ง page → คืนทั้งหมด · ส่ง page → {items,total,page,size} ค้นหา/ช่วงวันที่/เรียงที่ฝั่งเซิร์ฟเวอร์ */
+	public Object listTxns(AuthUser u, String kind, String status, Map<String, String> params) {
 		needRead(u);
-		StringBuilder sql = new StringBuilder(TXN_SEL + " where 1=1");
+		ListQuery lq = ListQuery.of(params);
+		StringBuilder where = new StringBuilder(" where 1=1");
 		List<Object> args = new ArrayList<>();
-		if (kind != null && !kind.isBlank()) { sql.append(" and t.kind = ?"); args.add(kind); }
-		if (status != null && !status.isBlank()) { sql.append(" and t.status = ?"); args.add(status); }
-		sql.append(" order by t.txn_date desc, t.created_at desc limit 500");
-		return jdbc.queryForList(sql.toString(), args.toArray());
+		if (kind != null && !kind.isBlank()) { where.append(" and t.kind = ?"); args.add(kind); }
+		if (status != null && !status.isBlank()) { where.append(" and t.status = ?"); args.add(status); }
+		lq.where(where, args, "concat_ws(' ', t.id, t.category, t.counterparty, t.ref_no, t.note, t.account_id, t.to_account_id, t.created_by)", "t.txn_date");
+		long total = lq.paged() ? jdbc.queryForObject("select count(*) from fin_txns t" + where, Long.class, args.toArray()) : 0;
+		String sql = TXN_SEL + where + lq.orderBy(TXN_SORTS, "t.txn_date desc, t.created_at desc, t.id desc", "t.id desc") + lq.limit();
+		return lq.wrap(jdbc.queryForList(sql, args.toArray()), total);
 	}
 
 	Map<String, Object> txn(String id) {

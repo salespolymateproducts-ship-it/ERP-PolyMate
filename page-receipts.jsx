@@ -205,17 +205,16 @@ function FinReceiptDetailModal({ r, isAdmin, user, onClose, onApprove, onReject,
 }
 
 function FinReceipts({ accounts, isAdmin, user, setModal, reload, tick }) {
-  const [rows, setRows] = React.useState([]);
   const [sum, setSum] = React.useState(null);
   const [filter, setFilter] = React.useState("ALL");
   const [sub, setSub] = React.useState(null);
+  const v = useServerListView("/receipts", { params: { status: filter }, tick, onError: finErr });
+  const list = v.pageRows;
   React.useEffect(() => {
     let live = true;
-    Promise.all([Store.finApi("GET", "/receipts"), Store.finApi("GET", "/receipts/summary")])
-      .then(([r, s]) => { if (live) { setRows(r); setSum(s); } }).catch(finErr);
+    Store.finApi("GET", "/receipts/summary").then((s) => { if (live) setSum(s); }).catch(finErr);
     return () => { live = false; };
   }, [tick]);
-  const list = rows.filter((r) => filter === "ALL" || (filter === "WHT" ? r.whtCertPending : filter === "REFUND" ? r.status === "confirmed" && r.excess - r.refunded - r.refundPending > 0.004 : r.status === filter));
   const approve = async (id) => { try { await Store.finApi("POST", "/receipts/" + id + "/approve"); notify("อนุมัติ " + id + " แล้ว", "success"); reload(); } catch (e) { finErr(e); } };
   const done = () => { setSub(null); reload(); };
   return (
@@ -227,13 +226,13 @@ function FinReceipts({ accounts, isAdmin, user, setModal, reload, tick }) {
         <div className="card" style={{ padding: 12, display: "flex", alignItems: "center" }}><button className="btn btn-primary btn-sm" onClick={() => setSub({ t: "new" })}><I.Plus size={14}/> รับเงินลูกค้า</button></div>
       </div>
       <div className="card">
-        <div style={{ padding: "12px 16px", display: "flex", gap: 8 }}>
+        <ListToolbar view={v} placeholder="ค้นหาเลขที่ ลูกค้า ใบกำกับ เลขอ้างอิง…">
           <select className="select" style={{ width: 220 }} value={filter} onChange={(e) => setFilter(e.target.value)}>
             <option value="ALL">ทุกสถานะ</option><option value="pending">รออนุมัติ</option><option value="confirmed">ยืนยันแล้ว</option><option value="void">ยกเลิก/กลับรายการ</option><option value="WHT">รอ 50 ทวิ</option><option value="REFUND">มีเงินรอคืน</option>
           </select>
-        </div>
+        </ListToolbar>
         <table className="table">
-          <thead><tr><th>เลขที่</th><th>วันที่</th><th>ลูกค้า</th><th>ใบกำกับที่ตัด</th><th className="num">เงินเข้าบัญชี</th><th className="num">ค่าธรรมเนียม</th><th className="num">ภาษีถูกหัก</th><th className="num">เงินรอคืน</th><th>สถานะ</th><th></th></tr></thead>
+          <thead><tr><SortTh view={v} k="id">เลขที่</SortTh><SortTh view={v} k="date">วันที่</SortTh><SortTh view={v} k="customer">ลูกค้า</SortTh><th>ใบกำกับที่ตัด</th><SortTh view={v} k="received" className="num">เงินเข้าบัญชี</SortTh><th className="num">ค่าธรรมเนียม</th><th className="num">ภาษีถูกหัก</th><th className="num">เงินรอคืน</th><SortTh view={v} k="status">สถานะ</SortTh><th></th></tr></thead>
           <tbody>
             {list.map((r) => {
               const st = FIN_STATUS[r.status] || { th: r.status, cls: "badge-neutral" };
@@ -261,9 +260,10 @@ function FinReceipts({ accounts, isAdmin, user, setModal, reload, tick }) {
                 </tr>
               );
             })}
-            {!list.length && <tr><td colSpan={10} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>ยังไม่มีใบรับเงิน</td></tr>}
+            {!list.length && <tr><td colSpan={10} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>{v.loading ? "กำลังโหลด…" : v.active || filter !== "ALL" ? "ไม่พบใบรับเงินที่ตรงกับตัวกรอง" : "ยังไม่มีใบรับเงิน"}</td></tr>}
           </tbody>
         </table>
+        <Pager view={v}/>
       </div>
       {sub && sub.t === "new" && <FinReceiptModal accounts={accounts} onClose={() => setSub(null)} onDone={done}/>}
       {sub && sub.t === "detail" && <FinReceiptDetailModal r={sub.rc} isAdmin={isAdmin} user={user} onClose={() => setSub(null)}

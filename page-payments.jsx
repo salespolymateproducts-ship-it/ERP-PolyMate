@@ -140,16 +140,16 @@ function FinPayDetailModal({ v, isAdmin, user, onClose, onApprove, onReject, onP
 }
 
 function FinPayments({ accounts, isAdmin, user, setModal, reload, tick }) {
-  const [rows, setRows] = React.useState([]);
   const [sum, setSum] = React.useState(null);
   const [filter, setFilter] = React.useState("ALL");
   const [sub, setSub] = React.useState(null);
+  const v0 = useServerListView("/payments", { params: { status: filter }, tick, onError: finErr });
+  const list = v0.pageRows;
   React.useEffect(() => {
     let live = true;
-    Promise.all([Store.finApi("GET", "/payments"), Store.finApi("GET", "/payments/summary")]).then(([r, s]) => { if (live) { setRows(r); setSum(s); } }).catch(finErr);
+    Store.finApi("GET", "/payments/summary").then((s) => { if (live) setSum(s); }).catch(finErr);
     return () => { live = false; };
   }, [tick]);
-  const list = rows.filter((r) => filter === "ALL" || r.status === filter);
   const approve = async (id) => { try { await Store.finApi("POST", "/payments/" + id + "/approve"); notify("อนุมัติ " + id + " แล้ว", "success"); reload(); } catch (e) { finErr(e); } };
   const done = () => { setSub(null); reload(); };
   return (
@@ -161,13 +161,13 @@ function FinPayments({ accounts, isAdmin, user, setModal, reload, tick }) {
         <div className="card" style={{ padding: 12, display: "flex", alignItems: "center" }}><button className="btn btn-primary btn-sm" onClick={() => setSub({ t: "new" })}><I.Plus size={14}/> สร้างใบสำคัญจ่าย</button></div>
       </div>
       <div className="card">
-        <div style={{ padding: "12px 16px", display: "flex", gap: 8 }}>
+        <ListToolbar view={v0} placeholder="ค้นหาเลขที่ ผู้รับเงิน ค่าใช้จ่าย เลข PO…">
           <select className="select" style={{ width: 220 }} value={filter} onChange={(e) => setFilter(e.target.value)}>
             <option value="ALL">ทุกสถานะ</option>{Object.keys(PV_STATUS).map((k) => <option key={k} value={k}>{PV_STATUS[k].th}</option>)}
           </select>
-        </div>
+        </ListToolbar>
         <table className="table">
-          <thead><tr><th>เลขที่</th><th>วันที่</th><th>ผู้รับเงิน</th><th>ค่าใช้จ่าย</th><th className="num">รวม</th><th className="num">หัก ณ ที่จ่าย</th><th className="num">จ่ายสุทธิ</th><th>สถานะ / การจ่าย</th><th></th></tr></thead>
+          <thead><tr><SortTh view={v0} k="id">เลขที่</SortTh><SortTh view={v0} k="date">วันที่</SortTh><SortTh view={v0} k="payee">ผู้รับเงิน</SortTh><th>ค่าใช้จ่าย</th><SortTh view={v0} k="gross" className="num">รวม</SortTh><th className="num">หัก ณ ที่จ่าย</th><SortTh view={v0} k="net" className="num">จ่ายสุทธิ</SortTh><SortTh view={v0} k="status">สถานะ / การจ่าย</SortTh><th></th></tr></thead>
           <tbody>
             {list.map((v) => {
               const st = PV_STATUS[v.status] || { th: v.status, cls: "badge-neutral" };
@@ -192,9 +192,10 @@ function FinPayments({ accounts, isAdmin, user, setModal, reload, tick }) {
                 </tr>
               );
             })}
-            {!list.length && <tr><td colSpan={9} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>ยังไม่มีใบสำคัญจ่าย</td></tr>}
+            {!list.length && <tr><td colSpan={9} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>{v0.loading ? "กำลังโหลด…" : v0.active || filter !== "ALL" ? "ไม่พบใบสำคัญจ่ายที่ตรงกับตัวกรอง" : "ยังไม่มีใบสำคัญจ่าย"}</td></tr>}
           </tbody>
         </table>
+        <Pager view={v0}/>
       </div>
       {sub && sub.t === "new" && <FinPayVoucherModal accounts={accounts} onClose={() => setSub(null)} onDone={done}/>}
       {sub && sub.t === "detail" && <FinPayDetailModal v={sub.v} isAdmin={isAdmin} user={user} onClose={() => setSub(null)}

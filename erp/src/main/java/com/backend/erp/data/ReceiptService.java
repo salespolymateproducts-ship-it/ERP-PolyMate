@@ -79,17 +79,28 @@ public class ReceiptService {
 		return jdbc.queryForList("select distinct a.invoice_id from fin_receipt_allocs a join fin_receipts r on r.id = a.receipt_id where r.status in ('pending','confirmed') and a.wht > 0 order by 1", String.class);
 	}
 
-	public List<Map<String, Object>> list(AuthUser u, String status, String customerId) {
+	private static final Map<String, String> RC_SORTS = Map.of("id", "r.id", "date", "r.rcv_date", "customer", "r.customer_name", "received", "r.received", "status", "r.status");
+
+	/**
+	 * status: ปกติ = สถานะใบรับเงิน · "WHT" = รอ 50 ทวิ · "REFUND" = มีเงินรอคืน
+	 * ไม่ส่ง page → คืนทั้งหมด · ส่ง page → {items,total,page,size}
+	 */
+	public Object list(AuthUser u, String status, String customerId, Map<String, String> params) {
 		FinanceService.needRead(u);
-		StringBuilder sql = new StringBuilder(RC_SEL + " where 1=1");
+		ListQuery lq = ListQuery.of(params);
+		StringBuilder where = new StringBuilder(" where 1=1");
 		List<Object> args = new ArrayList<>();
-		if (status != null && !status.isBlank()) { sql.append(" and r.status = ?"); args.add(status); }
-		if (customerId != null && !customerId.isBlank()) { sql.append(" and r.customer_id = ?"); args.add(customerId); }
-		sql.append(" order by r.rcv_date desc, r.created_at desc limit 500");
-		List<Map<String, Object>> rows = jdbc.queryForList(sql.toString(), args.toArray());
+		if ("WHT".equals(status)) where.append(" and r.wht > 0 and r.status = 'confirmed' and r.wht_cert_no is null");
+		else if ("REFUND".equals(status)) where.append(" and r.status = 'confirmed' and r.excess - coalesce((select sum(t.amount) from fin_txns t where t.kind='other_out' and t.category = '" + REFUND_CATEGORY + "' and t.ref_no = r.id and t.status in ('confirmed','pending')),0) > 0.004");
+		else if (status != null && !status.isBlank()) { where.append(" and r.status = ?"); args.add(status); }
+		if (customerId != null && !customerId.isBlank()) { where.append(" and r.customer_id = ?"); args.add(customerId); }
+		lq.where(where, args, "concat_ws(' ', r.id, r.customer_name, r.customer_id, r.ref_no, r.note, r.account_id, r.wht_cert_no, r.created_by, "
+			+ "(select string_agg(a.invoice_id, ' ') from fin_receipt_allocs a where a.receipt_id = r.id), (select string_agg(l.rc_id, ' ') from fin_receipt_rcs l where l.receipt_id = r.id))", "r.rcv_date");
+		long total = lq.paged() ? jdbc.queryForObject("select count(*) from fin_receipts r" + where, Long.class, args.toArray()) : 0;
+		String sql = "select r.id from fin_receipts r" + where + lq.orderBy(RC_SORTS, "r.rcv_date desc, r.created_at desc, r.id desc", "r.id desc") + lq.limit();
 		List<Map<String, Object>> out = new ArrayList<>();
-		for (Map<String, Object> r : rows) out.add(receipt(String.valueOf(r.get("id"))));
-		return out;
+		for (Map<String, Object> r : jdbc.queryForList(sql, args.toArray())) out.add(receipt(String.valueOf(r.get("id"))));
+		return lq.wrap(out, total);
 	}
 
 	public Map<String, Object> get(AuthUser u, String id) {

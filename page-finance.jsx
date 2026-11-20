@@ -141,7 +141,7 @@ function PageFinance({ view }) {
     let live = true;
     (async () => {
       try {
-        const [a, t, s, rp, pp] = await Promise.all([Store.finApi("GET", "/accounts"), Store.finApi("GET", "/txns"), Store.finApi("GET", "/summary"),
+        const [a, t, s, rp, pp] = await Promise.all([Store.finApi("GET", "/accounts"), Store.finApi("GET", "/txns?status=pending"), Store.finApi("GET", "/summary"),
           Store.finApi("GET", "/receipts?status=pending"), Store.finApi("GET", "/payments?status=pending")]);
         if (live) { setAccounts(a); setTxns(t); setSummary(s); setPendRc(rp); setPendPv(pp); setLoadErr(""); }
       } catch (e) { if (live) setLoadErr(e && e.message ? e.message : String(e)); }
@@ -188,7 +188,7 @@ function PageFinance({ view }) {
       {tab === "RCW" && <FinRcWaiting accounts={accounts} reload={reload} tick={tick}/>}
       {tab === "RCV" && <FinReceipts accounts={accounts} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload} tick={tick}/>}
       {tab === "PAYV" && <FinPayments accounts={accounts} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload} tick={tick}/>}
-      {tab === "TX" && <FinTxnList txns={txns} accName={accName} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload}/>}
+      {tab === "TX" && <FinTxnList tick={tick} accName={accName} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload}/>}
       {tab === "APR" && <FinApprovals txns={pendingTx} receipts={pendRc} vouchers={pendPv} accName={accName} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload}/>}
       {tab === "SET" && (isAdmin ? <FinSettings settings={settings} onSaved={reload}/> : <div className="card" style={{ padding: 24, color: "var(--text-tertiary)" }}>เฉพาะผู้ดูแลระบบ (admin) ตั้งค่าได้</div>)}
 
@@ -288,17 +288,18 @@ function FinLedger({ accounts, tick }) {
   );
 }
 
-function FinTxnList({ txns, accName, isAdmin, user, setModal, reload, emptyText }) {
+function FinTxnList({ tick, accName, isAdmin, user, setModal, reload, emptyText }) {
   const [kind, setKind] = React.useState("ALL");
-  const rows = txns.filter((t) => kind === "ALL" || t.kind === kind);
+  const v = useServerListView("/txns", { params: { kind }, tick, dateLabel: "วันที่", onError: finErr });
+  const rows = v.pageRows;
   const approve = async (id) => { try { await Store.finApi("POST", "/txns/" + id + "/approve"); notify("อนุมัติ " + id + " แล้ว", "success"); reload(); } catch (e) { finErr(e); } };
   return (
     <div className="card">
-      <div style={{ padding: "12px 16px", display: "flex", gap: 8 }}>
+      <ListToolbar view={v} placeholder="ค้นหาเลขที่ หมวด ผู้เกี่ยวข้อง อ้างอิง…">
         <select className="select" style={{ width: 200 }} value={kind} onChange={(e) => setKind(e.target.value)}><option value="ALL">ทุกประเภท</option>{Object.keys(FIN_KIND).map((k) => <option key={k} value={k}>{FIN_KIND[k]}</option>)}</select>
-      </div>
+      </ListToolbar>
       <table className="table">
-        <thead><tr><th>เลขที่</th><th>วันที่</th><th>ประเภท</th><th>บัญชี</th><th>หมวด / ผู้เกี่ยวข้อง</th><th className="num">จำนวนเงิน</th><th>สถานะ</th><th>ผู้บันทึก / อนุมัติ</th><th></th></tr></thead>
+        <thead><tr><SortTh view={v} k="id">เลขที่</SortTh><SortTh view={v} k="date">วันที่</SortTh><th>ประเภท</th><th>บัญชี</th><SortTh view={v} k="category">หมวด / ผู้เกี่ยวข้อง</SortTh><SortTh view={v} k="amount" className="num">จำนวนเงิน</SortTh><SortTh view={v} k="status">สถานะ</SortTh><th>ผู้บันทึก / อนุมัติ</th><th></th></tr></thead>
         <tbody>
           {rows.map((t) => {
             const st = FIN_STATUS[t.status] || { th: t.status, cls: "badge-neutral" };
@@ -319,9 +320,10 @@ function FinTxnList({ txns, accName, isAdmin, user, setModal, reload, emptyText 
               </tr>
             );
           })}
-          {!rows.length && <tr><td colSpan={9} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>{emptyText || "ยังไม่มีรายการ"}</td></tr>}
+          {!rows.length && <tr><td colSpan={9} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>{v.loading ? "กำลังโหลด…" : v.active ? "ไม่พบรายการที่ตรงกับตัวกรอง" : (emptyText || "ยังไม่มีรายการ")}</td></tr>}
         </tbody>
       </table>
+      <Pager view={v}/>
     </div>
   );
 }

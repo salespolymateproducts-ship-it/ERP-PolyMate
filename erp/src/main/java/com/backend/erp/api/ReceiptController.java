@@ -26,8 +26,8 @@ public class ReceiptController {
 	public ReceiptController(ReceiptService rc) { this.rc = rc; }
 
 	@GetMapping
-	public List<Map<String, Object>> list(@RequestParam(required = false) String status, @RequestParam(required = false) String customerId, HttpServletRequest req) {
-		return rc.list(AuthInterceptor.user(req), status, customerId);
+	public Object list(@RequestParam(required = false) String status, @RequestParam(required = false) String customerId, @RequestParam Map<String, String> params, HttpServletRequest req) {
+		return rc.list(AuthInterceptor.user(req), status, customerId, params);
 	}
 
 	@GetMapping("/summary")
