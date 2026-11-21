@@ -56,13 +56,13 @@ public class DataController {
 	// ---------- collections ----------
 	@GetMapping("/{collection}")
 	public ResponseEntity<String> list(@PathVariable String collection, @RequestParam(required = false) String q,
-			@RequestParam(defaultValue = "1000") int limit, @RequestParam(defaultValue = "0") int offset) {
-		return Json.raw(Json.array(records.list(collection, q, limit, offset)));
+			@RequestParam(defaultValue = "1000") int limit, @RequestParam(defaultValue = "0") int offset, HttpServletRequest req) {
+		return Json.raw(Json.array(records.list(AuthInterceptor.user(req), collection, q, limit, offset)));
 	}
 
 	@GetMapping("/{collection}/{id}")
-	public ResponseEntity<String> get(@PathVariable String collection, @PathVariable String id) {
-		return Json.raw(records.get(collection, id));
+	public ResponseEntity<String> get(@PathVariable String collection, @PathVariable String id, HttpServletRequest req) {
+		return Json.raw(records.get(AuthInterceptor.user(req), collection, id));
 	}
 
 	@PostMapping("/{collection}")
@@ -179,7 +179,7 @@ public class DataController {
 	// ---------- Bootstrap / backup ----------
 	@GetMapping("/bootstrap")
 	public ResponseEntity<String> bootstrap(HttpServletRequest req) {
-		return Json.raw(admin.snapshot(AuthInterceptor.user(req).isAdmin(), 500));
+		return Json.raw(admin.snapshot(AuthInterceptor.user(req), 500));
 	}
 
 	@GetMapping("/admin/export")
@@ -187,7 +187,7 @@ public class DataController {
 		AuthUser u = AuthInterceptor.user(req);
 		if (!u.isAdmin()) throw com.backend.erp.common.ApiException.forbidden("เฉพาะผู้ดูแลระบบ");
 		audit.log(u, "EXPORT", "ระบบ", "backup", "ส่งออกไฟล์สำรองข้อมูล");
-		return Json.raw(admin.snapshot(true, 5000));
+		return Json.raw(admin.snapshot(u, 5000));
 	}
 
 	@PostMapping("/admin/import")

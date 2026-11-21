@@ -23,8 +23,10 @@ public class AdminService {
 	private final AuditService audit;
 	private final JdbcTemplate jdbc;
 	private final Json json;
+	private final ReadPolicy readPolicy;
 
-	public AdminService(RecordRepository repo, CounterService counters, AuditService audit, JdbcTemplate jdbc, Json json) {
+	public AdminService(RecordRepository repo, CounterService counters, AuditService audit, JdbcTemplate jdbc, Json json, ReadPolicy readPolicy) {
+		this.readPolicy = readPolicy;
 		this.repo = repo;
 		this.counters = counters;
 		this.audit = audit;
@@ -37,12 +39,14 @@ public class AdminService {
 	}
 
 	/** ข้อมูลทั้งหมดในรูปเดียวกับ Store.state เดิม (ไม่มี hash/salt ของรหัสผ่าน) */
-	public String snapshot(boolean includeUsers, int auditLimit) {
+	public String snapshot(AuthUser u, int auditLimit) {
+		boolean includeUsers = u.isAdmin();
 		StringBuilder sb = new StringBuilder("{");
 		for (Collections.Def d : Collections.all()) {
-			sb.append('"').append(d.name()).append("\":").append(Json.array(repo.list(d.name(), null, 100000, 0))).append(',');
+			sb.append('"').append(d.name()).append("\":").append(Json.array(readPolicy.list(u, d.name(), repo.list(d.name(), null, 100000, 0)))).append(',');
 		}
-		sb.append("\"auditLogs\":").append(Json.array(audit.search(null, null, null, null, null, null, auditLimit, 0))).append(',');
+		// Audit Log มียอดเงินของเอกสารในข้อความ → ส่งให้เฉพาะ admin/ฝ่ายบัญชี
+		sb.append("\"auditLogs\":").append(readPolicy.seesAudit(u) ? Json.array(audit.search(null, null, null, null, null, null, auditLimit, 0)) : "[]").append(',');
 		if (includeUsers) {
 			List<Map<String, Object>> us = jdbc.queryForList("select * from erp_users order by created_at desc").stream().map(AuthService::publicUser).toList();
 			sb.append("\"users\":").append(json.str(us)).append(',');

@@ -233,7 +233,8 @@ function buildNotifications(role) {
       out.push({ id: "wr" + w.id, kind: "info", icon: "Factory", title: `ใบสั่งผลิต ${w.id} พร้อมผลิตแล้ว — วัตถุดิบครบหลังรับของตามใบสั่งซื้อ`, time: "พร้อมผลิต", page: woPage, focus: { wo: w.id } });
     }
   });
-  s.docs.filter((d) => d.type === "INV" && Workflow.isLive(d)).forEach((d) => {
+  // ลูกหนี้เกินกำหนด (มียอดเงิน): แจ้งเฉพาะฝ่ายขาย/บัญชี/admin — ฝ่ายผลิต/จัดซื้อไม่เห็นตัวเลขการเงินของบริษัท
+  if (can("sales") || can("accounting")) s.docs.filter((d) => d.type === "INV" && Workflow.isLive(d)).forEach((d) => {
     const p = Workflow.paymentInfo(d);
     if (p.overdue) out.push({ id: "od" + d.id, kind: "alert", icon: "Wallet", title: `เกินกำหนดชำระ: ${d.id} ${d.customerName} ค้าง ${_fmt(p.outstanding, 2)} บาท`, time: "ครบกำหนด " + d.due, page: "sales", focus: { doc: d.id } });
   });

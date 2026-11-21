@@ -4,6 +4,9 @@
 // แดชบอร์ด — ทุกตัวเลขคำนวณจากข้อมูลจริงใน Store
 function PageDashboard({ role }) {
   useStore();
+  // สิทธิ์การเห็นตัวเลขการเงิน: กำไร/ต้นทุน/ค่าใช้จ่าย = เฉพาะผู้มีสิทธิ์หน้า "บัญชี" (admin, ฝ่ายบัญชี) · ยอดขาย/ลูกหนี้/เอกสารขาย = ผู้มีสิทธิ์หน้า "เอกสารขาย" ขึ้นไป · ฝ่ายอื่น (ผลิต/จัดซื้อ ฯลฯ) เห็นเฉพาะงานผลิต เครื่องจักร และสิ่งที่ต้องดำเนินการ
+  const has = (p) => !!role && (role.pages === "*" || (role.pages || []).includes(p));
+  const showFin = has("accounting"), showSales = showFin || has("sales");
   const S = Store.state;
   const today = Store.today();
   const ym = today.slice(0, 7);
@@ -20,12 +23,13 @@ function PageDashboard({ role }) {
     + Analytics.notes().filter((d) => d.date === today).reduce((s, d) => s + (d.type === "CN" ? -1 : 1) * d.subtotal, 0);   // หักใบลดหนี้ / บวกใบเพิ่มหนี้
   const delta = (a, b) => (b ? ((a - b) / b * 100).toFixed(1) + "%" : "—");
 
-  const kpis = [
-    { label: "ยอดขายวันนี้ (ใบกำกับภาษี ± ลด/เพิ่มหนี้)", value: baht(salesToday), icon: "Wallet", color: "accent", sub: `เดือนนี้ ${baht(cur.revenue)} · เทียบเดือนก่อน ${delta(cur.revenue, prev.revenue)}` },
-    { label: "ยอดผลิตวันนี้", value: _fmt(prod.produced), unit: "ชิ้น", icon: "Factory", color: "violet", sub: `ใบสั่งผลิตที่เปิดอยู่ ${openWO.length} ใบ` },
-    { label: "กำไรขั้นต้นเดือนนี้", value: baht(cur.gp), icon: "TrendUp", color: "success", sub: cur.revenue ? `Margin ${(cur.gp / cur.revenue * 100).toFixed(1)}%` : "ยังไม่มียอดขาย" },
-    { label: "ของเสีย (NG) วันนี้", value: prod.ngRate.toFixed(2), unit: "%", icon: "Alert", color: "amber", sub: `${_fmt(prod.ng)} ชิ้น จาก ${_fmt(prod.produced)}` },
+  const kpisAll = [
+    { show: showSales, label: "ยอดขายวันนี้ (ใบกำกับภาษี ± ลด/เพิ่มหนี้)", value: baht(salesToday), icon: "Wallet", color: "accent", sub: `เดือนนี้ ${baht(cur.revenue)} · เทียบเดือนก่อน ${delta(cur.revenue, prev.revenue)}` },
+    { show: true, label: "ยอดผลิตวันนี้", value: _fmt(prod.produced), unit: "ชิ้น", icon: "Factory", color: "violet", sub: `ใบสั่งผลิตที่เปิดอยู่ ${openWO.length} ใบ` },
+    { show: showFin, label: "กำไรขั้นต้นเดือนนี้", value: baht(cur.gp), icon: "TrendUp", color: "success", sub: cur.revenue ? `Margin ${(cur.gp / cur.revenue * 100).toFixed(1)}%` : "ยังไม่มียอดขาย" },
+    { show: true, label: "ของเสีย (NG) วันนี้", value: prod.ngRate.toFixed(2), unit: "%", icon: "Alert", color: "amber", sub: `${_fmt(prod.ng)} ชิ้น จาก ${_fmt(prod.produced)}` },
   ];
+  const kpis = kpisAll.filter((k) => k.show);
   const colorVar = { accent: "var(--accent)", violet: "var(--violet)", success: "var(--success)", amber: "var(--amber)" };
   const subVar = { accent: "var(--accent-subtle)", violet: "var(--violet-subtle)", success: "var(--success-subtle)", amber: "var(--amber-subtle)" };
   const colors = ["#2D6CDF", "#7C3AED", "#0EA5C7", "#F59E0B", "#16A34A"];
@@ -38,9 +42,9 @@ function PageDashboard({ role }) {
   return (
     <>
       <PageHeader title="แดชบอร์ดภาพรวม" subtitle={`ข้อมูลจากระบบ ณ ${Store.now().slice(0, 16)} น.`}
-        actions={<><button className="btn btn-outline btn-sm" onClick={() => printReport("แดชบอร์ดภาพรวม")}><I.Printer size={14}/> พิมพ์ / PDF</button><button className="btn btn-outline btn-sm" onClick={exportSummary}><I.Download size={14}/> ส่งออกสรุป 12 เดือน</button></>}/>
+        actions={<><button className="btn btn-outline btn-sm" onClick={() => printReport("แดชบอร์ดภาพรวม")}><I.Printer size={14}/> พิมพ์ / PDF</button>{showFin && <button className="btn btn-outline btn-sm" onClick={exportSummary}><I.Download size={14}/> ส่งออกสรุป 12 เดือน</button>}</>}/>
 
-      <div className="kpi-grid">
+      <div className="kpi-grid" style={{ gridTemplateColumns: "repeat(" + Math.min(4, kpis.length) + ", minmax(0, 1fr))" }}>
         {kpis.map((k, i) => {
           const Ico = I[k.icon];
           return (
@@ -53,12 +57,12 @@ function PageDashboard({ role }) {
         })}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.7fr) minmax(0, 1fr)", gap: 14, marginTop: 14 }}>
+      {showSales && <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.7fr) minmax(0, 1fr)", gap: 14, marginTop: 14 }}>
         <div className="card">
           <div className="card-head">
-            <div><div className="card-title">ยอดขาย vs ต้นทุน · 6 เดือนล่าสุด</div><div className="card-sub">หน่วย: ล้านบาท · ยอดขายจากใบกำกับภาษีที่อนุมัติ, ต้นทุน = ต้นทุนขาย + ค่าใช้จ่ายดำเนินงาน</div></div>
+            <div><div className="card-title">{showFin ? "ยอดขาย vs ต้นทุน" : "ยอดขาย"} · 6 เดือนล่าสุด</div><div className="card-sub">หน่วย: ล้านบาท · ยอดขายจากใบกำกับภาษีที่อนุมัติ{showFin ? ", ต้นทุน = ต้นทุนขาย + ค่าใช้จ่ายดำเนินงาน" : ""}</div></div>
           </div>
-          <div className="card-body" style={{ padding: 12 }}><AreaChart data={trend} keys={["revenue", "cost"]} unit="M"/></div>
+          <div className="card-body" style={{ padding: 12 }}><AreaChart data={trend} keys={showFin ? ["revenue", "cost"] : ["revenue"]} unit="M"/></div>
         </div>
         <div className="card">
           <div className="card-head"><div><div className="card-title">ลูกค้าซื้อสูงสุด · ปี {today.slice(0, 4)}</div><div className="card-sub">ส่วนแบ่งยอดขาย</div></div></div>
@@ -79,7 +83,7 @@ function PageDashboard({ role }) {
             ) : <div style={{ color: "var(--text-tertiary)", fontSize: 13, padding: 20, textAlign: "center" }}>ยังไม่มีใบกำกับภาษีที่อนุมัติในปีนี้</div>}
           </div>
         </div>
-      </div>
+      </div>}
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)", gap: 14, marginTop: 14 }}>
         <div className="card">
@@ -124,17 +128,17 @@ function PageDashboard({ role }) {
             })}
             {!notes.length && <div style={{ padding: 30, textAlign: "center", fontSize: 13, color: "var(--text-tertiary)" }}>ไม่มีรายการค้าง</div>}
           </div>
-          <div style={{ padding: "12px 18px", borderTop: "1px solid var(--border)", fontSize: 12.5 }}>
+          {showSales && <div style={{ padding: "12px 18px", borderTop: "1px solid var(--border)", fontSize: 12.5 }}>
             <div style={{ fontWeight: 600, marginBottom: 6 }}>ลูกหนี้คงค้าง {baht(ar, 2)}</div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, color: "var(--text-secondary)" }}>
               <span>ยังไม่ครบกำหนด<br/><b className="num">{_fmt(aging.current)}</b></span><span>1–30 วัน<br/><b className="num">{_fmt(aging.d30)}</b></span>
               <span>31–60 วัน<br/><b className="num">{_fmt(aging.d60)}</b></span><span style={{ color: aging.d90 ? "var(--danger)" : undefined }}>60+ วัน<br/><b className="num">{_fmt(aging.d90)}</b></span>
             </div>
-          </div>
+          </div>}
         </div>
       </div>
 
-      <div className="card" style={{ marginTop: 14 }}>
+      {showSales && <div className="card" style={{ marginTop: 14 }}>
         <div className="card-head"><div><div className="card-title">เอกสารขายล่าสุด</div><div className="card-sub">10 รายการล่าสุด</div></div></div>
         <div style={{ overflow: "auto" }}>
           <table className="table">
@@ -148,7 +152,7 @@ function PageDashboard({ role }) {
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
     </>
   );
 }

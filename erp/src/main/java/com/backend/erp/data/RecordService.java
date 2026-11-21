@@ -40,8 +40,10 @@ public class RecordService {
 	private final JdbcTemplate jdbc;
 	private final BomService boms;
 	private final MachineService machines;
+	private final ReadPolicy readPolicy;
 
-	public RecordService(RecordRepository repo, AuditService audit, CounterService counters, Json json, JdbcTemplate jdbc, BomService boms, MachineService machines) {
+	public RecordService(RecordRepository repo, AuditService audit, CounterService counters, Json json, JdbcTemplate jdbc, BomService boms, MachineService machines, ReadPolicy readPolicy) {
+		this.readPolicy = readPolicy;
 		this.boms = boms;
 		this.machines = machines;
 		this.repo = repo;
@@ -61,14 +63,15 @@ public class RecordService {
 		if (!d.writers().contains(u.role())) throw ApiException.forbidden("บทบาท " + u.role() + " ไม่มีสิทธิ์แก้ไข" + d.label());
 	}
 
-	public List<String> list(String coll, String q, int limit, int offset) {
+	public List<String> list(AuthUser u, String coll, String q, int limit, int offset) {
 		def(coll);
-		return repo.list(coll, q, Math.max(1, Math.min(limit, 5000)), Math.max(0, offset));
+		readPolicy.checkList(u, coll);
+		return readPolicy.list(u, coll, repo.list(coll, q, Math.max(1, Math.min(limit, 5000)), Math.max(0, offset)));
 	}
 
-	public String get(String coll, String id) {
+	public String get(AuthUser u, String coll, String id) {
 		def(coll);
-		return repo.get(coll, id).orElseThrow(() -> ApiException.notFound("ไม่พบข้อมูล " + id));
+		return readPolicy.one(u, coll, repo.get(coll, id).orElseThrow(() -> ApiException.notFound("ไม่พบข้อมูล " + id)));
 	}
 
 	private static Integer versionOf(Map<String, Object> body) {
