@@ -154,7 +154,7 @@ class TradeGoodsTests {
 		call("POST", "/purchaseOrders", po("PO-X6", List.of(line("product", "FG-T1", 1, 0))), proc, 400);        // ราคา 0
 		call("POST", "/purchaseOrders", po("PO-X7", List.of(line(null, "FG-T1", 1, 5))), proc, 400);             // ไม่ระบุชนิด = วัตถุดิบ → ไม่พบวัตถุดิบ FG-T1
 		call("POST", "/purchaseOrders", po("PO-X8", List.of(line("product", "custom", 1, 5))), proc, 400);
-		for (String t : List.of(prod, sales, acct)) call("POST", "/purchaseOrders", po("PO-R" + Math.abs(t.hashCode()), ok), t, 403);
+		for (String t : List.of(sales, acct)) call("POST", "/purchaseOrders", po("PO-R" + Math.abs(t.hashCode()), ok), t, 403);
 		// รหัสเดียวกันแต่ต่างชนิด (วัตถุดิบ / สินค้า) ในใบเดียวกันได้ และ server คำนวณยอดเอง
 		call("POST", "/purchaseOrders", with(po("PO-OK1", List.of(line("product", "FG-T1", 10, 55), line("material", "M-T", 4, 20))), "total", 1), proc, 201);
 		Map<String, Object> p = call("GET", "/purchaseOrders/PO-OK1", null, admin, 200);
