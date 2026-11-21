@@ -21,6 +21,7 @@ const PAGES = {
   "fin-rc-wait":   { title: "ใบเสร็จรอเก็บเงิน", crumb: ["PolyMate", "การเงิน", "ใบเสร็จรอเก็บเงิน"], Comp: PageFinRcWait },
   "fin-receipts":  { title: "รับเงินลูกค้า", crumb: ["PolyMate", "การเงิน", "รับเงินลูกค้า"], Comp: PageFinReceipts },
   "fin-payments":  { title: "จ่ายเงิน (ใบสำคัญจ่าย)", crumb: ["PolyMate", "การเงิน", "จ่ายเงิน"], Comp: PageFinPayments },
+  "fin-pp36":      { title: "ภ.พ.36 (ผู้ให้บริการต่างประเทศ)", crumb: ["PolyMate", "การเงิน", "ภ.พ.36"], Comp: window.PageFinPp36 },
   "fin-wht":       { title: "ภาษีหัก ณ ที่จ่าย (ค่าใช้จ่าย)", crumb: ["PolyMate", "การเงิน", "ภาษีหัก ณ ที่จ่าย"], Comp: window.PageFinWht },
   "fin-other":     { title: "รับ/จ่าย/โอนอื่น ๆ", crumb: ["PolyMate", "การเงิน", "รับ/จ่าย/โอนอื่น ๆ"], Comp: PageFinOther },
   "fin-recon":     { title: "กระทบยอดธนาคาร", crumb: ["PolyMate", "การเงิน", "กระทบยอดธนาคาร"], Comp: window.PageFinRecon },

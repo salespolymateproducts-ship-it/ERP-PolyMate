@@ -285,7 +285,7 @@ function PageAccounting() {
                 )}
                 {expView.pageRows.map((e) => (
                   <tr key={e.id}>
-                    <td className="mono"><b>{e.id}</b><div><ExpenseSourceTag e={e}/></div></td>
+                    <td className="mono"><b>{e.id}</b><div><ExpenseSourceTag e={e}/>{e.pp36 && e.pp36.on && <span className="badge badge-warning" style={{ fontSize: 10.5, marginLeft: 4 }}>ภ.พ.36</span>}</div></td>
                     <td className="num" style={{ fontSize: 12.5 }}>{e.date}</td>
                     <td><span className="badge badge-neutral">{e.category}</span></td>
                     <td style={{ fontSize: 12.5 }}>{e.vendor}</td>
@@ -413,6 +413,7 @@ function ExpenseForm({ existing, onClose, onSave }) {
   const [f, setF] = React.useState({
     date: today, category: EXPENSE_CATEGORIES[0], supplierId: "", desc: "",
     amount: "", priceMode: "ex", hasVat: false, whtRate: 0, creditDays: 30, status: "approved",
+    pp36: true, pp36Month: "", fxNote: "", refNo: "",
   });
   const [err, setErr] = React.useState({});
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
@@ -429,6 +430,9 @@ function ExpenseForm({ existing, onClose, onSave }) {
   const amount = incl ? r2(entered * 100 / (100 + VAT_RATE)) : r2(entered);          // ฐานภาษี (ก่อน VAT)
   const vat = f.hasVat ? (incl ? r2(entered - amount) : r2(amount * VAT_RATE / 100)) : 0;
   const wht = whtAmount(amount, +f.whtRate);
+  // ผู้ขายต่างประเทศ → ภ.พ.36: เรา (ผู้จ่าย) คำนวณ VAT 7% จากยอดที่จ่ายแล้วนำส่งเอง — ไม่ใช่ภาษีซื้อจากใบกำกับภาษีไทย จึงไม่รวมในยอดจ่ายและไม่นับเป็นภาษีซื้อ
+  const foreign = !!(sup && sup.foreign), pp36On = foreign && f.pp36;
+  const pp36Vat = pp36On ? r2(amount * VAT_RATE / 100) : 0;
 
   const save = () => {
     const er = {};
@@ -447,8 +451,9 @@ function ExpenseForm({ existing, onClose, onSave }) {
       vendorAddress: sup.address || "",
       desc: f.desc.trim(),
       amount,
-      vat,
-      priceMode: f.hasVat ? f.priceMode : "ex",
+      vat: foreign ? 0 : vat,
+      ...(foreign ? { foreign: true, country: sup.country || "", ref: f.refNo.trim(), pp36: { on: !!f.pp36, base: amount, vat: pp36Vat, rate: VAT_RATE, month: f.pp36Month || "", fx: f.fxNote.trim() } } : {}),
+      priceMode: f.hasVat && !foreign ? f.priceMode : "ex",
       enteredAmount: r2(entered),
       whtRate: +f.whtRate,
       due: addDays(f.date, +f.creditDays || 0),
@@ -485,6 +490,22 @@ function ExpenseForm({ existing, onClose, onSave }) {
         <div style={{ background: "var(--bg-subtle)", borderRadius: 8, padding: "8px 12px", fontSize: 12, display: "grid", gap: 3 }}>
           <div><span style={{ color: "var(--text-secondary)" }}>เลขประจำตัวผู้เสียภาษี: </span><b className="mono">{sup.taxId && sup.taxId !== "—" ? sup.taxId : "ไม่ระบุ (ควรเพิ่มในทะเบียนผู้ขาย)"}</b></div>
           <div><span style={{ color: "var(--text-secondary)" }}>ที่อยู่: </span>{sup.address || "ไม่ระบุ (ควรเพิ่มในทะเบียนผู้ขาย)"}</div>
+          {foreign && <div><span className="badge badge-warning" style={{ fontSize: 10.5 }}>ผู้ขายต่างประเทศ · {sup.country || "ไม่ระบุประเทศ"}</span></div>}
+        </div>
+      )}
+      {foreign && (
+        <div style={{ border: "1px solid var(--amber)", background: "var(--amber-subtle)", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, display: "grid", gap: 8 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 600 }}>
+            <input type="checkbox" checked={f.pp36} onChange={set("pp36")}/> เข้าข่ายต้องยื่น ภ.พ.36 (ผู้ใช้ตัดสินใจเอง — นักบัญชียืนยันได้ว่ารายการนี้เข้าข่ายหรือไม่)
+          </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Field label="เลขที่ใบแจ้งหนี้ / เอกสารอ้างอิงของผู้ขาย"><input style={inputStyle} value={f.refNo} onChange={set("refNo")} placeholder="กรอกเอง"/></Field>
+            <Field label="หมายเหตุสกุลเงิน/อัตราแลกเปลี่ยน (อ้างอิง)"><input style={inputStyle} value={f.fxNote} onChange={set("fxNote")} placeholder="เช่น 120 USD @ 35.50"/></Field>
+          </div>
+          {f.pp36 && <Field label="เดือนที่นำส่ง ภ.พ.36 (ว่าง = ตามเดือนที่จ่ายเงินจริงในใบสำคัญจ่าย)">
+            <input type="month" style={inputStyle} value={f.pp36Month} onChange={set("pp36Month")}/>
+          </Field>}
+          <div style={{ color: "var(--text-secondary)" }}>ระบบเป็นเงินบาทอย่างเดียว — กรอกยอดเป็นบาทตามที่จ่ายจริง · ภ.พ.36: ฐาน <b className="num">{_fmt(amount)}</b> × {VAT_RATE}% = <b className="num">{_fmt(pp36Vat)}</b> บาท (ผู้ซื้อนำส่งเอง ไม่รวมในยอดที่จ่ายผู้ขาย)</div>
         </div>
       )}
       <Field label="รายละเอียด"><input style={inputStyle} value={f.desc} onChange={set("desc")}/></Field>
@@ -502,7 +523,7 @@ function ExpenseForm({ existing, onClose, onSave }) {
       <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>บันทึกแล้วจะอยู่สถานะ "รอชำระ" — จ่ายเงินที่เมนู การเงิน → จ่ายเงิน (ใบสำคัญจ่าย) ซึ่งมี "บันทึกและจ่ายทันที" สำหรับรายการเล็ก</div>
       <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", fontSize: 13 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <input type="checkbox" checked={f.hasVat} onChange={set("hasVat")}/> มีใบกำกับภาษี (VAT {VAT_RATE}%)
+          <input type="checkbox" checked={f.hasVat && !foreign} disabled={foreign} onChange={set("hasVat")}/> มีใบกำกับภาษี (VAT {VAT_RATE}%){foreign ? " — ผู้ขายต่างประเทศไม่มีใบกำกับภาษีไทย" : ""}
         </label>
         {f.hasVat && (
           <span style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -513,10 +534,10 @@ function ExpenseForm({ existing, onClose, onSave }) {
       </div>
       <div style={{ background: "var(--bg-subtle)", borderRadius: 8, padding: "10px 12px", fontSize: 12.5, display: "grid", gap: 4 }}>
         <Row k="ฐานภาษี (ก่อน VAT)" v={_fmt(amount)}/>
-        <Row k={f.hasVat ? `VAT ${VAT_RATE}%` : "VAT (ไม่มีใบกำกับภาษี)"} v={_fmt(vat)}/>
-        {f.hasVat && <Row k="รวม VAT" v={_fmt(amount + vat)}/>}
+        <Row k={f.hasVat && !foreign ? `VAT ${VAT_RATE}%` : "VAT (ไม่มีใบกำกับภาษี)"} v={_fmt(foreign ? 0 : vat)}/>
+        {f.hasVat && !foreign && <Row k="รวม VAT" v={_fmt(amount + vat)}/>}
         <Row k={`หัก ณ ที่จ่าย ${f.whtRate}%`} v={"(" + _fmt(wht) + ")"}/>
-        <Row k={<b>ยอดจ่ายสุทธิ</b>} v={<b>{_fmt(amount + vat - wht)}</b>}/>
+        <Row k={<b>ยอดจ่ายสุทธิ</b>} v={<b>{_fmt(amount + (foreign ? 0 : vat) - wht)}</b>}/>
         <Row k="กำหนดชำระ" v={addDays(f.date || today, +f.creditDays || 0)}/>
       </div>
     </Modal>
@@ -785,7 +806,7 @@ function ReportCard({ title, rows, empty }) {
 }
 
 window.PageAccounting = PageAccounting;
-window.MonthSelect = MonthSelect;   // ใช้ร่วมกับหน้าภาษีหัก ณ ที่จ่าย (page-more.jsx)
+window.MonthSelect = MonthSelect; window.monthLabel = monthLabel;   // ใช้ร่วมกับหน้าภาษีหัก ณ ที่จ่าย (page-more.jsx)
 window.PageHR = PageHR;
 window.PageReports = PageReports;
 // เผื่อไฟล์อื่นเรียกใช้ component เหล่านี้ (เหมือนเวอร์ชันเดิม)

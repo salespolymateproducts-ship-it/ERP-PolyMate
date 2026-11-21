@@ -28,6 +28,7 @@ const NAV = [
   { id: "accounting", label: "บัญชี / ภพ.30 (ค่าใช้จ่าย)", icon: "Wallet", grp: "fin" },
   { id: "fin-payments", label: "จ่ายเงิน (ใบสำคัญจ่าย)", icon: "Wallet", grp: "fin" },
   { id: "fin-wht", label: "ภาษีหัก ณ ที่จ่าย (ค่าใช้จ่าย)", icon: "Wallet", grp: "fin" },
+  { id: "fin-pp36", label: "ภ.พ.36 (ผู้ขายต่างประเทศ)", icon: "FileText", grp: "fin" },
   { sub: "เงินและบัญชี", grp: "fin" },
   { id: "fin-other", label: "รับ/จ่าย/โอนอื่น ๆ", icon: "Wallet", grp: "fin" },
   { id: "fin-ledger", label: "สมุดเงิน", icon: "Wallet", grp: "fin" },

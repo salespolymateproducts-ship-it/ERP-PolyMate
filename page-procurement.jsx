@@ -642,8 +642,8 @@ function SupplierForm({ mode, rec, onCancel, onDone }) {
   const locked = editing && poRefs > 0;
   const [form, setForm] = useState(editing ? {
     code: rec.code || "", name: rec.name || "", taxId: rec.taxId === "—" ? "" : (rec.taxId || ""), contact: rec.contact || "", phone: rec.phone || "",
-    email: rec.email || "", category: rec.category || SUP_CATEGORIES[0], credit: String(rec.credit == null ? 30 : rec.credit), address: rec.address || "", payeeType: rec.payeeType === "individual" ? "individual" : "juristic",
-  } : { code: "", name: "", taxId: "", contact: "", phone: "", email: "", category: SUP_CATEGORIES[0], credit: "30", address: "", payeeType: "juristic" });
+    email: rec.email || "", category: rec.category || SUP_CATEGORIES[0], credit: String(rec.credit == null ? 30 : rec.credit), address: rec.address || "", payeeType: rec.payeeType === "individual" ? "individual" : "juristic", foreign: !!rec.foreign, country: rec.country || "",
+  } : { code: "", name: "", taxId: "", contact: "", phone: "", email: "", category: SUP_CATEGORIES[0], credit: "30", address: "", payeeType: "juristic", foreign: false, country: "" });
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -664,6 +664,7 @@ function SupplierForm({ mode, rec, onCancel, onDone }) {
   if (!form.name.trim()) errors.push("กรุณาระบุชื่อ Supplier");
   if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) errors.push("รูปแบบอีเมลไม่ถูกต้อง");
   if (!(Number.isInteger(credit) && credit >= 0)) errors.push("เครดิตต้องเป็นจำนวนวันเต็มที่ไม่ติดลบ");
+  if (form.foreign && !form.country.trim()) errors.push("ผู้ขายต่างประเทศ: กรุณาระบุประเทศ");
   const cats = SUP_CATEGORIES.includes(form.category) ? SUP_CATEGORIES : [form.category, ...SUP_CATEGORIES];
   const showErr = errors.length > 0 && (form.code || form.name || form.email);
 
@@ -675,6 +676,7 @@ function SupplierForm({ mode, rec, onCancel, onDone }) {
       const clean = {
         name: form.name.trim(), taxId: form.taxId.trim() || "—", contact: form.contact.trim(), phone: form.phone.trim(),
         email: form.email.trim(), category: form.category, credit, address: form.address.trim(), payeeType: form.payeeType,
+        foreign: !!form.foreign, country: form.foreign ? form.country.trim() : "",
       };
       if (!editing) {
         const c = codeConflictFor(null); // ตรวจซ้ำอีกครั้งในธุรกรรม (ข้อมูลล่าสุด)
@@ -716,6 +718,12 @@ function SupplierForm({ mode, rec, onCancel, onDone }) {
           <select className="select" value={form.category} onChange={(e) => set("category", e.target.value)}>
             {cats.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
+        </div>
+        <div style={{ gridColumn: "1 / -1", display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            <input type="checkbox" checked={form.foreign} onChange={(e) => set("foreign", e.target.checked)}/> ผู้ขายต่างประเทศ (ไม่ได้จดทะเบียน VAT ในไทย — เช่น เช่าเซิร์ฟเวอร์/ซอฟต์แวร์ต่างประเทศ)
+          </label>
+          {form.foreign && <input className="input" style={{ width: 180 }} placeholder="ประเทศ เช่น สหรัฐอเมริกา" value={form.country} onChange={(e) => set("country", e.target.value)}/>}
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
           <label className="field-label">ชื่อ Supplier *</label>

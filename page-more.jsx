@@ -738,6 +738,84 @@ function PageFinWht() {
 }
 window.PageFinWht = PageFinWht;
 
+// ================= ภ.พ.36 — จ่ายค่าบริการให้ผู้ให้บริการต่างประเทศ =================
+// ผู้ซื้อ (เรา) คำนวณ VAT 7% จากยอดที่จ่ายแล้วนำส่งเอง · เดือนนำส่ง = ที่ผู้ใช้กำหนด หรือเดือนที่จ่ายเงินจริง (ใบสำคัญจ่าย) — หลักเกณฑ์ทั้งหมดให้นักบัญชี/ที่ปรึกษาภาษียืนยัน
+function PageFinPp36() {
+  useStore();
+  const role = Store.user() ? Store.user().role : null;
+  const canEdit = role === "admin" || role === "accounting";
+  const all = Store.state.expenses.filter((e) => e.status !== "cancelled" && e.pp36 && e.pp36.on);
+  const monthOf = (e) => (e.pp36.month || String(e.paidDate || "").slice(0, 7) || "");
+  const months = React.useMemo(() => {
+    const m = new Set(all.map(monthOf).filter(Boolean)); m.add(Store.today().slice(0, 7));
+    return [...m].sort().reverse();
+  }, [all.length, all.map(monthOf).join(",")]);
+  const [month, setMonth] = useState(() => months[0]);
+  const rowsAll = all.filter((e) => monthOf(e) === month);
+  const waiting = all.filter((e) => !monthOf(e));
+  const view = useListView(rowsAll, {
+    text: (e) => [e.id, e.vendor, e.country, e.desc, e.ref, e.pp36.fx, e.payVoucher].join(" "), dateKey: (e) => e.paidDate || e.date, dateLabel: "วันที่จ่าย",
+    defaultSort: { key: "date", dir: "asc" },
+    sorts: { date: (e) => e.paidDate || e.date, id: (e) => e.id, vendor: (e) => e.vendor, country: (e) => e.country, base: (e) => e.pp36.base, vat: (e) => e.pp36.vat },
+  });
+  const baseSum = rowsAll.reduce((t, e) => t + e.pp36.base, 0), vatSum = rowsAll.reduce((t, e) => t + e.pp36.vat, 0);
+  const save = (e, patch, note) => runAction(() => Store.update("expenses", e.id, { pp36: { ...e.pp36, ...patch } }, "id", note), "บันทึกแล้ว");
+  const goPay = (id) => window.dispatchEvent(new CustomEvent("erp-goto", { detail: { page: "fin-payments", focus: { pvExpense: id } } }));
+  const csv = () => exportCSV(`ภพ36-${month}.csv`, ["เดือนนำส่ง", "วันที่จ่าย", "เลขที่ค่าใช้จ่าย", "ผู้ขาย", "ประเทศ", "รายละเอียด", "เอกสารอ้างอิงผู้ขาย", "สกุลเงิน/อัตราแลกเปลี่ยน (อ้างอิง)", "ฐานภาษี (บาท)", "ภาษี 7% (บาท)", "ใบสำคัญจ่าย"],
+    view.sorted.map((e) => [month, e.paidDate || "", e.id, e.vendor, e.country || "", e.desc || "", e.ref || "", e.pp36.fx || "", e.pp36.base, e.pp36.vat, e.payVoucher || ""]));
+  const mLabel = (ym) => (ym ? window.monthLabel(ym) : "—");
+  return (
+    <>
+      <PageHeader title="ภ.พ.36 (ผู้ให้บริการต่างประเทศ)" subtitle="VAT ที่ผู้ซื้อต้องคำนวณและนำส่งเอง เมื่อจ่ายค่าบริการให้ผู้ขายต่างประเทศ (เช่น เช่าเซิร์ฟเวอร์/ซอฟต์แวร์) · เดือนนำส่งนับตามเดือนที่จ่ายเงินจริง หรือที่กำหนดเอง"
+        actions={<><MonthSelect months={months} value={month} onChange={setMonth}/><button className="btn btn-outline btn-sm" disabled={!view.total} onClick={csv}><I.Download size={14}/> CSV</button><button className="btn btn-outline btn-sm" onClick={() => printReport("ภ.พ.36 เดือน " + mLabel(month), "landscape")}><I.Printer size={14}/> พิมพ์</button></>}/>
+      <div className="grid-4" style={{ marginBottom: 14 }}>
+        <KPICard icon="FileText" tone="accent" label={"รายการเดือน " + mLabel(month)} value={rowsAll.length + " รายการ"} foot="ที่เข้าข่าย ภ.พ.36"/>
+        <KPICard icon="Wallet" tone="violet" label="ฐานภาษี (บาท)" value={baht(baseSum, 2)} foot="ยอดจ่ายผู้ขายต่างประเทศ"/>
+        <KPICard icon="Wallet" tone="amber" label="ภาษีที่ต้องนำส่ง 7%" value={baht(vatSum, 2)} foot="ผู้ซื้อนำส่งเอง"/>
+        <KPICard icon="Clock" tone="success" label="ยังไม่จ่ายเงิน/ไม่มีเดือน" value={waiting.length + " รายการ"} foot="จะเข้าเดือนที่จ่ายจริง"/>
+      </div>
+      <div className="card" style={{ overflowX: "auto", marginBottom: 14 }}>
+        <ListToolbar view={view} placeholder="เลขที่ / ผู้ขาย / ประเทศ / เอกสารอ้างอิง…"/>
+        <table className="table" style={{ fontSize: 12.5 }}>
+          <thead><tr><SortTh view={view} k="date">วันที่จ่าย</SortTh><SortTh view={view} k="id">เลขที่</SortTh><SortTh view={view} k="vendor">ผู้ขาย</SortTh><SortTh view={view} k="country">ประเทศ</SortTh><th>รายละเอียด / อ้างอิง</th>
+            <SortTh view={view} k="base" className="num">ฐานภาษี</SortTh><SortTh view={view} k="vat" className="num">ภาษี 7%</SortTh><th className="no-print">เดือนนำส่ง</th><th className="no-print"></th></tr></thead>
+          <tbody>
+            {view.pageRows.map((e) => (
+              <tr key={e.id}>
+                <td style={{ whiteSpace: "nowrap" }}>{e.paidDate || e.date}{e.payVoucher && <div className="mono" style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{e.payVoucher}</div>}</td>
+                <td className="mono"><b>{e.id}</b></td><td>{e.vendor}</td><td>{e.country || "—"}</td>
+                <td style={{ maxWidth: 280 }}>{e.desc || "—"}{(e.ref || e.pp36.fx) && <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{[e.ref, e.pp36.fx].filter(Boolean).join(" · ")}</div>}</td>
+                <td className="num">{_fmt(e.pp36.base, 2)}</td><td className="num"><b>{_fmt(e.pp36.vat, 2)}</b></td>
+                <td className="no-print" style={{ whiteSpace: "nowrap" }}>{canEdit
+                  ? <input type="month" className="input input-sm" style={{ width: 150 }} value={e.pp36.month || ""} title="ว่าง = ตามเดือนที่จ่ายเงินจริง" onChange={(ev) => save(e, { month: ev.target.value }, "กำหนดเดือนนำส่ง ภ.พ.36: " + (ev.target.value || "ตามเดือนที่จ่าย"))}/>
+                  : mLabel(monthOf(e))}</td>
+                <td className="no-print">{canEdit && <button className="btn btn-ghost btn-sm" onClick={() => { if (window.confirm("ตัดรายการ " + e.id + " ออกจาก ภ.พ.36 (ไม่เข้าข่าย)?")) save(e, { on: false }, "ไม่เข้าข่าย ภ.พ.36"); }}>ไม่เข้าข่าย</button>}</td>
+              </tr>
+            ))}
+            {!view.total && <EmptyRow cols={9} text={rowsAll.length ? "ไม่พบรายการตามเงื่อนไข" : "ไม่มีรายการ ภ.พ.36 ในเดือนนี้"}/>}
+            {rowsAll.length > 0 && <tr style={{ background: "var(--bg-subtle)", fontWeight: 700 }}><td colSpan={5} style={{ textAlign: "right" }}>รวมเดือน {mLabel(month)}</td><td className="num">{_fmt(baseSum, 2)}</td><td className="num">{_fmt(vatSum, 2)}</td><td colSpan={2} className="no-print"></td></tr>}
+          </tbody>
+        </table>
+        <Pager view={view}/>
+      </div>
+      {waiting.length > 0 && (
+        <div className="card no-print" style={{ marginBottom: 14 }}>
+          <div className="card-head"><div><div className="card-title">รอจ่ายเงิน ({waiting.length} รายการ)</div><div className="card-sub">เมื่อจ่ายผ่านใบสำคัญจ่าย รายการจะเข้าเดือนที่จ่ายจริงอัตโนมัติ (หรือกำหนดเดือนเองได้ในฟอร์มค่าใช้จ่าย)</div></div></div>
+          <table className="table" style={{ fontSize: 12.5 }}>
+            <thead><tr><th>วันที่</th><th>เลขที่</th><th>ผู้ขาย</th><th>รายละเอียด</th><th className="num">ฐานภาษี</th><th className="num">ภาษี 7%</th><th></th></tr></thead>
+            <tbody>{waiting.map((e) => (
+              <tr key={e.id}><td>{e.date}</td><td className="mono"><b>{e.id}</b></td><td>{e.vendor}</td><td>{e.desc || "—"}</td><td className="num">{_fmt(e.pp36.base, 2)}</td><td className="num">{_fmt(e.pp36.vat, 2)}</td>
+                <td>{canEdit && <button className="btn btn-outline btn-sm" onClick={() => goPay(e.id)}>ทำใบสำคัญจ่าย</button>}</td></tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ fontSize: 11.5, color: "var(--text-tertiary)" }}>หลักเกณฑ์ว่าบริการใดเข้าข่าย · เดือนที่ต้องนำส่ง · อัตราแลกเปลี่ยนที่ใช้ · การยื่นแบบ ให้นักบัญชี/ที่ปรึกษาภาษียืนยัน — หน้านี้รวบรวมตัวเลขจากรายการค่าใช้จ่ายที่ติดป้ายไว้เท่านั้น และไม่ได้ยื่นแบบให้</div>
+    </>
+  );
+}
+window.PageFinPp36 = PageFinPp36;
+
 // ================= จัดการผู้ใช้ (บัญชีจริงใน Store) =================
 const DEPT_LABEL = { admin: "ผู้บริหาร / IT", sales: "ฝ่ายขาย", production: "ฝ่ายผลิต", procurement: "ฝ่ายจัดซื้อ", accounting: "ฝ่ายบัญชี" };
 function genTempPassword() {
