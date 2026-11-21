@@ -3,7 +3,8 @@
 /*
   หนังสือรับรองการหักภาษี ณ ที่จ่าย (50 ทวิ) ที่ "เรา" ออกให้ผู้ขาย/ผู้รับเงิน
   ------------------------------------------------------------
-  • ออกได้เมื่อรายการค่าใช้จ่ายที่มีหัก ณ ที่จ่ายถูกบันทึกว่าจ่ายแล้ว — วันที่จ่าย = วันที่ในหนังสือ
+  • ออกได้เมื่อรายการค่าใช้จ่ายที่มีหัก ณ ที่จ่ายจ่ายแล้วผ่านใบสำคัญจ่าย (PV) — วันที่จ่าย = วันที่ในหนังสือ · เลขที่ใช้เลข WT ที่ออกตอนจ่ายใน PV
+    (PV เดียวที่มีหลายรายการหัก ณ ที่จ่าย จะพิมพ์หนังสือแยกรายการแต่ใช้เลขเดียวกัน — ให้ผู้ทำบัญชีตรวจรูปแบบก่อนใช้จริง)
   • เลขที่ = WT + ปีเดือนที่จ่าย + ลำดับ 4 หลัก (เช่น WT2026110006) จากตัวนับกลางเดียวกับเอกสารอื่น
   • เก็บใน expense.whtCert พร้อมสำเนาข้อมูลผู้ถูกหัก ณ วันที่ออก (ออกแล้วแก้ไม่ได้ — พิมพ์ซ้ำได้)
   • ประเภทเงินได้เลือกได้ทุกข้อของแบบ (1–6 รวมข้อย่อยของ 4(ข))
@@ -81,6 +82,7 @@ function whtCertCanIssue(exp) {
   if (!(exp.whtRate > 0)) return { ok: false, reason: "รายการนี้ไม่มีหัก ณ ที่จ่าย" };
   if (exp.status !== "paid" || !exp.paidDate) return { ok: false, reason: "ต้องบันทึกว่าจ่ายแล้วก่อน (วันที่จ่ายใช้เป็นวันที่ในหนังสือ)" };
   if (exp.whtCert) return { ok: false, reason: "ออกหนังสือแล้ว" };
+  if (exp.payVoucher && !exp.payWtNo) return { ok: false, reason: "ใบสำคัญจ่าย " + exp.payVoucher + " ไม่มีเลขหนังสือหัก ณ ที่จ่าย (กลับรายการแล้วจ่ายใหม่)" };
   return { ok: true };
 }
 function issueWhtCertificate(expId, opts) {
@@ -95,7 +97,8 @@ function issueWhtCertificate(expId, opts) {
     const note = String((opts && opts.incomeNote) || "").trim();
     if (WHT_NOTE_ROWS.includes(row) && !note) Store.fail("ประเภทเงินได้ที่เลือกต้องระบุรายละเอียด");
     const payee = payeeSnapshot(e);
-    const n = Store.nextDocNo("WT", e.paidDate);
+    // จ่ายผ่านใบสำคัญจ่าย → ใช้เลขที่ออกตอนจ่าย (ไม่ออกเลขซ้ำ) · รายการเก่าที่ไม่มีใบสำคัญจ่าย → ออกเลขใหม่แบบเดิม
+    const n = e.payWtNo ? { docNo: e.payWtNo, seq: null, counterKey: null } : Store.nextDocNo("WT", e.paidDate);
     const cert = {
       no: n.docNo, seq: n.seq, counterKey: n.counterKey, date: e.paidDate, base: e.amount, rate: e.whtRate, tax: whtAmount(e.amount, e.whtRate),
       form: payee.type === "individual" ? "pnd3" : "pnd53", incomeRow: row, incomeNote: note, payee, by: Store.userName(), at: Store.now(),

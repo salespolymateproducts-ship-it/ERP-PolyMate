@@ -1,6 +1,7 @@
 package com.backend.erp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -165,6 +166,10 @@ class PaymentTests {
 		assertEquals("paid", expStatus("EXP-A"));
 		assertEquals("paid", expStatus("EXP-B"));
 		assertEquals(pv1, jdbc.queryForObject("select data->>'payVoucher' from erp_records where collection='expenses' and id='EXP-A'", String.class));
+		String wt = String.valueOf(paid.get("whtCertNo"));
+		assertEquals(wt, jdbc.queryForObject("select data->>'payWtNo' from erp_records where collection='expenses' and id='EXP-A'", String.class));   // รายการที่หัก → ได้เลข WT ของ PV
+		assertNull(jdbc.queryForObject("select data->>'payWtNo' from erp_records where collection='expenses' and id='EXP-B'", String.class));        // รายการที่ไม่หัก → ไม่มี
+		jdbc.update("update erp_records set data = data || '{\"whtCert\":{\"no\":\"" + wt + "\"}}'::jsonb where collection='expenses' and id='EXP-A'");   // จำลองว่าพิมพ์หนังสือแล้ว
 		call("POST", "/finance/payments/" + pv1 + "/pay", payBody("BANK1"), admin, 409);          // จ่ายซ้ำไม่ได้
 	}
 
@@ -216,6 +221,8 @@ class PaymentTests {
 		assertEquals(2, movements(pv1));
 		assertEquals("approved", expStatus("EXP-A"));                                             // ค่าใช้จ่ายกลับมารอจ่าย
 		assertEquals(0, jdbc.queryForObject("select count(*)::int from erp_records where collection='expenses' and id='EXP-A' and data ? 'payVoucher'", Integer.class));
+		assertEquals(0, jdbc.queryForObject("select count(*)::int from erp_records where collection='expenses' and id='EXP-A' and (data ? 'payWtNo' or data ? 'whtCert')", Integer.class));   // เลข/หนังสือเดิมถูกถอด
+		assertEquals(1, jdbc.queryForObject("select count(*)::int from erp_records where collection='expenses' and id='EXP-A' and data ? 'whtCertVoided'", Integer.class));            // แต่เก็บหลักฐานไว้
 		call("POST", "/finance/payments/" + pv1 + "/void", Map.of("reason", "ซ้ำ"), admin, 409);
 		call("POST", "/finance/payments", pv(List.of("EXP-A", "EXP-B")), admin, 200);             // ออกใบสำคัญจ่ายใหม่ได้
 	}

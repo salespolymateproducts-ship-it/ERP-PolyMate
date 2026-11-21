@@ -174,7 +174,7 @@ function MoldMaintModal({ m, onClose }) {
       if (resetShots) mold.shots = 0;
       if (Number(cost) > 0) {
         const n = Store.nextDocNo("EXP");
-        Store.state.expenses.unshift({ id: n.docNo, date: Store.today(), category: "ค่าแม่พิมพ์", vendor: "ซ่อมบำรุงแม่พิมพ์", desc: `ซ่อม ${mold.code}: ${note.trim()}`, amount: Number(cost), vat: 0, whtRate: 0, status: "approved", ref: mold.id });
+        Store.state.expenses.unshift({ id: n.docNo, date: Store.today(), category: "ค่าแม่พิมพ์", vendor: "ซ่อมบำรุงแม่พิมพ์", desc: `ซ่อม ${mold.code}: ${note.trim()}`, amount: Number(cost), vat: 0, whtRate: 0, status: "approved", ref: mold.id, source: "mold" });
       }
       Store.log("MAINT", "แม่พิมพ์", mold.code, note.trim() + (Number(cost) > 0 ? ` · ค่าใช้จ่าย ${cost}` : ""));
       done = true;

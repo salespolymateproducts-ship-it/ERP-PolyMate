@@ -139,7 +139,16 @@ const WO_STATUS = {
 // Expenses
 const EXPENSES = [];  // ข้อมูลจริงมาจาก Store
 
-const EXPENSE_CATEGORIES = ["วัตถุดิบ", "สินค้าซื้อมาขาย", "สีผสม", "ค่าแรง", "ค่าไฟ", "ค่าซ่อมเครื่องจักร", "ค่าแพ็คสินค้า", "ค่าขนส่ง", "ค่าแม่พิมพ์", "ค่าบริการ/จ้างทำของ", "ค่าใช้จ่ายทั่วไป"];
+// หมวดค่าใช้จ่ายสำหรับโรงงานฉีดพลาสติก แบ่งกลุ่มไว้แสดงใน dropdown
+// ระวัง: ชื่อหมวดเดิม (วัตถุดิบ / สีผสม / สินค้าซื้อมาขาย / ค่าบริการ/จ้างทำของ / ค่าแม่พิมพ์) ถูกใช้ในที่อื่นด้วย (รับของตาม PO, รายงาน P&L) — อย่าเปลี่ยนชื่อ
+// การจัดหมวดเพื่อยื่นภาษีจริง/ผังบัญชี ให้ผู้ทำบัญชียืนยัน
+const EXPENSE_CATEGORY_GROUPS = [
+  { group: "ต้นทุนผลิต", items: ["วัตถุดิบ", "สีผสม", "ค่าแพ็คสินค้า", "สินค้าซื้อมาขาย", "จ้างผลิต/ผลิตภายนอก", "ค่าแม่พิมพ์", "ซ่อมบำรุงแม่พิมพ์", "ค่าซ่อมเครื่องจักร", "วัสดุสิ้นเปลือง/ของใช้โรงงาน"] },
+  { group: "ค่าแรงและสาธารณูปโภค", items: ["ค่าแรง", "ค่าล่วงเวลา/แรงงานชั่วคราว", "ประกันสังคม/สวัสดิการ", "ค่าไฟ", "ค่าน้ำ/น้ำหล่อเย็น"] },
+  { group: "ขนส่งและนำเข้า", items: ["ค่าขนส่ง", "ค่านำเข้า/ศุลกากร"] },
+  { group: "สำนักงานและทั่วไป", items: ["ค่าเช่า", "ค่าบริการ/จ้างทำของ", "ค่าที่ปรึกษา/ค่าบัญชี/ค่าตรวจสอบ", "ค่าเช่าเซิร์ฟเวอร์/ซอฟต์แวร์ต่างประเทศ", "ค่าสื่อสาร/อินเทอร์เน็ต", "ค่าประกันภัย", "ค่าธรรมเนียมธนาคาร/ดอกเบี้ย", "ค่าตรวจสอบมาตรฐาน/ใบรับรอง", "ค่าใช้จ่ายทั่วไป"] },
+];
+const EXPENSE_CATEGORIES = EXPENSE_CATEGORY_GROUPS.flatMap((g) => g.items);
 
 const EMPLOYEES = [
   { id: "EMP-001", name: "สมชาย ใจดี", role: "หัวหน้าฝ่ายผลิต", dept: "Production", phone: "081-234-5678", joined: "2018-03-12", salary: 38000 },
@@ -208,7 +217,7 @@ const ROLES = {
     color: "#0EA5C7",
     description: "บิลต่างๆ · ภาษี · คงคลัง · ขนส่ง · ข้อมูลซื้อขาย",
     user: { name: "อรอนงค์ เลิศกุล", initial: "อร", title: "บัญชี" },
-    pages: ["dashboard", "sales", "customer-po", "customers", "inventory", "shipping", "accounting", "finance", "fin-approvals", "fin-rc-wait", "fin-receipts", "fin-payments", "fin-other", "fin-ledger"],
+    pages: ["dashboard", "sales", "customer-po", "customers", "inventory", "shipping", "accounting", "finance", "fin-approvals", "fin-rc-wait", "fin-receipts", "fin-payments", "fin-wht", "fin-other", "fin-ledger"],
     canEdit: ["sales", "accounting"],
     approve: ["BN", "INV", "RC", "PAY"],
   },
@@ -217,7 +226,7 @@ const ROLES = {
 Object.assign(window, {
   COMPANY, CUSTOMERS, MATERIALS, FINISHED, JOB_TYPES, MOLDS, DOCS, DOC_LABEL, DOC_STATUS,
   MACHINES, WORK_ORDERS, WO_STATUS, DELIVERY_STATUS,
-  EXPENSES, EXPENSE_CATEGORIES, EMPLOYEES,
+  EXPENSES, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_GROUPS, EMPLOYEES,
   SALES_TREND, TOP_CUSTOMERS, NOTIFICATIONS,
   ROLES,
   baht, _fmt,

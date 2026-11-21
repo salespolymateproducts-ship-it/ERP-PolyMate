@@ -70,7 +70,9 @@ function useListView(rows, opts) {
   let sorted = list;
   if (sort && o.sorts && o.sorts[sort.key]) {
     const keyFn = o.sorts[sort.key], dir = sort.dir === "desc" ? -1 : 1;
-    sorted = list.map((r) => [keyFn(r), r]).sort((a, b) => lkCompare(a[0], b[0]) * dir).map((x) => x[1]);
+    // ค่าเท่ากัน (เช่น วันที่เดียวกัน) → เรียงตามเลขที่เอกสาร ทิศเดียวกับคอลัมน์ที่เลือก
+    const tie = (r) => (r && (r.id != null ? r.id : r.code));
+    sorted = list.map((r) => [keyFn(r), r]).sort((a, b) => (lkCompare(a[0], b[0]) || lkCompare(tie(a[1]), tie(b[1]))) * dir).map((x) => x[1]);
   }
   const total = sorted.length;
   const pages = Math.max(1, Math.ceil(total / pageSize));
@@ -97,7 +99,9 @@ function useServerListView(path, opts) {
   const [dq, setDq] = React.useState("");
   const [from, setFrom] = React.useState("");
   const [to, setTo] = React.useState("");
-  const [sort, setSort] = React.useState(null);
+  // ค่าเริ่มต้นของเซิร์ฟเวอร์คือ "วันที่ ใหม่→เก่า" → แสดงลูกศรให้ตรง และกดครั้งแรกจะกลับเป็น เก่า→ใหม่
+  const DEF = { key: "date", dir: "desc" };
+  const [sort, setSort] = React.useState(DEF);
   const [pageSize, setPageSize] = React.useState(o.pageSize || 50);
   const [page, setPage] = React.useState(1);
   const [data, setData] = React.useState({ items: [], total: 0 });
@@ -116,7 +120,7 @@ function useServerListView(path, opts) {
     if (dq) p.set("q", dq);
     if (from) p.set("from", from);
     if (to) p.set("to", to);
-    if (sort) { p.set("sort", sort.key); p.set("dir", sort.dir); }
+    if (sort && !(sort.key === DEF.key && sort.dir === DEF.dir)) { p.set("sort", sort.key); p.set("dir", sort.dir); }
     p.set("page", String(page)); p.set("size", String(pageSize));
     setLoading(true);
     Store.finApi("GET", path + "?" + p.toString())
@@ -133,7 +137,7 @@ function useServerListView(path, opts) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
   const cur = Math.min(page, pages);
   const toggleSort = (key) => setSort((s) => (s && s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
-  const reset = () => { setQ(""); setFrom(""); setTo(""); setSort(null); };
+  const reset = () => { setQ(""); setFrom(""); setTo(""); setSort(DEF); };
   const active = !!(dq || from || to);
   return { q, setQ, from, setFrom, to, setTo, sort, setSort, toggleSort, page: cur, setPage, pageSize, setPageSize, pages, total, all: total, pageRows: data.items || [], loading, reset, active, hasDate: o.hasDate !== false, dateLabel: o.dateLabel || "วันที่" };
 }

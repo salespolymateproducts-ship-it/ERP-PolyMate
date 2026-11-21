@@ -1,4 +1,4 @@
-/* global React, I, EXPENSES, EXPENSE_CATEGORIES, EMPLOYEES, BarChart, Donut, PageHeader, Tabs, baht, _fmt, whtAmount, Store, useStore, Analytics, Workflow, runAction, notify, exportCSV, TaxReport */
+/* global React, I, EXPENSES, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_GROUPS, EMPLOYEES, BarChart, Donut, PageHeader, Tabs, baht, _fmt, whtAmount, Store, useStore, Analytics, Workflow, runAction, notify, exportCSV, TaxReport */
 
 // ห่อทั้งไฟล์ไว้ในฟังก์ชัน เพื่อไม่ให้ชื่อตัวแปรชนกับไฟล์อื่น (สาเหตุหน้าขาว)
 (function () {
@@ -125,6 +125,19 @@ function seedExpenses() {
   }));
 }
 
+/** ป้ายแหล่งที่มาของค่าใช้จ่าย: จากใบสั่งซื้อ (ตั้งอัตโนมัติตอนรับของ) · ซ่อมแม่พิมพ์ · คีย์เอง — รายการเก่าไม่มี source ให้เดาจากเลขอ้างอิง */
+function expenseSource(e) {
+  const s = e.source || (e.ref ? (/^PO/i.test(String(e.ref)) ? "po" : /^M/i.test(String(e.ref)) ? "mold" : "other") : "manual");
+  if (s === "po") return { th: "จาก PO " + (e.ref || ""), cls: "badge-info" };
+  if (s === "mold") return { th: "ซ่อมแม่พิมพ์ " + (e.ref || ""), cls: "badge-neutral" };
+  if (s === "manual") return { th: "คีย์เอง", cls: "badge-neutral" };
+  return { th: "อ้างอิง " + (e.ref || ""), cls: "badge-neutral" };
+}
+function ExpenseSourceTag({ e }) {
+  const s = expenseSource(e);
+  return <span className={"badge " + s.cls} style={{ fontSize: 10.5, fontWeight: 500 }}>{s.th}</span>;
+}
+
 function PageAccounting() {
   const [tab, setTab] = React.useState("EXP");
   useStore();
@@ -186,7 +199,9 @@ function PageAccounting() {
     sorts: { id: (p) => p.id, vendor: (p) => p.vendor, net: (p) => p.net, due: (p) => p.due, days: (p) => p.days },
   });
   const addExpense = (e) => runAction(() => Store.add("expenses", e, `${e.category} ${e.vendor} ${e.amount}`), `บันทึก ${e.id} แล้ว`);
-  const markPaid = (id) => runAction(() => Store.update("expenses", id, { status: "paid", paidDate: today, paidBy: Store.userName() }, "id", "บันทึกจ่ายชำระ"), `บันทึกจ่าย ${id} แล้ว`);
+  // การจ่ายเงินทำผ่านใบสำคัญจ่ายเท่านั้น (ลงสมุดบัญชี + ออกเลข 50 ทวิ ณ วันจ่ายจริง) — ไม่มีปุ่มจ่ายลัดที่ข้ามสมุดบัญชี
+  // กดที่รายการไหน → ไปหน้าจ่ายเงินและเปิดฟอร์มสร้างใบสำคัญจ่ายโดยติ๊กรายการนั้นไว้ให้
+  const goPay = (expenseId) => window.dispatchEvent(new CustomEvent("erp-goto", { detail: { page: "fin-payments", focus: { pvExpense: expenseId } } }));
   const removeExpense = (id) => {
     const rec = Store.find("expenses", id);
     if (rec && rec.status === "paid") { notify("รายการที่จ่ายแล้วยกเลิกไม่ได้", "error"); return; }
@@ -251,7 +266,7 @@ function PageAccounting() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 14 }}>
           <div className="card" style={{ overflowX: "auto" }}>
             <ListToolbar view={expView} placeholder="เลขที่ / ผู้ขาย / รายละเอียด / PO…">
-              <select className="select" style={{ width: 150 }} value={expCat} onChange={(e) => setExpCat(e.target.value)}><option value="ALL">ทุกหมวด</option>{EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+              <select className="select" style={{ width: 190 }} value={expCat} onChange={(e) => setExpCat(e.target.value)}><option value="ALL">ทุกหมวด</option>{EXPENSE_CATEGORY_GROUPS.map((g) => <optgroup key={g.group} label={g.group}>{g.items.map((c) => <option key={c} value={c}>{c}</option>)}</optgroup>)}</select>
               <select className="select" style={{ width: 130 }} value={expSt} onChange={(e) => setExpSt(e.target.value)}><option value="ALL">ทุกสถานะ</option><option value="unpaid">รอชำระ</option><option value="paid">ชำระแล้ว</option></select>
             </ListToolbar>
             <table className="table">
@@ -270,7 +285,7 @@ function PageAccounting() {
                 )}
                 {expView.pageRows.map((e) => (
                   <tr key={e.id}>
-                    <td className="mono"><b>{e.id}</b></td>
+                    <td className="mono"><b>{e.id}</b><div><ExpenseSourceTag e={e}/></div></td>
                     <td className="num" style={{ fontSize: 12.5 }}>{e.date}</td>
                     <td><span className="badge badge-neutral">{e.category}</span></td>
                     <td style={{ fontSize: 12.5 }}>{e.vendor}</td>
@@ -281,10 +296,10 @@ function PageAccounting() {
                       {e.whtRate ? <>({_fmt(whtAmount(e.amount, e.whtRate))})<span style={{ fontSize: 10, color: "var(--text-tertiary)", marginLeft: 3 }}>{e.whtRate}%</span></> : "—"}
                     </td>
                     <td>{e.status === "paid"
-                      ? <span className="badge badge-success">ชำระแล้ว</span>
+                      ? <><span className="badge badge-success">ชำระแล้ว</span>{e.payVoucher ? <div className="mono" style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{e.payVoucher}</div> : <div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>ข้อมูลเดิม ไม่มี PV</div>}</>
                       : <span className="badge badge-warning">รอชำระ</span>}</td>
                     <td style={{ whiteSpace: "nowrap" }}>
-                      {e.status !== "paid" && <button className="btn btn-outline btn-sm" onClick={() => markPaid(e.id)}>จ่ายแล้ว</button>}
+                      {e.status !== "paid" && e.status !== "cancelled" && <button className="btn btn-outline btn-sm" onClick={() => goPay(e.id)} title="จ่ายเงินต้องทำผ่านใบสำคัญจ่าย">ทำใบสำคัญจ่าย</button>}
                       {e.whtRate > 0 && e.status === "paid" && <button className="btn btn-outline btn-sm" style={{ marginLeft: 4 }} onClick={() => setWhtExp(e)} title="หนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ)">{e.whtCert ? "50 ทวิ " + e.whtCert.no.slice(-4) : "ออก 50 ทวิ"}</button>}
                       <button className="btn btn-outline btn-sm" style={{ marginLeft: 4, color: "var(--danger)" }} onClick={() => removeExpense(e.id)} title="ยกเลิกรายการ" aria-label="ยกเลิกรายการ">✕</button>
                     </td>
@@ -356,7 +371,7 @@ function PageAccounting() {
                     : p.days <= 7
                       ? <span className="badge badge-warning">ใกล้ครบกำหนด</span>
                       : <span className="badge badge-neutral">ปกติ</span>}</td>
-                  <td><button className="btn btn-outline btn-sm" onClick={() => markPaid(p.id)}>บันทึกจ่าย</button></td>
+                  <td><button className="btn btn-outline btn-sm" onClick={() => goPay(p.id)} title={"ทำใบสำคัญจ่ายสำหรับ " + p.id}>ทำใบสำคัญจ่าย</button></td>
                 </tr>
               ))}
             </tbody>
@@ -437,8 +452,8 @@ function ExpenseForm({ existing, onClose, onSave }) {
       enteredAmount: r2(entered),
       whtRate: +f.whtRate,
       due: addDays(f.date, +f.creditDays || 0),
-      status: f.status,
-      ...(f.status === "paid" ? { paidDate: today } : {}),
+      status: "approved",   // จ่ายเงินทำผ่านใบสำคัญจ่ายเท่านั้น
+      source: "manual",
     });
   };
 
@@ -455,7 +470,7 @@ function ExpenseForm({ existing, onClose, onSave }) {
         <Field label="วันที่" error={err.date}><DateInput style={inputStyle} value={f.date} onChange={set("date")}/></Field>
         <Field label="หมวด">
           <select style={inputStyle} value={f.category} onChange={set("category")}>
-            {EXPENSE_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+            {EXPENSE_CATEGORY_GROUPS.map((g) => <optgroup key={g.group} label={g.group}>{g.items.map((c) => <option key={c}>{c}</option>)}</optgroup>)}
           </select>
         </Field>
       </div>
@@ -483,13 +498,8 @@ function ExpenseForm({ existing, onClose, onSave }) {
           </select>
         </Field>
         <Field label="เครดิต (วัน)"><input type="number" min="0" style={inputStyle} value={f.creditDays} onChange={set("creditDays")}/></Field>
-        <Field label="สถานะ">
-          <select style={inputStyle} value={f.status} onChange={set("status")}>
-            <option value="approved">รอชำระ</option>
-            <option value="paid">ชำระแล้ว</option>
-          </select>
-        </Field>
       </div>
+      <div style={{ fontSize: 12, color: "var(--text-tertiary)" }}>บันทึกแล้วจะอยู่สถานะ "รอชำระ" — จ่ายเงินที่เมนู การเงิน → จ่ายเงิน (ใบสำคัญจ่าย) ซึ่งมี "บันทึกและจ่ายทันที" สำหรับรายการเล็ก</div>
       <div style={{ display: "flex", alignItems: "center", gap: 18, flexWrap: "wrap", fontSize: 13 }}>
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <input type="checkbox" checked={f.hasVat} onChange={set("hasVat")}/> มีใบกำกับภาษี (VAT {VAT_RATE}%)
@@ -775,6 +785,7 @@ function ReportCard({ title, rows, empty }) {
 }
 
 window.PageAccounting = PageAccounting;
+window.MonthSelect = MonthSelect;   // ใช้ร่วมกับหน้าภาษีหัก ณ ที่จ่าย (page-more.jsx)
 window.PageHR = PageHR;
 window.PageReports = PageReports;
 // เผื่อไฟล์อื่นเรียกใช้ component เหล่านี้ (เหมือนเวอร์ชันเดิม)

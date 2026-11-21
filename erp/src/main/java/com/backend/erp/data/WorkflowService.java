@@ -264,6 +264,7 @@ public class WorkflowService {
 			exp.put("whtRate", po.get("whtRate") == null ? 0 : po.get("whtRate"));
 			exp.put("status", "approved");
 			exp.put("ref", poId);
+			exp.put("source", "po");
 			exp.put("due", LocalDate.now(BKK).plusDays(30).toString());
 			repo.insert("expenses", expId, json.str(exp), u.username());
 		}

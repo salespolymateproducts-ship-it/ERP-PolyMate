@@ -58,7 +58,9 @@ final class ListQuery {
 	String orderBy(Map<String, String> sorts, String dflt, String tiebreak) {
 		String col = sorts.get(sort);
 		if (col == null) return " order by " + dflt;
-		return " order by " + col + (desc ? " desc" : " asc") + " nulls last, " + tiebreak;
+		// แถวที่ค่าเท่ากัน (เช่น วันที่เดียวกัน) เรียงตามทิศเดียวกับคอลัมน์ที่เลือก
+		String tb = desc ? tiebreak : tiebreak.replace(" desc", " asc");
+		return " order by " + col + (desc ? " desc" : " asc") + " nulls last, " + tb;
 	}
 
 	String limit() { return paged() ? " limit " + size + " offset " + (long) (page - 1) * size : ""; }

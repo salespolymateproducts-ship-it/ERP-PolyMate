@@ -1,4 +1,4 @@
-/* global React, I, Store, ErpModal, DateInput, notify, _fmt, fmtDate, finErr, finMoney */
+/* global React, I, Store, ErpModal, DateInput, notify, _fmt, fmtDate, finErr, finMoney, COMPANY, printDoc, useListView, ListToolbar, SortTh, Pager */
 
 /*
   การเงิน ขั้น A3: ใบสำคัญจ่าย (PV) → อนุมัติ → จ่ายเงิน (เลือกบัญชี/วันที่/อ้างอิง) · หัก ณ ที่จ่าย ออกเลขหนังสือตอนจ่ายจริง
@@ -25,7 +25,7 @@ function PayAccountFields({ accounts, f, set }) {
   );
 }
 
-function FinPayVoucherModal({ accounts, onClose, onDone }) {
+function FinPayVoucherModal({ accounts, pre, onClose, onDone }) {
   const [rows, setRows] = React.useState([]);
   const [sel, setSel] = React.useState({});
   const [f, setF] = React.useState({ date: Store.today(), note: "" });
@@ -33,12 +33,32 @@ function FinPayVoucherModal({ accounts, onClose, onDone }) {
   const [p, setP] = React.useState({ accountId: "", payDate: Store.today(), refNo: "" });
   const [err, setErr] = React.useState("");
   const [busy, setBusy] = React.useState(false);
-  React.useEffect(() => { Store.finApi("GET", "/payments/payables").then(setRows).catch((e) => setErr(e.message || String(e))); }, []);
+  React.useEffect(() => { Store.finApi("GET", "/payments/payables").then((r) => {
+    setRows(r);
+    const hit = pre && r.find((x) => x.id === pre);
+    if (hit) { setSel({ [hit.id]: true }); setVendorF(hit.vendor); }   // มาจากปุ่มของรายการ → ติ๊กไว้ให้และกรองเฉพาะผู้รับเงินรายนั้น
+    else if (pre) setErr("รายการ " + pre + " ทำใบสำคัญจ่ายไม่ได้ (อาจจ่ายแล้ว อยู่ในใบสำคัญจ่ายอื่น หรือยังไม่อนุมัติ)");
+  }).catch((e) => setErr(e.message || String(e))); }, []);
   const chosen = rows.filter((r) => sel[r.id]);
   const payee = chosen[0] ? chosen[0].vendor : "";
   const sum = (k) => Math.round(chosen.reduce((s, r) => s + r[k], 0) * 100) / 100;
-  const toggle = (r) => setSel((x) => Object.assign({}, x, { [r.id]: !x[r.id] }));
-  const mixed = chosen.some((r) => String(r.vendor).trim().toLowerCase() !== String(payee).trim().toLowerCase());
+  const same = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+  const okRow = (r) => !payee || same(r.vendor, payee);          // เลือกผู้รับเงินแล้ว → รายการของคนอื่นเลือกไม่ได้
+  const toggle = (r) => { if (okRow(r)) setSel((x) => Object.assign({}, x, { [r.id]: !x[r.id] })); };
+  const mixed = chosen.some((r) => !same(r.vendor, payee));
+  // ตัวกรอง/เรียง/ค้นหา/แบ่งหน้า (การเลือกคงอยู่ข้ามหน้าและข้ามการค้นหา)
+  const [vendorF, setVendorF] = React.useState("ALL");
+  const vendors = React.useMemo(() => Array.from(new Set(rows.map((r) => r.vendor))).sort((a, b) => String(a).localeCompare(String(b), "th")), [rows]);
+  const view = useListView(rows, {
+    text: (r) => [r.id, r.ref, r.vendor, r.desc, r.category].join(" "),
+    dateKey: (r) => r.date, dateLabel: "วันที่",
+    filter: (r) => vendorF === "ALL" || same(r.vendor, vendorF), filterKey: vendorF,
+    defaultSort: { key: "date", dir: "desc" }, pageSize: 25,
+    sorts: { id: (r) => r.id, ref: (r) => r.ref || "", date: (r) => r.date, vendor: (r) => r.vendor, base: (r) => r.base, vat: (r) => r.vat, wht: (r) => r.wht, net: (r) => r.net },
+  });
+  const pickable = view.pageRows.filter(okRow);
+  const allOn = pickable.length > 0 && pickable.every((r) => sel[r.id]);
+  const togglePage = () => setSel((x) => { const n = Object.assign({}, x); const first = !payee && pickable[0] ? pickable[0].vendor : payee; pickable.filter((r) => !first || same(r.vendor, first)).forEach((r) => { n[r.id] = !allOn; }); return n; });
   const save = async () => {
     setErr(""); setBusy(true);
     try {
@@ -52,21 +72,44 @@ function FinPayVoucherModal({ accounts, onClose, onDone }) {
   const lbl = { fontSize: 12, color: "var(--text-secondary)", fontWeight: 500, display: "block", margin: "10px 0 4px" };
   const isAdmin = (Store.user() || {}).role === "admin";
   return (
-    <ErpModal title="สร้างใบสำคัญจ่าย" width={820} onClose={onClose}
+    <ErpModal title="สร้างใบสำคัญจ่าย" width={1080} onClose={onClose}
       footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={busy || !chosen.length || mixed || (now && !p.accountId)} onClick={save}>{now ? "บันทึกและจ่ายทันที" : "บันทึกใบสำคัญจ่าย"}</button></>}>
-      <div style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>เลือกค่าใช้จ่ายที่อนุมัติแล้วและยังไม่ได้จ่าย — ใบสำคัญจ่าย 1 ใบ จ่ายผู้รับเงินคนเดียว</div>
-      <table className="table" style={{ marginTop: 8 }}>
-        <thead><tr><th></th><th>เลขที่</th><th>มาจาก</th><th>วันที่</th><th>ผู้รับเงิน</th><th>รายการ</th><th className="num">ฐาน</th><th className="num">VAT</th><th className="num">หัก ณ ที่จ่าย</th><th className="num">จ่ายสุทธิ</th></tr></thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.id} onClick={() => toggle(r)} style={{ cursor: "pointer", background: sel[r.id] ? "var(--bg-subtle, #f5f5f5)" : undefined }}>
-              <td><input type="checkbox" checked={!!sel[r.id]} readOnly/></td><td className="mono">{r.id}</td><td className="mono" style={{ fontSize: 11.5 }}>{r.ref || <span style={{ color: "var(--text-tertiary)" }}>คีย์เอง</span>}</td><td>{fmtDate(r.date)}</td><td>{r.vendor}</td><td style={{ fontSize: 12 }}>{r.desc || r.category}</td>
-              <td className="num">{finMoney(r.base)}</td><td className="num">{r.vat ? finMoney(r.vat) : "—"}</td><td className="num">{r.wht ? finMoney(r.wht) : "—"}</td><td className="num"><b>{finMoney(r.net)}</b></td>
-            </tr>
-          ))}
-          {!rows.length && <tr><td colSpan={10} style={{ textAlign: "center", padding: 22, color: "var(--text-tertiary)" }}>ไม่มีค่าใช้จ่ายรอจ่าย (บันทึกค่าใช้จ่ายและอนุมัติในหน้า บัญชี / ค่าใช้จ่าย ก่อน)</td></tr>}
-        </tbody>
-      </table>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>เลือกค่าใช้จ่ายที่อนุมัติแล้วและยังไม่ได้จ่าย — ใบสำคัญจ่าย 1 ใบ จ่ายผู้รับเงินคนเดียว (พอเลือกรายการแรก รายการของผู้รับเงินรายอื่นจะเลือกไม่ได้)</div>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 10, marginTop: 8, overflow: "hidden" }}>
+        <ListToolbar view={view} placeholder="ค้นหา เลขที่ / PO / ผู้รับเงิน / รายการ…">
+          <select className="select" style={{ width: 220 }} value={vendorF} onChange={(e) => setVendorF(e.target.value)} aria-label="กรองตามผู้รับเงิน">
+            <option value="ALL">ผู้รับเงินทุกราย</option>{vendors.map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </ListToolbar>
+        <div style={{ maxHeight: 340, overflow: "auto", borderTop: "1px solid var(--border)" }}>
+          <table className="table" style={{ margin: 0 }}>
+            <thead><tr>
+              <th style={{ width: 34 }}><input type="checkbox" checked={allOn} disabled={!pickable.length} onChange={togglePage} title="เลือก/ไม่เลือกทั้งหน้า (เฉพาะผู้รับเงินรายเดียวกัน)" aria-label="เลือกทั้งหน้า"/></th>
+              <SortTh view={view} k="id">เลขที่</SortTh><SortTh view={view} k="ref">มาจาก</SortTh><SortTh view={view} k="date">วันที่</SortTh><SortTh view={view} k="vendor">ผู้รับเงิน</SortTh><th>รายการ</th>
+              <SortTh view={view} k="base" className="num">ฐาน</SortTh><SortTh view={view} k="vat" className="num">VAT</SortTh><SortTh view={view} k="wht" className="num">หัก ณ ที่จ่าย</SortTh><SortTh view={view} k="net" className="num">จ่ายสุทธิ</SortTh>
+            </tr></thead>
+            <tbody>
+              {view.pageRows.map((r) => {
+                const ok = okRow(r);
+                return (
+                  <tr key={r.id} onClick={() => toggle(r)} style={{ cursor: ok ? "pointer" : "not-allowed", opacity: ok ? 1 : 0.4, background: sel[r.id] ? "var(--bg-subtle, #f5f5f5)" : undefined }} title={ok ? "" : "คนละผู้รับเงินกับรายการที่เลือกไว้"}>
+                    <td><input type="checkbox" checked={!!sel[r.id]} disabled={!ok} readOnly/></td>
+                    <td className="mono" style={{ whiteSpace: "nowrap", fontSize: 12 }}><b>{r.id}</b></td>
+                    <td className="mono" style={{ whiteSpace: "nowrap", fontSize: 11.5 }}>{r.ref || <span style={{ color: "var(--text-tertiary)" }}>คีย์เอง</span>}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{fmtDate(r.date)}</td>
+                    <td style={{ minWidth: 150 }}>{r.vendor}</td>
+                    <td style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 160 }}>{r.desc || r.category}</td>
+                    <td className="num" style={{ whiteSpace: "nowrap" }}>{finMoney(r.base)}</td><td className="num" style={{ whiteSpace: "nowrap" }}>{r.vat ? finMoney(r.vat) : "—"}</td>
+                    <td className="num" style={{ whiteSpace: "nowrap" }}>{r.wht ? finMoney(r.wht) : "—"}</td><td className="num" style={{ whiteSpace: "nowrap" }}><b>{finMoney(r.net)}</b></td>
+                  </tr>
+                );
+              })}
+              {!view.total && <tr><td colSpan={10} style={{ textAlign: "center", padding: 22, color: "var(--text-tertiary)" }}>{rows.length ? "ไม่พบรายการตามเงื่อนไข — ลองเปลี่ยนคำค้นหรือกด \"ล้างตัวกรอง\"" : "ไม่มีค่าใช้จ่ายรอจ่าย (บันทึกค่าใช้จ่ายและอนุมัติในหน้า บัญชี / ค่าใช้จ่าย ก่อน)"}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <Pager view={view}/>
+      </div>
       <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 8, background: "var(--bg-subtle, #f5f5f5)", fontSize: 12.5, lineHeight: 1.7 }}>
         {chosen.length ? <>ผู้รับเงิน <b>{payee}</b> · {chosen.length} รายการ · รวม <b>{finMoney(sum("base") + sum("vat"))}</b> · หัก ณ ที่จ่าย <b>{finMoney(sum("wht"))}</b> · <b>จ่ายสุทธิ {finMoney(sum("net"))}</b></> : "ยังไม่ได้เลือกรายการ"}
         {mixed && <div style={{ color: "var(--danger)" }}>เลือกผู้รับเงินหลายราย — ใบสำคัญจ่าย 1 ใบจ่ายได้คนเดียว</div>}
@@ -101,7 +144,7 @@ function FinPayModal({ v, accounts, onClose, onDone }) {
 }
 
 /** รายละเอียดใบสำคัญจ่าย: จ่ายใคร · ค่าอะไร · มาจากเอกสารใด — ให้ผู้อนุมัติตรวจก่อนกด */
-function FinPayDetailModal({ v, isAdmin, user, onClose, onApprove, onReject, onPay, onCancel }) {
+function FinPayDetailModal({ v, isAdmin, user, onClose, onApprove, onReject, onPay, onCancel, onPrint }) {
   const st = PV_STATUS[v.status] || { th: v.status, cls: "badge-neutral" };
   const mine = user && v.createdBy === user.fullName;
   const cell = { fontSize: 12.5, padding: "2px 0" };
@@ -109,6 +152,7 @@ function FinPayDetailModal({ v, isAdmin, user, onClose, onApprove, onReject, onP
     <ErpModal title={"ใบสำคัญจ่าย " + v.id} width={860} onClose={onClose}
       footer={<>
         <button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button>
+        {v.status !== "rejected" && <button className="btn btn-outline btn-sm" onClick={() => onPrint(v)}><I.Printer size={14}/> พิมพ์</button>}
         {v.status === "pending" && isAdmin && <><button className="btn btn-outline btn-sm" onClick={() => onReject(v)}>ไม่อนุมัติ</button><button className="btn btn-primary btn-sm" onClick={() => onApprove(v)}>อนุมัติ</button></>}
         {v.status === "approved" && <button className="btn btn-primary btn-sm" onClick={() => onPay(v)}>จ่ายเงิน</button>}
         {(v.status === "pending" || v.status === "approved") && (mine || isAdmin) && <button className="btn btn-ghost btn-sm" onClick={() => onCancel(v)}>ยกเลิก</button>}
@@ -139,10 +183,104 @@ function FinPayDetailModal({ v, isAdmin, user, onClose, onApprove, onReject, onP
   );
 }
 
+/** แบบฟอร์มใบสำคัญจ่าย (พิมพ์ A4 ต้นฉบับ + สำเนา) — ข้อมูลทั้งหมดมาจาก PV ที่เซิร์ฟเวอร์ ไม่คำนวณใหม่ */
+function FinPayPrintModal({ v, accounts, onClose }) {
+  const C = window.COMPANY || {};
+  const acc = (accounts || []).find((a) => a.id === v.accountId);
+  // ข้อมูลผู้รับเงิน: ใช้สำเนาที่บันทึกในรายการค่าใช้จ่าย → ถ้าไม่มีดูจากทะเบียนผู้ขาย
+  const exps = (v.items || []).map((i) => Store.state.expenses.find((e) => e.id === i.expenseId)).filter(Boolean);
+  const sup = (Store.state.suppliers || []).find((s) => s.name === v.payee || (exps[0] && exps[0].supplierId && s.id === exps[0].supplierId));
+  const taxId = (exps.find((e) => e.vendorTaxId) || {}).vendorTaxId || (sup && sup.taxId && sup.taxId !== "—" ? sup.taxId : "");
+  const address = (exps.find((e) => e.vendorAddress) || {}).vendorAddress || (sup && sup.address) || "";
+  const base = (v.items || []).reduce((s, i) => s + (i.base || 0), 0), vat = (v.items || []).reduce((s, i) => s + (i.vat || 0), 0);
+  const isVoid = v.status === "void", isPaid = v.status === "paid";
+  const stTh = (PV_STATUS[v.status] || { th: v.status }).th;
+  const b = "1px solid #0B1220", cell = { border: b, padding: "4px 6px", fontSize: 11 }, lab = { color: "#5B6478" };
+  const sig = (title, name, date) => (
+    <div style={{ flex: 1, textAlign: "center", fontSize: 11 }}>
+      <div style={{ height: 44, borderBottom: "1px dotted #0B1220", margin: "0 10px" }}>{name ? <div style={{ paddingTop: 28 }}>{name}</div> : null}</div>
+      <div style={{ marginTop: 4, fontWeight: 600 }}>{title}</div>
+      <div style={{ color: "#5B6478" }}>วันที่ {date ? fmtDate(date) : "......../......../........"}</div>
+    </div>
+  );
+  return (
+    <ErpModal title={"พิมพ์ใบสำคัญจ่าย · " + v.id} width={900} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button>
+        <button className="btn btn-primary btn-sm" onClick={() => printDoc(v.id, { title: "ใบสำคัญจ่าย " + v.id, pageMargin: "10mm 10mm 10mm 10mm", bare: true })}><I.Printer size={14}/> พิมพ์ / PDF (ต้นฉบับ + สำเนา)</button></>}>
+      {v.status === "pending" || v.status === "approved" ? <div className="no-print" style={{ fontSize: 12, color: "var(--amber)", marginBottom: 8 }}>ใบนี้ยังไม่ได้จ่ายเงิน — ช่องบัญชี/วันที่จ่ายจะว่างบนกระดาษ</div> : null}
+      <div className="print-area-wrap" style={{ overflowX: "auto", background: "var(--bg)", padding: 8 }}>
+        <div className="print-area" data-copies="2" style={{ width: "190mm", padding: "8mm 8mm", boxSizing: "border-box", background: "white", color: "#0B1220", margin: "0 auto", position: "relative", fontFamily: '"IBM Plex Sans Thai", "Noto Sans Thai", Tahoma, sans-serif' }}>
+          {isVoid && <div style={{ position: "absolute", top: "38%", left: 0, right: 0, textAlign: "center", fontSize: 54, fontWeight: 800, color: "rgba(200,30,30,.18)", transform: "rotate(-18deg)", pointerEvents: "none" }}>ยกเลิก / กลับรายการ</div>}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <img src="assets/polymate-logo.png" alt="PolyMate" style={{ width: 54, height: 54, objectFit: "contain", flex: "none" }}/>
+              <div style={{ fontSize: 11, lineHeight: 1.5 }}>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{C.nameTh}</div>
+                <div>{C.address}</div><div>เลขประจำตัวผู้เสียภาษี {C.taxId}{C.phone ? " · โทร " + C.phone : ""}</div>
+              </div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 18, fontWeight: 800 }}>ใบสำคัญจ่าย</div><div style={{ fontSize: 10.5, color: "#5B6478" }}>PAYMENT VOUCHER</div>
+              <div className="copy-mark" style={{ display: "inline-block", marginTop: 4, border: b, padding: "1px 10px", fontSize: 11, fontWeight: 700 }}>ต้นฉบับ</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 10, fontSize: 11.5, lineHeight: 1.6 }}>
+            <div style={{ flex: 1.6, border: b, padding: "6px 8px" }}>
+              <div><span style={lab}>จ่ายให้ </span><b>{v.payee}</b></div>
+              {address ? <div><span style={lab}>ที่อยู่ </span>{address}</div> : null}
+              {taxId ? <div><span style={lab}>เลขประจำตัวผู้เสียภาษี </span>{taxId}</div> : null}
+            </div>
+            <div style={{ flex: 1, border: b, padding: "6px 8px" }}>
+              <div><span style={lab}>เลขที่ </span><b>{v.id}</b></div><div><span style={lab}>วันที่ </span>{fmtDate(v.date)}</div>
+              <div><span style={lab}>สถานะ </span>{stTh}</div>
+            </div>
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 10 }}>
+            <thead><tr style={{ background: "#F1F3F7" }}>
+              <th style={{ ...cell, width: 24 }}>#</th><th style={cell}>รายการ</th><th style={{ ...cell, width: 96 }}>เลขที่ค่าใช้จ่าย / อ้างอิง</th>
+              <th style={{ ...cell, width: 70, textAlign: "right" }}>ฐาน</th><th style={{ ...cell, width: 60, textAlign: "right" }}>VAT</th><th style={{ ...cell, width: 66, textAlign: "right" }}>หัก ณ ที่จ่าย</th><th style={{ ...cell, width: 76, textAlign: "right" }}>จ่ายสุทธิ</th>
+            </tr></thead>
+            <tbody>
+              {(v.items || []).map((i, n) => (
+                <tr key={i.expenseId}>
+                  <td style={{ ...cell, textAlign: "center" }}>{n + 1}</td>
+                  <td style={cell}>{i.descr || i.category || "—"}{i.category && i.descr ? <div style={{ color: "#5B6478", fontSize: 10 }}>{i.category}</div> : null}</td>
+                  <td style={{ ...cell, fontSize: 10 }}>{i.expenseId}{i.ref ? <div>{i.ref}</div> : null}</td>
+                  <td style={{ ...cell, textAlign: "right" }}>{finMoney(i.base)}</td><td style={{ ...cell, textAlign: "right" }}>{i.vat ? finMoney(i.vat) : "—"}</td>
+                  <td style={{ ...cell, textAlign: "right" }}>{i.wht ? finMoney(i.wht) + " (" + i.whtRate + "%)" : "—"}</td><td style={{ ...cell, textAlign: "right" }}><b>{finMoney(i.net)}</b></td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr><td colSpan={3} style={{ ...cell, textAlign: "right", fontWeight: 700 }}>รวม</td><td style={{ ...cell, textAlign: "right" }}>{finMoney(base)}</td><td style={{ ...cell, textAlign: "right" }}>{vat ? finMoney(vat) : "—"}</td><td style={{ ...cell, textAlign: "right" }}>{v.wht ? finMoney(v.wht) : "—"}</td><td style={{ ...cell, textAlign: "right", fontWeight: 800 }}>{finMoney(v.net)}</td></tr>
+              <tr><td colSpan={7} style={{ ...cell, fontWeight: 600 }}>จำนวนเงินจ่ายสุทธิ (ตัวอักษร): {window.bahtText ? window.bahtText(v.net) : ""}</td></tr>
+            </tfoot>
+          </table>
+          <div style={{ border: b, borderTop: 0, padding: "6px 8px", fontSize: 11.5, lineHeight: 1.7 }}>
+            <div><span style={lab}>จ่ายจากบัญชี </span>{isPaid ? (acc ? acc.code + " · " + acc.name + (acc.bankName ? " · " + acc.bankName : "") : v.accountId) : "......................................................"}
+              {"  "}<span style={lab}>วันที่จ่าย </span>{isPaid ? fmtDate(v.payDate) : "......../......../........"}</div>
+            <div><span style={lab}>เลขอ้างอิง (สลิป/เช็ค) </span>{isPaid ? (v.refNo || "—") : "................................"}
+              {v.whtCertNo ? <>{"  "}<span style={lab}>หนังสือรับรองหัก ณ ที่จ่าย (50 ทวิ) เลขที่ </span><b>{v.whtCertNo}</b></> : null}</div>
+            {v.note ? <div><span style={lab}>หมายเหตุ </span>{v.note}</div> : null}
+            {isVoid ? <div style={{ color: "#B42318" }}>ยกเลิก/กลับรายการเมื่อ {v.voidDate ? fmtDate(v.voidDate) : ""}{v.voidReason ? " — " + v.voidReason : ""}</div> : null}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            {sig("ผู้จัดทำ", v.createdBy, v.date)}
+            {sig("ผู้อนุมัติ", v.approvedBy, null)}
+            {sig("ผู้จ่ายเงิน", isPaid ? v.paidBy : "", isPaid ? v.payDate : null)}
+            {sig("ผู้รับเงิน", "", null)}
+          </div>
+        </div>
+      </div>
+    </ErpModal>
+  );
+}
+
 function FinPayments({ accounts, isAdmin, user, setModal, reload, tick }) {
   const [sum, setSum] = React.useState(null);
   const [filter, setFilter] = React.useState("ALL");
-  const [sub, setSub] = React.useState(null);
+  // มาจากปุ่ม "ทำใบสำคัญจ่าย" ของรายการค่าใช้จ่าย/เจ้าหนี้ → เปิดฟอร์มสร้างโดยติ๊กรายการนั้นไว้แล้ว
+  const [sub, setSub] = React.useState(() => { const x = window.takeFocus ? window.takeFocus("pvExpense") : null; return x ? { t: "new", pre: x } : null; });
   const v0 = useServerListView("/payments", { params: { status: filter }, tick, onError: finErr });
   const list = v0.pageRows;
   React.useEffect(() => {
@@ -184,6 +322,7 @@ function FinPayments({ accounts, isAdmin, user, setModal, reload, tick }) {
                     <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{v.createdBy}{v.selfApproved ? <span className="badge badge-warning" style={{ marginLeft: 4 }}>อนุมัติเอง</span> : null}</div></td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button className="btn btn-ghost btn-sm" onClick={() => setSub({ t: "detail", v })}>รายละเอียด</button>
+                    {v.status !== "rejected" && <button className="btn btn-ghost btn-sm" onClick={() => setSub({ t: "print", v })} title="พิมพ์ใบสำคัญจ่าย" aria-label="พิมพ์ใบสำคัญจ่าย"><I.Printer size={13}/></button>}
                     {v.status === "pending" && isAdmin && <><button className="btn btn-primary btn-sm" onClick={() => approve(v.id)}>อนุมัติ</button> <button className="btn btn-outline btn-sm" onClick={() => setModal({ t: "pvreject", id: v.id })}>ไม่อนุมัติ</button> </>}
                     {v.status === "approved" && <button className="btn btn-primary btn-sm" onClick={() => setSub({ t: "pay", v })}>จ่ายเงิน</button>}
                     {(v.status === "pending" || v.status === "approved") && (mine || isAdmin) && <button className="btn btn-ghost btn-sm" onClick={() => setModal({ t: "pvcancel", id: v.id })}>ยกเลิก</button>}
@@ -197,10 +336,11 @@ function FinPayments({ accounts, isAdmin, user, setModal, reload, tick }) {
         </table>
         <Pager view={v0}/>
       </div>
-      {sub && sub.t === "new" && <FinPayVoucherModal accounts={accounts} onClose={() => setSub(null)} onDone={done}/>}
+      {sub && sub.t === "new" && <FinPayVoucherModal accounts={accounts} pre={sub.pre} onClose={() => setSub(null)} onDone={done}/>}
       {sub && sub.t === "detail" && <FinPayDetailModal v={sub.v} isAdmin={isAdmin} user={user} onClose={() => setSub(null)}
         onApprove={async (x) => { await approve(x.id); setSub(null); }} onReject={(x) => { setSub(null); setModal({ t: "pvreject", id: x.id }); }}
-        onPay={(x) => setSub({ t: "pay", v: x })} onCancel={(x) => { setSub(null); setModal({ t: "pvcancel", id: x.id }); }}/>}
+        onPay={(x) => setSub({ t: "pay", v: x })} onCancel={(x) => { setSub(null); setModal({ t: "pvcancel", id: x.id }); }} onPrint={(x) => setSub({ t: "print", v: x })}/>}
+      {sub && sub.t === "print" && <FinPayPrintModal v={sub.v} accounts={accounts} onClose={() => setSub(null)}/>}
       {sub && sub.t === "pay" && <FinPayModal v={sub.v} accounts={accounts} onClose={() => setSub(null)} onDone={done}/>}
     </>
   );

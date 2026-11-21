@@ -1,4 +1,4 @@
-/* global React, I, MOLDS, Drawer, ROLES, DOC_LABEL, Store, useStore, Analytics, exportCSV, notify, runAction, ErpModal, EmptyRow, baht, _fmt */
+/* global React, PageHeader, KPICard, MonthSelect, ListToolbar, SortTh, Pager, useListView, WhtIssueModal, I, MOLDS, Drawer, ROLES, DOC_LABEL, Store, useStore, Analytics, exportCSV, notify, runAction, ErpModal, EmptyRow, baht, _fmt */
 
 function Step({ done, text }) {
   return (
@@ -614,21 +614,13 @@ function MaintenanceCalendar() {
 // ================= รายงานภาษี ภพ.30 / ภงด.53 (จากเอกสารจริง) =================
 function TaxReport({ month }) {
   useStore();
-  const [whtExp, setWhtExp] = useState(null);
-  const taxRole = Store.user() ? Store.user().role : null;
-  const canWht = taxRole === "admin" || taxRole === "accounting";
-  const markPaidFromReport = (id) => {
-    if (!window.confirm("บันทึกว่าจ่ายเงินรายการ " + id + " แล้ว (วันที่ " + Store.today() + ") — วันที่จ่ายจะใช้เป็นวันที่ในหนังสือรับรองหัก ณ ที่จ่าย")) return;
-    runAction(() => Store.update("expenses", id, { status: "paid", paidDate: Store.today(), paidBy: Store.userName() }, "id", "บันทึกจ่ายชำระ"), "บันทึกจ่าย " + id + " แล้ว");
-  };
+  const goWhtPage = () => window.dispatchEvent(new CustomEvent("erp-goto", { detail: { page: "fin-wht" } }));
   const ym = month || Store.today().slice(0, 7);
   const m = Analytics.month(ym);
   const sales = m.invoices.filter((d) => d.vatOn).map((d) => ({ date: d.date, doc: d.id, customer: (d.customerSnap && d.customerSnap.name) || d.customerName, taxId: (d.customerSnap && d.customerSnap.taxId) || "—", subtotal: d.subtotal, vat: d.vat }));
   const supplier = (name) => Store.state.suppliers.find((s) => name && (s.name.includes(name) || name.includes(s.code))) || null;
   const purchases = m.expenses.filter((e) => e.vat > 0).map((e) => ({ date: e.date, doc: e.id, vendor: e.vendor, taxId: (supplier(e.vendor) || {}).taxId || "—", subtotal: e.amount, vat: e.vat }));
-  const wht = m.expenses.filter((e) => e.whtRate > 0).map((e) => ({ date: e.date, doc: e.id, payee: e.vendor, type: e.category, base: e.amount, rate: e.whtRate }));
   const salesVat = sales.reduce((s, x) => s + x.vat, 0), purchaseVat = purchases.reduce((s, x) => s + x.vat, 0), net = salesVat - purchaseVat;
-  const whtTotal = wht.reduce((s, w) => s + w.base * w.rate / 100, 0);
   const tbl = (head, rows, empty) => (
     <table className="table" style={{ fontSize: 12.5 }}><thead><tr>{head.map((h, i) => <th key={i} className={i >= head.length - 2 ? "num" : ""}>{h}</th>)}</tr></thead>
       <tbody>{rows.length ? rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} className={j >= r.length - 2 ? "num" : j === 1 ? "mono" : ""}>{c}</td>)}</tr>) : <EmptyRow cols={head.length} text={empty}/>}</tbody></table>
@@ -650,38 +642,88 @@ function TaxReport({ month }) {
           <div className="card-actions"><button className="btn btn-outline btn-sm" disabled={!purchases.length} onClick={() => exportCSV(`ภาษีซื้อ-${ym}.csv`, ["วันที่", "เลขที่", "ผู้ขาย", "เลขผู้เสียภาษี", "มูลค่า", "VAT"], purchases.map((x) => [x.date, x.doc, x.vendor, x.taxId, x.subtotal, x.vat]))}><I.Download size={13}/> CSV</button></div></div>
         {tbl(["วันที่", "เลขที่", "ผู้ขาย", "เลขผู้เสียภาษี", "มูลค่า", "VAT"], purchases.map((x) => [x.date, x.doc, x.vendor, x.taxId, _fmt(x.subtotal, 2), _fmt(x.vat, 2)]), "ไม่มีภาษีซื้อในเดือนนี้")}
       </div>
-      <div className="card">
-        <div className="card-head"><div><div className="card-title">ภาษีหัก ณ ที่จ่าย (ภงด.53)</div><div className="card-sub">รวม {baht(whtTotal, 2)}</div></div>
-          <div className="card-actions"><button className="btn btn-outline btn-sm" disabled={!wht.length} onClick={() => exportCSV(`ภงด53-${ym}.csv`, ["วันที่", "เลขที่", "ผู้รับเงิน", "ประเภทเงินได้", "ฐานภาษี", "อัตรา %", "ภาษีที่หัก", "เลขที่หนังสือรับรอง"], wht.map((w) => { const ex = Store.state.expenses.find((x) => x.id === w.doc); return [w.date, w.doc, w.payee, w.type, w.base, w.rate, w.base * w.rate / 100, ex && ex.whtCert ? ex.whtCert.no : ""]; }))}><I.Download size={13}/> CSV</button></div></div>
+      <div className="card" style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>ภาษีหัก ณ ที่จ่าย (ภ.ง.ด.3/53) และหนังสือรับรอง 50 ทวิ ย้ายไปอยู่ที่เมนู การเงิน → ภาษีหัก ณ ที่จ่าย (ค่าใช้จ่าย)</span>
+        <button className="btn btn-outline btn-sm" onClick={goWhtPage}>เปิดหน้าภาษีหัก ณ ที่จ่าย</button>
+      </div>
+    </>
+  );
+}
+
+// ================= ภาษีหัก ณ ที่จ่าย (ฝั่งค่าใช้จ่าย) — หน้าในเมนูการเงิน ต่อจาก จ่ายเงิน (ใบสำคัญจ่าย) =================
+function PageFinWht() {
+  useStore();
+  const [whtExp, setWhtExp] = useState(null);
+  const role = Store.user() ? Store.user().role : null;
+  const canWht = role === "admin" || role === "accounting";
+  const all = Store.state.expenses.filter((e) => e.status !== "cancelled" && e.whtRate > 0);
+  const months = React.useMemo(() => {
+    const s = new Set(all.map((e) => String(e.date || "").slice(0, 7)));
+    s.add(Store.today().slice(0, 7));
+    return [...s].filter(Boolean).sort().reverse();
+  }, [all.length]);
+  const [month, setMonth] = useState(() => months.find((m) => all.some((e) => String(e.date || "").slice(0, 7) === m)) || months[0]);
+  const [st, setSt] = useState("ALL");
+  const rowsAll = all.filter((e) => String(e.date || "").slice(0, 7) === month).map((e) => ({ ...e, tax: e.amount * e.whtRate / 100 }));
+  const stOf = (e) => (e.whtCert ? "issued" : e.status === "paid" ? "todo" : "unpaid");
+  const view = useListView(rowsAll, {
+    text: (e) => [e.id, e.vendor, e.category, e.payVoucher, e.payWtNo, e.whtCert && e.whtCert.no].join(" "),
+    dateKey: (e) => e.date, dateLabel: "วันที่",
+    filter: (e) => st === "ALL" || stOf(e) === st, filterKey: st,
+    defaultSort: { key: "date", dir: "desc" },
+    sorts: { date: (e) => e.date, id: (e) => e.id, vendor: (e) => e.vendor, category: (e) => e.category, base: (e) => e.amount, tax: (e) => e.tax, paid: (e) => e.paidDate || "", cert: (e) => (e.whtCert && e.whtCert.no) || e.payWtNo || "" },
+  });
+  const totalTax = rowsAll.reduce((s, e) => s + e.tax, 0);
+  const n = (k) => rowsAll.filter((e) => stOf(e) === k).length;
+  const goPay = (id) => window.dispatchEvent(new CustomEvent("erp-goto", { detail: { page: "fin-payments", focus: { pvExpense: id } } }));
+  const csv = () => exportCSV(`ภงด53-${month}.csv`, ["วันที่", "เลขที่", "ผู้รับเงิน", "ประเภทเงินได้", "ฐานภาษี", "อัตรา %", "ภาษีที่หัก", "ใบสำคัญจ่าย", "วันที่จ่าย", "เลขที่หนังสือรับรอง"],
+    view.sorted.map((e) => [e.date, e.id, e.vendor, e.category, e.amount, e.whtRate, e.tax, e.payVoucher || "", e.paidDate || "", (e.whtCert && e.whtCert.no) || e.payWtNo || ""]));
+  return (
+    <>
+      <PageHeader title="ภาษีหัก ณ ที่จ่าย (ค่าใช้จ่าย)" subtitle="ภาษีที่เราหักผู้รับเงิน · ออกหนังสือรับรอง 50 ทวิ จากรายการที่จ่ายผ่านใบสำคัญจ่าย"
+        actions={<><MonthSelect months={months} value={month} onChange={setMonth}/><button className="btn btn-outline btn-sm" disabled={!view.total} onClick={csv}><I.Download size={14}/> CSV</button></>}/>
+      <div className="grid-4" style={{ marginBottom: 14 }}>
+        <KPICard icon="Wallet" tone="amber" label={"ภาษีที่หัก " + month} value={baht(totalTax, 2)} foot={rowsAll.length + " รายการ"}/>
+        <KPICard icon="Clock" tone="violet" label="ยังไม่จ่ายเงิน" value={n("unpaid") + " รายการ"} foot="ต้องทำใบสำคัญจ่ายก่อน"/>
+        <KPICard icon="Check" tone="amber" label="จ่ายแล้ว รอออกหนังสือ" value={n("todo") + " รายการ"} foot="กดออก 50 ทวิ"/>
+        <KPICard icon="Check" tone="success" label="ออกหนังสือแล้ว" value={n("issued") + " รายการ"} foot=""/>
+      </div>
+      <div className="card" style={{ overflowX: "auto" }}>
+        <ListToolbar view={view} placeholder="เลขที่ / ผู้รับเงิน / ใบสำคัญจ่าย / เลข 50 ทวิ…">
+          <select className="select" style={{ width: 190 }} value={st} onChange={(e) => setSt(e.target.value)} aria-label="สถานะ">
+            <option value="ALL">ทุกสถานะ</option><option value="unpaid">ยังไม่จ่ายเงิน</option><option value="todo">จ่ายแล้ว รอออกหนังสือ</option><option value="issued">ออกหนังสือแล้ว</option>
+          </select>
+        </ListToolbar>
         <table className="table" style={{ fontSize: 12.5 }}>
-          <thead><tr><th>วันที่</th><th>เลขที่</th><th>ผู้รับเงิน</th><th>ประเภท</th><th className="num">ฐานภาษี</th><th className="num">ภาษีที่หัก</th><th>หนังสือรับรอง (50 ทวิ)</th></tr></thead>
+          <thead><tr><SortTh view={view} k="date">วันที่</SortTh><SortTh view={view} k="id">เลขที่</SortTh><SortTh view={view} k="vendor">ผู้รับเงิน</SortTh><SortTh view={view} k="category">ประเภท</SortTh>
+            <SortTh view={view} k="base" className="num">ฐานภาษี</SortTh><SortTh view={view} k="tax" className="num">ภาษีที่หัก</SortTh><SortTh view={view} k="paid">จ่ายเมื่อ</SortTh><SortTh view={view} k="cert">หนังสือรับรอง (50 ทวิ)</SortTh></tr></thead>
           <tbody>
-            {wht.map((w) => {
-              const e = Store.state.expenses.find((x) => x.id === w.doc);
-              const cert = e && e.whtCert;
+            {view.pageRows.map((e) => {
+              const cert = e.whtCert, s = stOf(e);
               return (
-                <tr key={w.doc}>
-                  <td>{w.date}</td><td className="mono">{w.doc}</td><td>{w.payee}</td><td>{w.type}</td>
-                  <td className="num">{_fmt(w.base, 2)}</td><td className="num">{_fmt(w.base * w.rate / 100, 2)} ({w.rate}%)</td>
+                <tr key={e.id}>
+                  <td style={{ whiteSpace: "nowrap" }}>{e.date}</td><td className="mono"><b>{e.id}</b></td><td>{e.vendor}</td><td>{e.category}</td>
+                  <td className="num">{_fmt(e.amount, 2)}</td><td className="num">{_fmt(e.tax, 2)} ({e.whtRate}%)</td>
+                  <td style={{ whiteSpace: "nowrap" }}>{e.paidDate ? <>{e.paidDate}{e.payVoucher ? <div className="mono" style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>{e.payVoucher}</div> : <div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>ข้อมูลเดิม ไม่มี PV</div>}</> : <span style={{ color: "var(--text-tertiary)" }}>ยังไม่จ่าย</span>}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
-                    {!e ? "—" : cert
-                      ? <button className="btn btn-outline btn-sm" onClick={() => setWhtExp(e)}><I.Printer size={13}/> {cert.no}</button>
-                      : e.status === "paid"
-                        ? <button className="btn btn-primary btn-sm" onClick={() => setWhtExp(e)}>ออก 50 ทวิ</button>
-                        : <><span style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginRight: 6 }}>ยังไม่จ่ายเงิน</span>{canWht && <button className="btn btn-outline btn-sm" onClick={() => markPaidFromReport(e.id)}>บันทึกจ่าย</button>}</>}
+                    {s === "issued" ? <button className="btn btn-outline btn-sm" onClick={() => setWhtExp(e)}><I.Printer size={13}/> {cert.no}</button>
+                      : s === "todo" ? <><button className="btn btn-primary btn-sm" onClick={() => setWhtExp(e)}>ออก 50 ทวิ</button>{e.payWtNo ? <span className="mono" style={{ fontSize: 10.5, marginLeft: 6, color: "var(--text-tertiary)" }}>{e.payWtNo}</span> : null}</>
+                      : <>{canWht && <button className="btn btn-outline btn-sm" onClick={() => goPay(e.id)}>ทำใบสำคัญจ่าย</button>}</>}
                   </td>
                 </tr>
               );
             })}
-            {!wht.length && <EmptyRow cols={7} text="ไม่มีรายการหัก ณ ที่จ่ายในเดือนนี้"/>}
+            {!view.total && <EmptyRow cols={8} text={rowsAll.length ? "ไม่พบรายการตามเงื่อนไข" : "ไม่มีรายการหัก ณ ที่จ่ายในเดือนนี้"}/>}
           </tbody>
         </table>
-        <div style={{ padding: "8px 16px 12px", fontSize: 11.5, color: "var(--text-tertiary)" }}>ออกหนังสือรับรอง (50 ทวิ) ได้เมื่อบันทึกว่าจ่ายเงินแล้ว — วันที่จ่ายใช้เป็นวันที่ในหนังสือ</div>
+        <Pager view={view}/>
+        <div style={{ padding: "8px 16px 12px", fontSize: 11.5, color: "var(--text-tertiary)" }}>เดือนที่แสดงอิงตามวันที่ของรายการค่าใช้จ่าย · ออกหนังสือรับรอง (50 ทวิ) ได้เมื่อจ่ายเงินผ่านใบสำคัญจ่ายแล้ว — วันที่จ่ายและเลขที่ใช้ตามใบสำคัญจ่าย · เดือนที่ต้องยื่น ภ.ง.ด. ให้ยึดตามที่ผู้ทำบัญชีหรือที่ปรึกษาภาษีกำหนด</div>
         {whtExp && <WhtIssueModal exp0={whtExp} onClose={() => setWhtExp(null)}/>}
       </div>
     </>
   );
 }
+window.PageFinWht = PageFinWht;
 
 // ================= จัดการผู้ใช้ (บัญชีจริงใน Store) =================
 const DEPT_LABEL = { admin: "ผู้บริหาร / IT", sales: "ฝ่ายขาย", production: "ฝ่ายผลิต", procurement: "ฝ่ายจัดซื้อ", accounting: "ฝ่ายบัญชี" };

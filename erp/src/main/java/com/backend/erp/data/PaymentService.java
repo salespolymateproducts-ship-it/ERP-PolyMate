@@ -23,7 +23,8 @@ import com.backend.erp.common.Json;
  *  • ยอดจ่ายสุทธิ = Σ(ฐาน + VAT − หัก ณ ที่จ่าย) · หัก ณ ที่จ่าย (WT) ออกเลขหนังสือ ณ วันจ่ายจริง (ไม่ใช่วันบันทึกค่าใช้จ่าย)
  *  • ผู้บันทึก ≠ ผู้อนุมัติ (admin อนุมัติเองได้ ติดป้าย self_approved) · เงินออกสมุดเงินเมื่อ "จ่าย" เท่านั้น · จ่ายแล้วแก้ไม่ได้ ใช้กลับรายการ
  *  • เมื่อจ่าย ค่าใช้จ่ายถูกปรับเป็น paid (paidDate/paidBy/payVoucher) · กลับรายการแล้วคืนเป็น approved
- *  • การออกหนังสือ 50 ทวิ แบบเดิมในหน้าบัญชี (expense.whtCert) ยังแยกอยู่ — รวมกันในขั้น A4
+ *  • หนังสือ 50 ทวิ ฝั่งจ่าย: เลขที่มาจากใบสำคัญจ่าย (เก็บที่ expense.payWtNo) — หน้าบัญชีพิมพ์หนังสือโดยใช้เลขนี้ (A4b)
+ *    กลับรายการ → payWtNo/whtCert ถูกถอด whtCert เดิมเก็บไว้ที่ whtCertVoided
  */
 @Service
 public class PaymentService {
@@ -224,6 +225,9 @@ public class PaymentService {
 		for (Map<String, Object> it : jdbc.queryForList("select expense_id from fin_pay_items where voucher_id = ?", id))
 			jdbc.update("update erp_records set data = data || jsonb_build_object('status','paid','paidDate',?::text,'paidBy',?::text,'payVoucher',?::text), version = version + 1, updated_at = now(), updated_by = ? where collection = 'expenses' and id = ?",
 				payDate.toString(), u.fullName(), id, u.fullName(), it.get("expense_id"));
+		if (cert != null)   // เลขหนังสือ 50 ทวิ มาจากใบสำคัญจ่าย (หน้ากระดาษที่พิมพ์ใช้เลขนี้ ไม่ออกเลขใหม่)
+			for (Map<String, Object> it : jdbc.queryForList("select i.expense_id from fin_pay_items i join erp_records e on e.collection='expenses' and e.id = i.expense_id where i.voucher_id = ? and coalesce((e.data->>'whtRate')::numeric,0) > 0", id))
+				jdbc.update("update erp_records set data = data || jsonb_build_object('payWtNo',?::text), version = version + 1, updated_at = now(), updated_by = ? where collection = 'expenses' and id = ?", cert, u.fullName(), it.get("expense_id"));
 		audit.log(u, "PV_PAY", "ใบสำคัญจ่าย", id, "จ่าย " + net + " จากบัญชี " + acc + " ณ " + payDate + (cert != null ? " · หนังสือหัก ณ ที่จ่าย " + cert + " ยอด " + wht : ""));
 	}
 
@@ -246,7 +250,7 @@ public class PaymentService {
 			fin.addMovement(u, acc, vd, "in", (BigDecimal) m.get("amount"), "fin_pay", id, "กลับรายการ " + id + ": " + reason.trim(), ((Number) m.get("id")).longValue());
 		}
 		for (Map<String, Object> it : jdbc.queryForList("select expense_id from fin_pay_items where voucher_id = ?", id))
-			jdbc.update("update erp_records set data = (data - 'paidDate' - 'paidBy' - 'payVoucher') || '{\"status\":\"approved\"}'::jsonb, version = version + 1, updated_at = now(), updated_by = ? where collection = 'expenses' and id = ?", u.fullName(), it.get("expense_id"));
+			jdbc.update("update erp_records set data = (data - 'paidDate' - 'paidBy' - 'payVoucher' - 'payWtNo' - 'whtCert') || '{\"status\":\"approved\"}'::jsonb || case when jsonb_exists(data, 'whtCert') then jsonb_build_object('whtCertVoided', data->'whtCert') else '{}'::jsonb end, version = version + 1, updated_at = now(), updated_by = ? where collection = 'expenses' and id = ?", u.fullName(), it.get("expense_id"));
 		jdbc.update("update fin_pay_vouchers set status='void', void_reason=?, voided_by=?, voided_at=now(), void_date=? where id=?", reason.trim(), u.fullName(), vd, id);
 		audit.log(u, "PV_VOID", "ใบสำคัญจ่าย", id, "กลับรายการ ลงวันที่ " + vd + ": " + reason.trim() + (v.get("whtCertNo") != null ? " · หนังสือหัก ณ ที่จ่าย " + v.get("whtCertNo") + " เป็นโมฆะ" : ""));
 		return voucher(id);

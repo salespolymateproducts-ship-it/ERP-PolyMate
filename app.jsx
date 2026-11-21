@@ -21,6 +21,7 @@ const PAGES = {
   "fin-rc-wait":   { title: "ใบเสร็จรอเก็บเงิน", crumb: ["PolyMate", "การเงิน", "ใบเสร็จรอเก็บเงิน"], Comp: PageFinRcWait },
   "fin-receipts":  { title: "รับเงินลูกค้า", crumb: ["PolyMate", "การเงิน", "รับเงินลูกค้า"], Comp: PageFinReceipts },
   "fin-payments":  { title: "จ่ายเงิน (ใบสำคัญจ่าย)", crumb: ["PolyMate", "การเงิน", "จ่ายเงิน"], Comp: PageFinPayments },
+  "fin-wht":       { title: "ภาษีหัก ณ ที่จ่าย (ค่าใช้จ่าย)", crumb: ["PolyMate", "การเงิน", "ภาษีหัก ณ ที่จ่าย"], Comp: window.PageFinWht },
   "fin-other":     { title: "รับ/จ่าย/โอนอื่น ๆ", crumb: ["PolyMate", "การเงิน", "รับ/จ่าย/โอนอื่น ๆ"], Comp: PageFinOther },
   "fin-ledger":    { title: "สมุดเงิน", crumb: ["PolyMate", "การเงิน", "สมุดเงิน"], Comp: PageFinLedger },
   "fin-settings":  { title: "ตั้งค่าการเงิน", crumb: ["PolyMate", "การเงิน", "ตั้งค่า"], Comp: PageFinSettings },
@@ -41,8 +42,10 @@ function App() {
     let alive = true;
     Store.restore().then((u) => { if (alive) { if (u) setUser(u); setBooting(false); } }).catch(() => alive && setBooting(false));
     const onExpired = () => { setUser(null); setPage("dashboard"); };
+    const onGo = (ev) => { const p = ev.detail && ev.detail.page; if (p && PAGES[p]) { window.ERP_FOCUS = (ev.detail && ev.detail.focus) || null; setPage(p); setNavTick((n) => n + 1); } };
     window.addEventListener("erp-session-expired", onExpired);
-    return () => { alive = false; window.removeEventListener("erp-session-expired", onExpired); };
+    window.addEventListener("erp-goto", onGo);   // หน้าอื่นสั่งเปิดหน้า: window.dispatchEvent(new CustomEvent("erp-goto", { detail: { page: "fin-payments" } }))
+    return () => { alive = false; window.removeEventListener("erp-session-expired", onExpired); window.removeEventListener("erp-goto", onGo); };
   }, []);
   const [page, setPage] = useState("dashboard");
   const [navTick, setNavTick] = useState(0); // บังคับเปิดหน้าใหม่เมื่อกดลิงก์จากการค้นหา/แจ้งเตือน
