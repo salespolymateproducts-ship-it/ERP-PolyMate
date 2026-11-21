@@ -345,7 +345,8 @@ public class RecordService {
 	@Transactional
 	public String create(AuthUser u, String coll, Map<String, Object> body) {
 		Collections.Def d = def(coll);
-		requireWrite(u, d);
+		// ฝ่ายผลิตสร้างใบสั่งซื้อวัตถุดิบที่ขาดได้ (เริ่มที่สถานะ รออนุมัติ/ร่างเท่านั้น — validatePOCreate) แต่แก้/ลบใบสั่งซื้อไม่ได้ ต้องให้ฝ่ายจัดซื้อ/admin ดำเนินการ
+		if (!(isPO(coll) && "production".equals(u.role()))) requireWrite(u, d);
 		if ("materials".equals(coll) && !isMaterialMaster(u)) throw onlyStockAllowed(u);
 		body.remove("_version");
 		Object idv = body.get("id") != null ? body.get("id") : body.get("code");

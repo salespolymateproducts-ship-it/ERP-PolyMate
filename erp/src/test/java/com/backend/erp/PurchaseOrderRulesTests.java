@@ -163,9 +163,14 @@ class PurchaseOrderRulesTests {
 
 	@Test @Order(3)
 	void serverRecomputesTotalsAndRolesAreEnforced() throws Exception {
-		for (String t : List.of(prod, acct, sales)) {
+		for (String t : List.of(acct, sales)) {
 			call("POST", "/purchaseOrders", po("PO-X" + Math.abs(t.hashCode()), "SUPOK", List.of(line("M-A", 1, 1))), t, 403);
 		}
+		// ฝ่ายผลิตสร้างได้ (เริ่มที่รออนุมัติ) แต่แก้/ลบไม่ได้
+		Map<String, Object> pp = call("POST", "/purchaseOrders", po("PO-PRD1", "SUPOK", List.of(line("M-A", 1, 1))), prod, 201);
+		assertEquals("pending", pp.get("status"));
+		call("PUT", "/purchaseOrders/PO-PRD1", pp, prod, 403);
+		call("DELETE", "/purchaseOrders/PO-PRD1", null, prod, 403);
 		call("POST", "/purchaseOrders", po("PO-T1", " supok ", List.of(line("M-A", 3, 10.333), line("M-B", 2, 100))), proc, 201);
 		Map<String, Object> p = call("GET", "/purchaseOrders/PO-T1", null, admin, 200);
 		// 3*10.333 = 30.999 → 31.00 ; 2*100 = 200 ; subtotal 231.00 ; vat 16.17 ; total 247.17

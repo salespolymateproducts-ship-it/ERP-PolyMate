@@ -769,12 +769,18 @@ function WorkOrderDetail({ wo, onProduce }) {
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 15, fontWeight: 600 }}>{wo.product}</div>
-          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{wo.productCode} · {wo.customerName}</div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{wo.productCode} · {wo.customerName}{wo.soId ? " · ใบสั่งขาย " + wo.soId : ""}</div>
+        </div>
+        <div style={{ textAlign: "right", marginRight: 6 }}>
+          <div className="num" style={{ fontSize: 18, fontWeight: 700 }}>{_fmt(wo.quantity)} <span style={{ fontSize: 12, fontWeight: 500, color: "var(--text-secondary)" }}>ชิ้น</span></div>
+          <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>จำนวนที่สั่งผลิต</div>
         </div>
         <StatusBadge status={wo.status} dict={WO_STATUS}/>
       </div>
 
       <div className="grid-2" style={{ marginBottom: 14 }}>
+        <Field k="จำนวนที่สั่งผลิต" v={_fmt(wo.quantity) + " ชิ้น"}/>
+        <Field k="ผลิตแล้ว / คงเหลือ" v={_fmt(wo.produced || 0) + " / " + _fmt((wo.quantity || 0) - (wo.produced || 0)) + " ชิ้น" + (wo.ng ? " (ของเสีย " + _fmt(wo.ng) + ")" : "")}/>
         <Field k="วันที่เปิดงาน" v={wo.date}/>
         <Field k="กำหนดส่ง" v={wo.due}/>
         <Field k="เครื่องฉีด" v={wo.machine}/>
