@@ -162,6 +162,7 @@ function PageFinance({ view }) {
     ACC: { title: "บัญชีเงิน", sub: "เงินสดย่อย · ธนาคาร — ยอดคงเหลือคำนวณจากสมุดเงิน", actions: <button className="btn btn-primary btn-sm" onClick={() => setModal({ t: "acc" })}><I.Plus size={14}/> เพิ่มบัญชีเงิน</button> },
     RCW: { title: "ใบเสร็จรอเก็บเงิน", sub: "ใบเสร็จที่ออกให้ลูกค้าแล้วแต่ยังไม่มีการบันทึกรับเงินจริง — ติดตามตามอายุและผู้เก็บเงิน" },
     LED: { title: "สมุดเงิน", sub: "ทุกรายการเงินเข้า/ออกของแต่ละบัญชี ยืนยันแล้วลบไม่ได้ (กลับรายการเท่านั้น)" },
+    REC: { title: "กระทบยอดธนาคาร", sub: "เทียบสมุดเงินกับ Statement ของธนาคาร — ติ๊กรายการที่ตรงกัน ผลต่างเป็น 0 จึงยืนยันรอบได้ (ไม่เปลี่ยนยอดเงินในสมุดเงิน)" },
     RCV: { title: "รับเงินลูกค้า", sub: "รับเงินตามใบกำกับภาษี · ค่าธรรมเนียมธนาคาร · ภาษีถูกหัก ณ ที่จ่าย (รอ 50 ทวิ) · เงินรอคืนลูกค้า" },
     PAYV: { title: "จ่ายเงิน (ใบสำคัญจ่าย)", sub: "ค่าใช้จ่าย → ใบสำคัญจ่าย → อนุมัติ → จ่ายเงิน · หัก ณ ที่จ่ายออกเลขหนังสือตามวันที่จ่ายจริง" },
     TX: { title: "รับ/จ่าย/โอนอื่น ๆ", sub: "รายการที่ไม่เกี่ยวกับใบกำกับหรือค่าใช้จ่าย เช่น เงินทุนเจ้าของ เงินเดือน นำส่งภาษี โอนระหว่างบัญชี",
@@ -185,6 +186,7 @@ function PageFinance({ view }) {
 
       {tab === "ACC" && <FinAccounts accounts={accounts} onEdit={(a) => setModal({ t: "acc", acc: a })}/>}
       {tab === "LED" && <FinLedger accounts={accounts} tick={tick}/>}
+      {tab === "REC" && <FinRecon accounts={accounts} isAdmin={isAdmin} tick={tick} reload={reload}/>}
       {tab === "RCW" && <FinRcWaiting accounts={accounts} reload={reload} tick={tick}/>}
       {tab === "RCV" && <FinReceipts accounts={accounts} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload} tick={tick}/>}
       {tab === "PAYV" && <FinPayments accounts={accounts} isAdmin={isAdmin} user={user} setModal={setModal} reload={reload} tick={tick}/>}
@@ -222,12 +224,18 @@ function FinStat({ label, value, tone }) {
 }
 
 function FinAccounts({ accounts, onEdit }) {
+  const av = useListView(accounts, {
+    text: (a) => [a.code, a.name, a.bankName, a.accountNo].join(" "),
+    sorts: { code: (a) => a.code, name: (a) => a.name, type: (a) => FIN_TYPE[a.type], bank: (a) => [a.bankName, a.accountNo].filter(Boolean).join(" "), open: (a) => a.openingBalance, bal: (a) => a.balance, st: (a) => (a.active ? 0 : 1) },
+    defaultSort: { key: "code", dir: "asc" },
+  });
   return (
     <div className="card">
+      <ListToolbar view={av} placeholder="ค้นหารหัส / ชื่อ / ธนาคาร…"/>
       <table className="table">
-        <thead><tr><th>รหัส</th><th>ชื่อบัญชี</th><th>ประเภท</th><th>ธนาคาร / เลขที่บัญชี</th><th className="num">ยอดยกมา</th><th className="num">คงเหลือ</th><th>สถานะ</th><th></th></tr></thead>
+        <thead><tr><SortTh view={av} k="code">รหัส</SortTh><SortTh view={av} k="name">ชื่อบัญชี</SortTh><SortTh view={av} k="type">ประเภท</SortTh><SortTh view={av} k="bank">ธนาคาร / เลขที่บัญชี</SortTh><SortTh view={av} k="open" className="num">ยอดยกมา</SortTh><SortTh view={av} k="bal" className="num">คงเหลือ</SortTh><SortTh view={av} k="st">สถานะ</SortTh><th></th></tr></thead>
         <tbody>
-          {accounts.map((a) => (
+          {av.pageRows.map((a) => (
             <tr key={a.id} style={a.active ? undefined : { opacity: 0.55 }}>
               <td className="mono"><b>{a.code}</b></td><td>{a.name}</td><td><span className="badge badge-neutral">{FIN_TYPE[a.type]}</span></td>
               <td style={{ fontSize: 12.5 }}>{[a.bankName, a.accountNo].filter(Boolean).join(" · ") || "—"}</td>
@@ -240,6 +248,7 @@ function FinAccounts({ accounts, onEdit }) {
           {!accounts.length && <tr><td colSpan={8} style={{ textAlign: "center", padding: 32, color: "var(--text-tertiary)" }}>ยังไม่มีบัญชีเงิน — กด "เพิ่มบัญชีเงิน" เพื่อเริ่ม (ตั้งยอดยกมาตามจริง ณ วันที่เริ่มใช้งาน)</td></tr>}
         </tbody>
       </table>
+      <Pager view={av}/>
     </div>
   );
 }
@@ -256,8 +265,13 @@ function FinLedger({ accounts, tick }) {
     Store.finApi("GET", "/accounts/" + encodeURIComponent(sel) + "/ledger" + (from || to ? "?from=" + from + "&to=" + to : "")).then((d) => { if (live) setData(d); }).catch(finErr);
     return () => { live = false; };
   }, [sel, from, to, tick]);
-  if (!accounts.length) return <div className="card" style={{ padding: 28, color: "var(--text-tertiary)", textAlign: "center" }}>ยังไม่มีบัญชีเงิน</div>;
   const mv = data ? data.movements : [];
+  const lv = useListView(mv, {
+    text: (m) => [m.description, m.sourceId].join(" "),
+    sorts: { date: (m) => m.date, desc: (m) => m.description, ref: (m) => m.sourceId, in: (m) => (m.direction === "in" ? m.amount : null), out: (m) => (m.direction === "out" ? m.amount : null), bal: (m) => m.balance },
+    defaultSort: { key: "date", dir: "asc" }, dateKey: (m) => m.date,
+  });
+  if (!accounts.length) return <div className="card" style={{ padding: 28, color: "var(--text-tertiary)", textAlign: "center" }}>ยังไม่มีบัญชีเงิน</div>;
   const acc = data ? data.account : null;
   const totalIn = mv.filter((m) => m.direction === "in").reduce((t, m) => t + m.amount, 0), totalOut = mv.filter((m) => m.direction === "out").reduce((t, m) => t + m.amount, 0);
   return (
@@ -269,13 +283,14 @@ function FinLedger({ accounts, tick }) {
         <span className="spacer"/>
         <button className="btn btn-outline btn-sm" disabled={!mv.length} onClick={() => exportCSV("สมุดเงิน-" + sel + ".csv", ["วันที่", "รายการ", "อ้างอิง", "เงินเข้า", "เงินออก", "คงเหลือ"], mv.map((m) => [m.date, m.description, m.sourceId, m.direction === "in" ? m.amount : "", m.direction === "out" ? m.amount : "", m.balance]))}><I.Download size={14}/> CSV</button>
       </div>
+      <ListToolbar view={lv} placeholder="ค้นหารายการ / อ้างอิง…"/>
       {acc && <div style={{ padding: "0 16px 10px", fontSize: 12.5, color: "var(--text-secondary)" }}>ยอดยกมา {finMoney(acc.openingBalance)} ({fmtDate(acc.openingDate)}) · เข้า {finMoney(totalIn)} · ออก {finMoney(totalOut)} · <b>คงเหลือปัจจุบัน {finMoney(acc.balance)}</b></div>}
       <table className="table">
-        <thead><tr><th>วันที่</th><th>รายการ</th><th>อ้างอิง</th><th className="num">เงินเข้า</th><th className="num">เงินออก</th><th className="num">คงเหลือ</th></tr></thead>
+        <thead><tr><SortTh view={lv} k="date">วันที่</SortTh><SortTh view={lv} k="desc">รายการ</SortTh><SortTh view={lv} k="ref">อ้างอิง</SortTh><SortTh view={lv} k="in" className="num">เงินเข้า</SortTh><SortTh view={lv} k="out" className="num">เงินออก</SortTh><SortTh view={lv} k="bal" className="num">คงเหลือ</SortTh></tr></thead>
         <tbody>
-          {mv.map((m) => (
+          {lv.pageRows.map((m) => (
             <tr key={m.id} style={m.reversalOf ? { background: "var(--amber-subtle)" } : undefined}>
-              <td>{fmtDate(m.date)}</td><td>{m.description}{m.reversalOf ? <span className="badge badge-warning" style={{ marginLeft: 6 }}>กลับรายการ</span> : null}</td><td className="mono">{m.sourceId}</td>
+              <td>{fmtDate(m.date)}</td><td>{m.description}{m.reversalOf ? <span className="badge badge-warning" style={{ marginLeft: 6 }}>กลับรายการ</span> : null}{m.cleared ? <span className="badge badge-success" style={{ marginLeft: 6 }} title={"กระทบยอดแล้ว " + (m.statementRef || "")}>กระทบแล้ว</span> : null}</td><td className="mono">{m.sourceId}</td>
               <td className="num" style={{ color: "var(--success)" }}>{m.direction === "in" ? finMoney(m.amount) : ""}</td>
               <td className="num" style={{ color: "var(--danger)" }}>{m.direction === "out" ? finMoney(m.amount) : ""}</td>
               <td className="num" style={{ fontWeight: 600 }}>{finMoney(m.balance)}</td>
@@ -284,7 +299,158 @@ function FinLedger({ accounts, tick }) {
           {!mv.length && <tr><td colSpan={6} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>ยังไม่มีรายการเคลื่อนไหว</td></tr>}
         </tbody>
       </table>
+      <Pager view={lv}/>
     </div>
+  );
+}
+
+/** 1C กระทบยอดบัญชีธนาคาร: ติ๊กรายการในสมุดเงินที่ตรงกับ Statement → ผลต่างเป็น 0 จึงยืนยันได้ (กฎอยู่ที่เซิร์ฟเวอร์) */
+function FinRecon({ accounts, isAdmin, tick, reload }) {
+  const banks = accounts.filter((a) => a.type === "bank");
+  const [accId, setAccId] = React.useState("");
+  const sel = accId || (banks[0] ? banks[0].id : "");
+  const [date, setDate] = React.useState(Store.today());
+  const [bal, setBal] = React.useState("");
+  const [note, setNote] = React.useState("");
+  const [ws, setWs] = React.useState(null);
+  const [hist, setHist] = React.useState([]);
+  const [picked, setPicked] = React.useState({});
+  const [err, setErr] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [n2, setN2] = React.useState(0);
+  const user = Store.user();
+  const canDo = !!user && (user.role === "admin" || user.role === "accounting");
+
+  React.useEffect(() => { setPicked({}); setErr(""); }, [sel]);
+  React.useEffect(() => {
+    if (!sel || !date) return undefined;
+    let live = true;
+    Store.finApi("GET", "/reconciliations/workspace?accountId=" + encodeURIComponent(sel) + "&date=" + date).then((d) => { if (live) setWs(d); }).catch(finErr);
+    Store.finApi("GET", "/reconciliations?accountId=" + encodeURIComponent(sel)).then((h) => { if (live) setHist(h); }).catch(finErr);
+    return () => { live = false; };
+  }, [sel, date, tick, n2]);
+
+  const items = ws ? ws.items : [];
+  const view = useListView(items, {
+    text: (m) => [m.description, m.sourceId, m.date, m.amount].join(" "),
+    dateKey: (m) => m.date, dateLabel: "วันที่",
+    defaultSort: { key: "date", dir: "asc" }, pageSize: 50,
+    sorts: { date: (m) => m.date, desc: (m) => m.description, ref: (m) => m.sourceId, amount: (m) => m.amount },
+  });
+  const cents = (x) => Math.round((Number(x) || 0) * 100);
+  const chosen = items.filter((m) => picked[m.id] && m.date <= date);
+  const inC = chosen.filter((m) => m.direction === "in").reduce((s, m) => s + cents(m.amount), 0);
+  const outC = chosen.filter((m) => m.direction === "out").reduce((s, m) => s + cents(m.amount), 0);
+  const clearedC = cents(ws ? ws.clearedBalance : 0);
+  const calcC = clearedC + inC - outC;
+  const hasBal = String(bal).trim() !== "" && !isNaN(Number(bal));
+  const diffC = hasBal ? cents(bal) - calcC : null;
+  const ok = hasBal && diffC === 0 && chosen.length > 0;
+  const toggle = (m) => setPicked((p) => Object.assign({}, p, { [m.id]: !p[m.id] }));
+  const pageAll = view.pageRows.length > 0 && view.pageRows.every((m) => picked[m.id]);
+  const togglePage = () => setPicked((p) => { const n = Object.assign({}, p); view.pageRows.forEach((m) => { n[m.id] = !pageAll; }); return n; });
+  const money = (c) => finMoney(c / 100);
+  const submit = async () => {
+    setErr(""); setBusy(true);
+    try {
+      const r = await Store.finApi("POST", "/reconciliations", { accountId: sel, statementDate: date, statementBalance: Number(bal), movementIds: chosen.map((m) => m.id), note });
+      notify("กระทบยอดแล้ว " + r.id + " (" + r.itemCount + " รายการ)", "success");
+      setPicked({}); setBal(""); setNote(""); setN2((n) => n + 1); reload();
+    } catch (e) { setErr(e && e.message ? e.message : String(e)); }
+    setBusy(false);
+  };
+  const hv = useListView(hist, {
+    text: (h) => [h.id, h.createdBy, h.note].join(" "), dateKey: (h) => h.statementDate, dateLabel: "วันที่ Statement",
+    sorts: { id: (h) => h.id, date: (h) => h.statementDate, bal: (h) => h.statementBalance, n: (h) => h.itemCount, by: (h) => h.createdBy, st: (h) => h.status },
+    defaultSort: { key: "date", dir: "desc" }, pageSize: 25,
+  });
+  const voidRec = async (h) => {
+    const reason = window.prompt("ยกเลิกรอบกระทบยอด " + h.id + " — ระบุเหตุผล:");
+    if (!reason || !reason.trim()) return;
+    try { await Store.finApi("POST", "/reconciliations/" + h.id + "/void", { reason: reason.trim() }); notify("ยกเลิก " + h.id + " แล้ว", "success"); setN2((n) => n + 1); reload(); } catch (e) { finErr(e); }
+  };
+  if (!banks.length) return <div className="card" style={{ padding: 28, color: "var(--text-tertiary)", textAlign: "center" }}>ยังไม่มีบัญชีธนาคาร — เพิ่มบัญชีประเภท "ธนาคาร" ที่เมนู บัญชีเงิน ก่อน</div>;
+  const lastDone = hist.find((h) => h.status === "done");
+  const lbl = { fontSize: 12, color: "var(--text-secondary)", display: "block", marginBottom: 4 };
+  return (
+    <>
+      <div className="card" style={{ padding: 14, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+          <div style={{ width: 280 }}><label style={lbl}>บัญชีธนาคาร</label>
+            <select className="select" value={sel} onChange={(e) => setAccId(e.target.value)}>{banks.map((a) => <option key={a.id} value={a.id}>{a.code} · {a.name}{a.accountNo ? " (…" + String(a.accountNo).replace(/\D/g, "").slice(-4) + ")" : ""}</option>)}</select></div>
+          <div style={{ width: 160 }}><label style={lbl}>วันที่ตาม Statement</label><DateInput className="input" value={date} max={Store.today()} onChange={(e) => setDate(e.target.value)}/></div>
+          <div style={{ width: 200 }}><label style={lbl}>ยอดคงเหลือตาม Statement (บาท)</label><input className="input num" type="number" step="0.01" min="0" value={bal} onChange={(e) => setBal(e.target.value)} placeholder="0.00" disabled={!canDo}/></div>
+          <div style={{ flex: 1, minWidth: 200 }}><label style={lbl}>หมายเหตุ (ถ้ามี)</label><input className="input" value={note} onChange={(e) => setNote(e.target.value)} disabled={!canDo}/></div>
+        </div>
+        <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginTop: 10 }}>
+          ยอดที่กระทบแล้วก่อนรอบนี้ <b>{ws ? finMoney(ws.clearedBalance) : "—"}</b>
+          {lastDone ? <> · รอบล่าสุด {lastDone.id} ณ {fmtDate(lastDone.statementDate)} ยอด {finMoney(lastDone.statementBalance)}</> : " · ยังไม่เคยกระทบยอดบัญชีนี้ (เริ่มจากยอดยกมา)"}
+          {!canDo && <span style={{ color: "var(--amber)" }}> · เฉพาะ admin / ฝ่ายบัญชี กระทบยอดได้ (ดูอย่างเดียว)</span>}
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 12 }}>
+        <ListToolbar view={view} placeholder="ค้นหารายการ / เลขอ้างอิง / จำนวนเงิน…"/>
+        <div style={{ maxHeight: 420, overflow: "auto" }}>
+          <table className="table" style={{ margin: 0 }}>
+            <thead><tr>
+              <th style={{ width: 34 }}>{canDo && <input type="checkbox" checked={pageAll} onChange={togglePage} aria-label="เลือกทั้งหน้า" title="เลือก/ไม่เลือกทั้งหน้า"/>}</th>
+              <SortTh view={view} k="date">วันที่</SortTh><SortTh view={view} k="desc">รายการ</SortTh><SortTh view={view} k="ref">อ้างอิง</SortTh>
+              <SortTh view={view} k="amount" className="num">เงินเข้า</SortTh><th className="num">เงินออก</th>
+            </tr></thead>
+            <tbody>
+              {view.pageRows.map((m) => (
+                <tr key={m.id} onClick={() => canDo && toggle(m)} style={{ cursor: canDo ? "pointer" : "default", background: picked[m.id] ? "var(--bg-subtle, #f5f5f5)" : m.reversalOf ? "var(--amber-subtle)" : undefined }}>
+                  <td><input type="checkbox" checked={!!picked[m.id]} disabled={!canDo} readOnly/></td>
+                  <td style={{ whiteSpace: "nowrap" }}>{fmtDate(m.date)}</td>
+                  <td>{m.description}{m.reversalOf ? <span className="badge badge-warning" style={{ marginLeft: 6 }}>กลับรายการ</span> : null}</td>
+                  <td className="mono" style={{ fontSize: 11.5 }}>{m.sourceId}</td>
+                  <td className="num" style={{ color: "var(--success)" }}>{m.direction === "in" ? finMoney(m.amount) : ""}</td>
+                  <td className="num" style={{ color: "var(--danger)" }}>{m.direction === "out" ? finMoney(m.amount) : ""}</td>
+                </tr>
+              ))}
+              {!view.total && <tr><td colSpan={6} style={{ textAlign: "center", padding: 24, color: "var(--text-tertiary)" }}>{items.length ? "ไม่พบรายการตามเงื่อนไข" : "ไม่มีรายการที่ยังไม่กระทบยอด (ถึงวันที่ Statement)"}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <Pager view={view}/>
+      </div>
+
+      <div className="card" style={{ padding: 14, marginBottom: 12, border: "1px solid " + (ok ? "var(--success)" : "var(--border)") }}>
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "center", fontSize: 13 }}>
+          <div>ยอดที่กระทบแล้ว<div className="num" style={{ fontWeight: 600 }}>{money(clearedC)}</div></div>
+          <div>+ เงินเข้าที่ติ๊ก<div className="num" style={{ color: "var(--success)", fontWeight: 600 }}>{money(inC)}</div></div>
+          <div>− เงินออกที่ติ๊ก<div className="num" style={{ color: "var(--danger)", fontWeight: 600 }}>{money(outC)}</div></div>
+          <div>= ยอดที่คำนวณได้<div className="num" style={{ fontWeight: 700 }}>{money(calcC)}</div></div>
+          <div>ยอดตาม Statement<div className="num" style={{ fontWeight: 700 }}>{hasBal ? money(cents(bal)) : "—"}</div></div>
+          <div>ผลต่าง<div className="num" style={{ fontWeight: 700, color: diffC === 0 ? "var(--success)" : "var(--danger)" }}>{diffC === null ? "—" : diffC === 0 ? "0.00 ✓" : money(diffC)}</div></div>
+          <span className="spacer" style={{ flex: 1 }}/>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>ติ๊กแล้ว {chosen.length} รายการ</div>
+          <button className="btn btn-primary btn-sm" disabled={!canDo || busy || !ok} onClick={submit} title={ok ? "" : "ต้องกรอกยอด Statement และผลต่างเป็น 0"}><I.Check size={14}/> ยืนยันกระทบยอด</button>
+        </div>
+        {err && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+      </div>
+
+      <div className="card">
+        <div className="card-head"><div className="card-title">ประวัติการกระทบยอด</div></div>
+        <table className="table">
+          <thead><tr><SortTh view={hv} k="id">เลขที่รอบ</SortTh><SortTh view={hv} k="date">วันที่ Statement</SortTh><SortTh view={hv} k="bal" className="num">ยอดตาม Statement</SortTh><SortTh view={hv} k="n" className="num">รายการ</SortTh><SortTh view={hv} k="by">โดย</SortTh><SortTh view={hv} k="st">สถานะ</SortTh><th></th></tr></thead>
+          <tbody>
+            {hv.pageRows.map((h) => (
+              <tr key={h.id} style={{ opacity: h.status === "void" ? 0.55 : 1 }}>
+                <td className="mono"><b>{h.id}</b></td><td>{fmtDate(h.statementDate)}</td><td className="num">{finMoney(h.statementBalance)}</td>
+                <td className="num">{h.itemCount} <span style={{ fontSize: 11, color: "var(--text-tertiary)" }}>(+{finMoney(h.clearedIn)} / −{finMoney(h.clearedOut)})</span></td>
+                <td style={{ fontSize: 12 }}>{h.createdBy}<div style={{ color: "var(--text-tertiary)" }}>{h.createdAt}</div></td>
+                <td>{h.status === "done" ? <span className="badge badge-success">กระทบแล้ว</span> : <><span className="badge badge-neutral">ยกเลิก</span><div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{h.voidReason}</div></>}{h.note ? <div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{h.note}</div> : null}</td>
+                <td>{h.status === "done" && isAdmin && lastDone && lastDone.id === h.id && <button className="btn btn-ghost btn-sm" onClick={() => voidRec(h)}>ยกเลิกรอบ</button>}</td>
+              </tr>
+            ))}
+            {!hist.length && <tr><td colSpan={7} style={{ textAlign: "center", padding: 22, color: "var(--text-tertiary)" }}>ยังไม่มีประวัติ</td></tr>}
+          </tbody>
+        </table>
+        <Pager view={hv}/>
+      </div>
+    </>
   );
 }
 
@@ -356,4 +522,5 @@ window.PageFinRcWait = () => <PageFinance view="RCW"/>;
 window.PageFinPayments = () => <PageFinance view="PAYV"/>;
 window.PageFinOther = () => <PageFinance view="TX"/>;
 window.PageFinLedger = () => <PageFinance view="LED"/>;
+window.PageFinRecon = () => <PageFinance view="REC"/>;
 window.PageFinSettings = () => <PageFinance view="SET"/>;

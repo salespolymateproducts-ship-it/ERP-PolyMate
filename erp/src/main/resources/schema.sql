@@ -304,3 +304,28 @@ create table if not exists erp_user_signatures (
   updated_at   timestamptz not null default now()
 );
 alter table fin_pay_vouchers add column if not exists paid_by_id text;
+
+-- ==========================================================================
+-- การเงิน ขั้น 1C: กระทบยอดบัญชีธนาคารกับ Statement
+--  • 1 รอบ = ติ๊กรายการสมุดเงินที่ตรงกับ Statement + ยอดคงเหลือตาม Statement ต้องตรงกับยอดที่คำนวณ (ผลต่าง 0) จึงยืนยันได้
+--  • รายการที่กระทบแล้วถูกมาร์ก cleared + statement_ref = เลขรอบ (fin_movements เปลี่ยนได้เฉพาะฟิลด์เหล่านี้) · ยกเลิกรอบได้เฉพาะรอบล่าสุดของบัญชี
+-- ==========================================================================
+create table if not exists fin_reconciliations (
+  id                text primary key,
+  account_id        text not null references fin_accounts(id),
+  statement_date    date not null,
+  statement_balance numeric(14,2) not null check (statement_balance >= 0),
+  opening_cleared   numeric(14,2) not null,
+  cleared_in        numeric(14,2) not null,
+  cleared_out       numeric(14,2) not null,
+  item_count        int not null check (item_count > 0),
+  note              text not null default '',
+  status            text not null check (status in ('done','void')),
+  created_by        text not null,
+  created_by_id     text not null,
+  created_at        timestamptz not null default now(),
+  void_reason       text,
+  voided_by         text,
+  voided_at         timestamptz
+);
+create index if not exists idx_fin_recon_account on fin_reconciliations (account_id, statement_date desc, created_at desc);

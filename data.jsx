@@ -217,7 +217,7 @@ const ROLES = {
     color: "#0EA5C7",
     description: "บิลต่างๆ · ภาษี · คงคลัง · ขนส่ง · ข้อมูลซื้อขาย",
     user: { name: "อรอนงค์ เลิศกุล", initial: "อร", title: "บัญชี" },
-    pages: ["dashboard", "sales", "customer-po", "customers", "inventory", "shipping", "accounting", "finance", "fin-approvals", "fin-rc-wait", "fin-receipts", "fin-payments", "fin-wht", "fin-other", "fin-ledger"],
+    pages: ["dashboard", "sales", "customer-po", "customers", "inventory", "shipping", "accounting", "finance", "fin-approvals", "fin-rc-wait", "fin-receipts", "fin-payments", "fin-wht", "fin-other", "fin-ledger", "fin-recon"],
     canEdit: ["sales", "accounting"],
     approve: ["BN", "INV", "RC", "PAY"],
   },

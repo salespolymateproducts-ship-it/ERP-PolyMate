@@ -187,7 +187,7 @@ public class FinanceService {
 		Map<String, Object> acc = account(accountId);
 		List<Map<String, Object>> rows = jdbc.queryForList(
 			"select m.id, to_char(m.mv_date,'YYYY-MM-DD') as date, m.direction, m.amount::float8 as amount, m.source_type as \"sourceType\", m.source_id as \"sourceId\", m.description, m.reversal_of as \"reversalOf\", "
-			+ "m.created_by as \"createdBy\", m.cleared from fin_movements m where m.account_id = ? order by m.mv_date, m.id", accountId);
+			+ "m.created_by as \"createdBy\", m.cleared, m.statement_ref as \"statementRef\" from fin_movements m where m.account_id = ? order by m.mv_date, m.id", accountId);
 		double bal = ((Number) acc.get("openingBalance")).doubleValue();
 		List<Map<String, Object>> out = new ArrayList<>();
 		for (Map<String, Object> r : rows) {

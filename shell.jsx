@@ -31,6 +31,7 @@ const NAV = [
   { sub: "เงินและบัญชี", grp: "fin" },
   { id: "fin-other", label: "รับ/จ่าย/โอนอื่น ๆ", icon: "Wallet", grp: "fin" },
   { id: "fin-ledger", label: "สมุดเงิน", icon: "Wallet", grp: "fin" },
+  { id: "fin-recon", label: "กระทบยอดธนาคาร", icon: "Wallet", grp: "fin" },
   { id: "finance", label: "บัญชีเงิน", icon: "Wallet", grp: "fin" },
   { id: "fin-settings", label: "ตั้งค่าการเงิน", icon: "Settings", grp: "fin" },
   { section: "บุคคล" },

@@ -23,6 +23,7 @@ const PAGES = {
   "fin-payments":  { title: "จ่ายเงิน (ใบสำคัญจ่าย)", crumb: ["PolyMate", "การเงิน", "จ่ายเงิน"], Comp: PageFinPayments },
   "fin-wht":       { title: "ภาษีหัก ณ ที่จ่าย (ค่าใช้จ่าย)", crumb: ["PolyMate", "การเงิน", "ภาษีหัก ณ ที่จ่าย"], Comp: window.PageFinWht },
   "fin-other":     { title: "รับ/จ่าย/โอนอื่น ๆ", crumb: ["PolyMate", "การเงิน", "รับ/จ่าย/โอนอื่น ๆ"], Comp: PageFinOther },
+  "fin-recon":     { title: "กระทบยอดธนาคาร", crumb: ["PolyMate", "การเงิน", "กระทบยอดธนาคาร"], Comp: window.PageFinRecon },
   "fin-ledger":    { title: "สมุดเงิน", crumb: ["PolyMate", "การเงิน", "สมุดเงิน"], Comp: PageFinLedger },
   "fin-settings":  { title: "ตั้งค่าการเงิน", crumb: ["PolyMate", "การเงิน", "ตั้งค่า"], Comp: PageFinSettings },
   hr:           { title: "พนักงาน",       crumb: ["PolyMate", "บุคคล", "พนักงาน"], Comp: PageHR },
