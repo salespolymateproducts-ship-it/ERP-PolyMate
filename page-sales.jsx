@@ -19,7 +19,12 @@ const STATUS_FILTERS = [
 ];
 
 function DocStatusBadge({ doc }) {
-  const s = Workflow.statusInfo(doc);
+  let s = Workflow.statusInfo(doc);
+  // ใบเสนอราคา/ใบสั่งขายที่ตั้งแผนแบ่งงวดแล้ว (อนุมัติแล้ว) → แสดงสถานะ "แบ่งชำระ n/N" แทน "อนุมัติแล้ว"
+  if ((doc.type === "QT" || doc.type === "SO") && (doc.plan || []).length > 0 && Workflow.isLive(doc)) {
+    const n = Workflow.instInvoices(doc.id).length, N = doc.plan.length;
+    s = { th: n >= N ? "แบ่งชำระ · ออกครบทุกงวด" : "แบ่งชำระ " + n + "/" + N, color: n >= N ? "success" : "info" };
+  }
   return <span className={"badge badge-" + s.color}><span className="b-dot"/>{s.th}</span>;
 }
 
@@ -103,7 +108,9 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
                 const pay = d.type === "INV" ? Workflow.paymentInfo(d) : null;
                 return (
                   <tr key={d.id} style={{ cursor: "pointer", opacity: d.status === "cancelled" ? 0.55 : 1 }} onClick={() => setOpenId(d.id)}>
-                    <td className="mono"><b style={{ textDecoration: d.status === "cancelled" ? "line-through" : "none" }}>{d.id}</b></td>
+                    <td className="mono"><b style={{ textDecoration: d.status === "cancelled" ? "line-through" : "none" }}>{d.id}</b>
+                      {Workflow.isInstInv(d) && <div><span className="badge badge-info" style={{ fontSize: 10.5 }}>งวดที่ {d.installment.no}/{d.installment.of}</span></div>}
+                      {(d.type === "QT" || d.type === "SO") && (d.plan || []).length > 0 && <div><span className="badge badge-neutral" style={{ fontSize: 10.5 }}>แบ่งงวด {Workflow.instInvoices(d.id).length}/{d.plan.length}</span></div>}</td>
                     <td><DocBadge type={d.type}/></td>
                     <td><div style={{ fontSize: 13, fontWeight: 500 }}>{d.customerName}</div><div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{d.refNo ? "PO: " + d.refNo : d.customer}</div></td>
                     <td className="num" style={{ fontSize: 12.5 }}>{d.date}</td>
@@ -234,6 +241,7 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
         onPrint={() => { setView("doc"); printDoc(doc.id); }}/>
 
       {doc.type === "RC" && window.RcCollectBadge && <RcCollectBadge doc={doc}/>}
+      {(doc.type === "QT" || doc.type === "SO" || Workflow.isInstInv(doc)) && <BillingPlanCard doc={doc} onOpen={onOpen}/>}
       {doc.type === "SO" && live && <TradeStockBanner doc={doc}/>}
       <div style={{ padding: "12px 18px 0" }}>
         <DocFlowStrip doc={doc} rel={rel} onOpen={onOpen}/>
@@ -260,6 +268,104 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
       {woOpen && <WOModal so={doc} onClose={() => setWoOpen(false)}/>}
       {shipOpen && <ShipModal doc={doc} to={shipOpen} onClose={() => setShipOpen(null)}/>}
     </Drawer>
+  );
+}
+
+// =================== แผนเรียกเก็บเงินแบบแบ่งงวด (1B) ===================
+// แผนเก็บที่ใบเสนอราคา (ถ้าใบสั่งขายมาจาก QT ใบเดียว) — ใบสั่งขายแสดงแผนเดิมแบบอ่านอย่างเดียว · ออกใบกำกับของงวดได้จากทั้งสองใบ
+function BillingPlanCard({ doc, onOpen }) {
+  const [edit, setEdit] = useState(false);
+  const root = Workflow.billingRoot(doc);
+  if (!root) return null;
+  const info = Workflow.planInfo(root);
+  const isRoot = root.id === doc.id;
+  const canEdit = isRoot && Workflow.canEditType(root.type) && root.status !== "cancelled";
+  const canIssue = Workflow.canEditType("INV") && Workflow.isLive(root);
+  if (!info.hasPlan && !(canEdit && (doc.type === "QT" || doc.type === "SO"))) return null;
+  if (!info.hasPlan) {
+    return (
+      <div className="no-print" style={{ margin: "12px 18px 0", padding: "9px 12px", border: "1px dashed var(--border)", borderRadius: 10, display: "flex", gap: 10, alignItems: "center", fontSize: 12.5, flexWrap: "wrap" }}>
+        <span style={{ color: "var(--text-secondary)" }}>เรียกเก็บเงินแบบแบ่งงวดได้ (เช่น 50% / 50%) — ตั้งแผนแล้วออกใบกำกับภาษีทีละงวด</span>
+        <button className="btn btn-outline btn-sm" style={{ marginLeft: "auto" }} onClick={() => setEdit(true)}>ตั้งแผนเรียกเก็บ</button>
+        {edit && <BillingPlanModal root={root} onClose={() => setEdit(false)}/>}
+      </div>
+    );
+  }
+  const issue = (no) => { const d = runAction(() => Workflow.issueInstallment(root.id, no), (x) => `ออกใบกำกับงวดที่ ${no} (${x.id}) แล้ว — ฉบับร่าง รออนุมัติ`); if (d && onOpen) onOpen(d.id); };
+  const done = info.remaining <= 0.004;
+  const st = (r) => (r.inv ? Workflow.statusInfo(r.inv).th : "ยังไม่ออก");
+  return (
+    <div className="no-print" style={{ margin: "12px 18px 0", border: "1px solid " + (done ? "var(--success)" : "var(--amber)"), borderRadius: 10, overflow: "hidden" }}>
+      <div style={{ padding: "9px 12px", background: done ? "var(--success-subtle)" : "var(--amber-subtle)", color: done ? "var(--success)" : "var(--amber)", fontSize: 12.5, fontWeight: 600, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <I.Alert size={14}/>
+        <span>{done ? "เรียกเก็บครบ 100% แล้ว" : `เรียกเก็บแล้ว ${_fmt(info.billedPct, 2)}% (${info.rows.filter((r) => r.inv).length} จาก ${info.N} งวด) · เหลืออีก ${_fmt(info.remainingPct, 2)}% (${_fmt(info.remaining, 2)} บาท ก่อน VAT) — ยังเปิดบิลต่อได้`}</span>
+        {!isRoot && <span style={{ fontWeight: 400 }}>· แผนอยู่ที่ <a style={{ cursor: "pointer", textDecoration: "underline" }} onClick={() => onOpen && onOpen(root.id)}>{root.id}</a></span>}
+        {canEdit && <button className="btn btn-outline btn-sm" style={{ marginLeft: "auto" }} onClick={() => setEdit(true)}>แก้แผน</button>}
+      </div>
+      <table className="table" style={{ margin: 0, fontSize: 12.5 }}>
+        <thead><tr><th>งวด</th><th>ชื่องวด</th><th className="num">%</th><th className="num">ก่อน VAT</th><th className="num">VAT</th><th className="num">รวม</th><th>ใบกำกับ / สถานะ</th><th></th></tr></thead>
+        <tbody>
+          {info.rows.map((r) => (
+            <tr key={r.no} style={{ opacity: r.inv ? 1 : 0.95 }}>
+              <td>{r.no}/{info.N}</td><td>{r.label}</td><td className="num">{_fmt(r.pct, 2)}</td>
+              <td className="num">{_fmt(r.amount, 2)}</td><td className="num">{r.vat ? _fmt(r.vat, 2) : "—"}</td><td className="num"><b>{_fmt(r.total, 2)}</b></td>
+              <td>{r.inv ? <><a className="mono" style={{ cursor: "pointer", textDecoration: "underline" }} onClick={() => onOpen && onOpen(r.inv.id)}>{r.inv.id}</a> <span className={"badge badge-" + Workflow.statusInfo(r.inv).color}>{st(r)}</span></> : <span style={{ color: "var(--text-tertiary)" }}>ยังไม่ออก</span>}</td>
+              <td style={{ textAlign: "right" }}>{!r.inv && <button className="btn btn-primary btn-sm" disabled={!canIssue || r.amount <= 0.004} title={!canIssue ? (Workflow.isLive(root) ? "ไม่มีสิทธิ์" : "ต้องอนุมัติ " + root.id + " ก่อน") : ""} onClick={() => issue(r.no)}>ออกใบกำกับงวดนี้</button>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {edit && <BillingPlanModal root={root} onClose={() => setEdit(false)}/>}
+    </div>
+  );
+}
+
+function BillingPlanModal({ root, onClose }) {
+  const info = Workflow.planInfo(root);
+  const [rows, setRows] = useState(info.hasPlan ? info.rows.map((r) => ({ label: r.label, pct: String(r.pct), locked: !!r.inv })) : [{ label: "งวดที่ 1", pct: "50" }, { label: "งวดที่ 2", pct: "50" }]);
+  const [err, setErr] = useState("");
+  const sum = Math.round(rows.reduce((s, r) => s + (Number(r.pct) || 0), 0) * 100) / 100;
+  const set = (i, k, v) => setRows(rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
+  const preset = (arr) => setRows(arr.map((p, i) => ({ label: p.label || "งวดที่ " + (i + 1), pct: String(p.pct) })));
+  const sub = Number(root.subtotal) || 0;
+  const save = () => {
+    setErr("");
+    try { Workflow.setBillingPlan(root.id, rows.map((r) => ({ label: r.label, pct: r.pct }))); notify("บันทึกแผนเรียกเก็บของ " + root.id + " แล้ว", "success"); onClose(); }
+    catch (e) { setErr(e && e.message ? e.message : String(e)); }
+  };
+  const clear = () => {
+    if (!window.confirm("ล้างแผนเรียกเก็บของ " + root.id + "?")) return;
+    try { Workflow.setBillingPlan(root.id, []); notify("ล้างแผนแล้ว", "success"); onClose(); } catch (e) { setErr(e && e.message ? e.message : String(e)); }
+  };
+  return (
+    <ErpModal title={"แผนเรียกเก็บเงินแบบแบ่งงวด · " + root.id} width={640} onClose={onClose}
+      footer={<>{info.hasPlan && <button className="btn btn-ghost btn-sm" style={{ marginRight: "auto", color: "var(--danger)" }} onClick={clear}>ล้างแผน</button>}
+        <button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" onClick={save}>บันทึกแผน</button></>}>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>แต่ละงวดคือใบกำกับภาษีของงวดนั้น (ยอดงวด + VAT) · งวดสุดท้ายใช้ยอดคงเหลือ · มูลค่าก่อน VAT ของ {root.id}: <b>{_fmt(sub, 2)}</b> บาท</div>
+      <div style={{ display: "flex", gap: 6, margin: "10px 0", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, alignSelf: "center" }}>แบบสำเร็จรูป:</span>
+        <button className="btn btn-outline btn-sm" onClick={() => preset([{ pct: 50 }, { pct: 50 }])}>50 / 50</button>
+        <button className="btn btn-outline btn-sm" onClick={() => preset([{ pct: 30 }, { pct: 40 }, { pct: 30 }])}>30 / 40 / 30</button>
+        <button className="btn btn-outline btn-sm" onClick={() => preset([{ pct: 40 }, { pct: 30 }, { pct: 30 }])}>40 / 30 / 30</button>
+      </div>
+      <table className="table" style={{ fontSize: 12.5 }}>
+        <thead><tr><th style={{ width: 48 }}>งวด</th><th>ชื่องวด</th><th style={{ width: 110 }} className="num">เปอร์เซ็นต์</th><th style={{ width: 140 }} className="num">ก่อน VAT (โดยประมาณ)</th><th style={{ width: 40 }}></th></tr></thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={i}>
+              <td>{i + 1}</td>
+              <td><input className="input" value={r.label} disabled={r.locked} onChange={(e) => set(i, "label", e.target.value)} placeholder="เช่น ตอนสั่งซื้อ / ตอนส่งมอบ"/></td>
+              <td><input className="input num" type="number" min="0" step="0.01" value={r.pct} disabled={r.locked} onChange={(e) => set(i, "pct", e.target.value)}/></td>
+              <td className="num">{_fmt(Math.round(sub * (Number(r.pct) || 0)) / 100, 2)}</td>
+              <td>{!r.locked && rows.length > 2 && <button className="btn btn-ghost btn-sm" onClick={() => setRows(rows.filter((_, j) => j !== i))} aria-label="ลบงวด">✕</button>}{r.locked && <span title="ออกใบกำกับแล้ว แก้ไม่ได้" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>ล็อก</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot><tr style={{ fontWeight: 700 }}><td colSpan={2} style={{ textAlign: "right" }}>รวม</td><td className="num" style={{ color: Math.abs(sum - 100) > 0.005 ? "var(--danger)" : "var(--success)" }}>{_fmt(sum, 2)}%</td><td colSpan={2}></td></tr></tfoot>
+      </table>
+      {rows.length < Workflow.MAX_INST && <button className="btn btn-outline btn-sm" onClick={() => setRows([...rows, { label: "งวดที่ " + (rows.length + 1), pct: "0" }])}>+ เพิ่มงวด</button>}
+      {err && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+    </ErpModal>
   );
 }
 
@@ -509,7 +615,7 @@ function DocPaper({ doc }) {
             <tbody>{(doc.lines || []).map((it, i) => (
               <tr key={i} style={{ borderBottom: "1px solid #E6E8EC" }}>
                 <td style={{ padding: 10, ...muted }}>{i + 1}</td>
-                <td style={{ padding: 10 }}><div className="mono" style={{ fontSize: 11, ...muted }}>{it.code}</div><div style={{ fontWeight: 500 }}>{it.name}</div></td>
+                <td style={{ padding: 10 }}><div className="mono" style={{ fontSize: 11, ...muted }}>{it.code}</div><div style={{ fontWeight: 500, whiteSpace: "pre-line" }}>{it.name}</div></td>
                 <td className="num" style={{ padding: 10, textAlign: "right" }}>{_fmt(it.qty)} <span style={{ fontSize: 11, ...muted }}>{it.unit}</span></td>
                 <td className="num" style={{ padding: 10, textAlign: "right" }}>{_fmt(it.price, 2)}</td>
                 <td className="num" style={{ padding: 10, textAlign: "right" }}>{it.disc ? it.disc + "%" : "—"}</td>
@@ -834,7 +940,9 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
                 <tr key={i}>
                   <td><input className="input input-sm" list="erp-products" aria-label="รหัสสินค้า" value={l.code === "-" ? "" : l.code} disabled={locked} onChange={(e) => onCode(i, e.target.value)} placeholder="—"/>
                     {locked && <div className="mono" style={{ fontSize: 10.5, color: "var(--accent)" }}>จาก {l.src.doc}</div>}</td>
-                  <td><input className="input input-sm" aria-label="ชื่อรายการ" value={l.name} disabled={locked} onChange={(e) => setLine(i, { name: e.target.value })} placeholder="ชื่อสินค้า / รายละเอียด"/></td>
+                  <td><textarea className="input input-sm" aria-label="ชื่อรายการ" value={l.name} disabled={locked} rows={Math.min(8, Math.max(1, String(l.name || "").split("\n").length))}
+                    onChange={(e) => setLine(i, { name: e.target.value })} placeholder={"ชื่อสินค้า / รายละเอียด\n(กด Enter เพื่อขึ้นบรรทัดใหม่ เช่น วัสดุ / Cavity)"}
+                    style={{ height: "auto", minHeight: 34, resize: "vertical", lineHeight: 1.5, paddingTop: 6, paddingBottom: 6, fontFamily: "inherit" }}/></td>
                   <td><input className="input input-sm num" type="number" min="0" aria-label="จำนวน" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} style={{ textAlign: "right" }}/></td>
                   <td><input className="input input-sm" aria-label="หน่วย" value={l.unit} disabled={locked} onChange={(e) => setLine(i, { unit: e.target.value })}/></td>
                   <td><input className="input input-sm num" type="number" min="0" aria-label="ราคา" value={l.price} disabled={locked} onChange={(e) => setLine(i, { price: e.target.value })} style={{ textAlign: "right" }}/></td>

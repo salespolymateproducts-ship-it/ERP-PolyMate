@@ -220,6 +220,7 @@ const Workflow = (function () {
         }
         if (doc.type === "RC" ? rcAmounts(doc).remaining <= 0.005 : !remainingLines(doc).some((l) => l.remaining > EPS))
           return no(doc.type === "RC" ? "รับชำระครบแล้ว" : "ไม่มีรายการคงเหลือให้ออกเอกสารต่อ");
+        if (doc.type === "DO") { const lk = installmentLock(doc); if (lk) return no(lk); }     // แผนแบ่งงวด → ไม่ออกใบกำกับจากใบส่งสินค้า
         return canEditType(NEXT[doc.type][0]) ? ok : no("ไม่มีสิทธิ์สร้างเอกสารถัดไป");
       default: return no("unknown action");
     }
@@ -231,6 +232,113 @@ const Workflow = (function () {
     const used = new Set(children(doc.id).map((c) => c.type));
     const lock = n.filter((t) => used.has(t));
     return lock.length ? lock : n;
+  }
+
+  // ---------------- แผนเรียกเก็บเงินแบบแบ่งงวด (1B) ----------------
+  /*
+    การรับชำระแบบแบ่งงวด: แต่ละงวดคือใบกำกับภาษีปกติของงวดนั้น (ยอดงวด + VAT) ใบงวดสุดท้ายแสดงเฉพาะส่วนที่เหลือ
+    • แผน = root.plan = [{ label, pct }] เก็บที่ใบเสนอราคา (QT) — ถ้าใบสั่งขายไม่ได้มาจาก QT ใบเดียว ก็เก็บที่ใบสั่งขายนั้น
+    • ใบกำกับของงวด: type INV, sourceIds [root], lines 1 รายการ (ไม่มี src จึงไม่กินจำนวนสินค้าต้นทาง), doc.installment = { root, no, of, label, pct }
+    • สถานะของแต่ละงวดคำนวณจากใบกำกับที่ยังไม่ยกเลิก (ยกเลิกใบ → งวดกลับเป็น "ยังไม่ออก") ไม่เก็บซ้ำ
+    • กติกา: ยอดทุกงวดรวมกันห้ามเกินยอดต้นทาง · ถ้าตั้งแผนแล้ว ห้ามออกใบกำกับจากใบส่งสินค้า (และกลับกัน) กันเรียกเก็บซ้ำสองทาง
+  */
+  const MAX_INST = 12;
+  const isInstInv = (d) => !!(d && d.type === "INV" && d.installment && d.installment.root);
+  function instInvoices(rootId, includeCancelled) {
+    return docs().filter((d) => isInstInv(d) && d.installment.root === rootId && (includeCancelled || isActive(d)));
+  }
+  function billingRoot(doc) {
+    if (!doc) return null;
+    if (isInstInv(doc)) return get(doc.installment.root);
+    if (doc.type === "DO") { const so = parents(doc).find((p) => p.type === "SO"); return so ? billingRoot(so) : null; }
+    if (doc.type === "SO") { const qts = parents(doc).filter((p) => p.type === "QT"); return qts.length === 1 ? qts[0] : doc; }
+    if (doc.type === "QT") return doc;
+    return null;
+  }
+  // มีใบกำกับภาษีที่ออกทางใบส่งสินค้า (ไม่ใช่งวด) ในสายนี้แล้วหรือไม่
+  function orderHasNormalInvoice(root) {
+    return related(root.id).downstream.some((d) => d.type === "INV" && isActive(d) && !isInstInv(d));
+  }
+  function installmentLock(doc) {
+    const roots = parents(doc).filter((p) => p.type === "SO").map(billingRoot).filter(Boolean);
+    const hit = roots.find((r) => (r.plan || []).length > 0);
+    return hit ? `${hit.id} เรียกเก็บเงินแบบแบ่งงวด — ออกใบกำกับภาษีตามงวดจาก ${hit.id} (ไม่ออกจากใบส่งสินค้า)` : null;
+  }
+  function planInfo(root) {
+    const plan = root.plan || [];
+    const sub = Number(root.subtotal) || 0;
+    const invs = instInvoices(root.id);
+    const byNo = {}; invs.forEach((d) => { byNo[d.installment.no] = d; });
+    const issued = r2(invs.reduce((s, d) => s + (d.subtotal || 0), 0));
+    const remaining = r2(sub - issued);
+    const planned = plan.map((p) => r2(sub * (Number(p.pct) || 0) / 100));
+    const N = plan.length;
+    const rows = plan.map((p, i) => {
+      const no = i + 1, inv = byNo[no] || null;
+      let amount;
+      if (inv) amount = inv.subtotal;
+      else {
+        amount = no === N ? r2(sub - plan.reduce((s, _, j) => (j === i ? s : s + (byNo[j + 1] ? byNo[j + 1].subtotal : planned[j])), 0)) : planned[i];
+        amount = Math.max(0, Math.min(amount, remaining));      // ไม่ให้เกินยอดที่เหลือ (เศษสตางค์)
+      }
+      const vat = root.vatOn ? r2(amount * VAT_RATE / 100) : 0;
+      return { no, label: p.label, pct: Number(p.pct) || 0, amount, vat, total: r2(amount + vat), inv };
+    });
+    return { rows, N, issued, remaining, billedPct: sub > 0 ? r2(issued / sub * 100) : 0, remainingPct: sub > 0 ? r2(remaining / sub * 100) : 0, subtotal: sub, vatOn: !!root.vatOn, hasPlan: N > 0 };
+  }
+  function setBillingPlan(rootId, rowsIn) {
+    return S.tx("billingPlan", () => {
+      const root = mustGet(rootId);
+      if (root.type !== "QT" && root.type !== "SO") fail("ตั้งแผนเรียกเก็บได้เฉพาะใบเสนอราคา / ใบสั่งขาย");
+      const br = billingRoot(root);
+      if (br && br.id !== root.id) fail(`แผนเรียกเก็บของใบนี้อยู่ที่ ${br.id}`);
+      if (!canEditType(root.type)) fail("ไม่มีสิทธิ์ตั้งแผนเรียกเก็บ");
+      if (root.status === "cancelled") fail("เอกสารถูกยกเลิกแล้ว");
+      if (orderHasNormalInvoice(root)) fail("มีใบกำกับภาษีที่ออกจากใบส่งสินค้าแล้ว — ตั้งแผนแบ่งงวดไม่ได้");
+      const rows = (rowsIn || []).map((r) => ({ label: String(r.label || "").trim(), pct: r2(Number(r.pct) || 0) }));
+      const invs = instInvoices(root.id);
+      if (!rows.length) {
+        if (invs.length) fail(`มีใบกำกับงวดที่ยังไม่ยกเลิก (${invs.map((d) => d.id).join(", ")}) — ยกเลิกก่อนจึงจะล้างแผนได้`);
+        root.plan = []; pushHistory(root, "plan", null, null, "ล้างแผนเรียกเก็บ"); S.log("PLAN", label(root.type), root.id, "ล้างแผนเรียกเก็บ");
+        return root;
+      }
+      if (rows.length < 2) fail("แผนแบ่งงวดต้องมีอย่างน้อย 2 งวด");
+      if (rows.length > MAX_INST) fail(`แบ่งได้ไม่เกิน ${MAX_INST} งวด`);
+      rows.forEach((r, i) => { if (!r.label) fail(`งวดที่ ${i + 1}: กรุณาระบุชื่องวด`); if (!(r.pct > 0)) fail(`งวดที่ ${i + 1}: เปอร์เซ็นต์ต้องมากกว่า 0`); });
+      const sum = r2(rows.reduce((s, r) => s + r.pct, 0));
+      if (Math.abs(sum - 100) > 0.005) fail(`เปอร์เซ็นต์ทุกงวดรวมกันต้องเท่ากับ 100 (ตอนนี้ ${sum})`);
+      invs.forEach((d) => {                       // งวดที่ออกใบกำกับแล้วเปลี่ยนไม่ได้
+        const r = rows[d.installment.no - 1];
+        if (!r || r.pct !== d.installment.pct || r.label !== d.installment.label) fail(`งวดที่ ${d.installment.no} ออกใบกำกับแล้ว (${d.id}) — แก้ชื่อ/เปอร์เซ็นต์ไม่ได้ (ยกเลิกใบกำกับก่อน)`);
+      });
+      root.plan = rows;
+      pushHistory(root, "plan", null, null, rows.map((r) => `${r.label} ${r.pct}%`).join(" · "));
+      S.log("PLAN", label(root.type), root.id, "ตั้งแผนเรียกเก็บ " + rows.map((r) => `${r.label} ${r.pct}%`).join(" / "));
+      return root;
+    });
+  }
+  function issueInstallment(rootId, no, opts) {
+    return S.tx("issueInstallment", () => {
+      opts = opts || {};
+      const root = mustGet(rootId);
+      if (!canEditType("INV")) fail("ไม่มีสิทธิ์สร้างใบกำกับภาษี");
+      if (!isLive(root)) fail(`ต้องอนุมัติ ${root.id} ก่อนจึงออกใบกำกับงวดได้`);
+      if (orderHasNormalInvoice(root)) fail("มีใบกำกับภาษีที่ออกจากใบส่งสินค้าแล้ว — ออกตามงวดไม่ได้");
+      const info = planInfo(root);
+      const row = info.rows[no - 1];
+      if (!row) fail(`ไม่พบงวดที่ ${no}`);
+      if (row.inv) fail(`งวดที่ ${no} ออกใบกำกับแล้ว (${row.inv.id})`);
+      if (row.amount <= 0.004) fail("ยอดงวดนี้เป็นศูนย์ (เรียกเก็บครบแล้ว)");
+      const doc = saveDraft({
+        type: "INV", customer: root.customer, date: opts.date || S.today(), sourceIds: [root.id], refNo: root.refNo || "", note: opts.note || "",
+        vatOn: !!root.vatOn, whtRate: root.whtRate || 0, billDisc: 0,
+        lines: [{ code: "-", name: `งวดที่ ${no}/${info.N} — ${row.label} (${row.pct}% ของ ${root.id})`, qty: 1, unit: "งวด", price: row.amount, disc: 0 }],
+        installment: { root: root.id, no, of: info.N, label: row.label, pct: row.pct },
+        _fromNote: `งวดที่ ${no}/${info.N} จากแผนเรียกเก็บของ ${root.id}`,
+      });
+      S.log("INSTALLMENT", label("INV"), doc.id, `ออกใบกำกับงวดที่ ${no}/${info.N} (${row.pct}%) จาก ${root.id} ยอด ${row.amount.toLocaleString()} + VAT`);
+      return doc;
+    });
   }
 
   // ---------------- Validation ----------------
@@ -263,6 +371,18 @@ const Workflow = (function () {
     });
     const c = calc(doc);
     if (Number(doc.billDisc) > c.gross + 0.005) fail("ส่วนลดท้ายบิลมากกว่ายอดรวม");
+    // ใบกำกับของงวด: 1 รายการ · งวดละใบ · ยอดทุกงวดรวมกันไม่เกินยอดต้นทาง
+    if (doc.installment) {
+      const root = get(doc.installment.root);
+      if (!root) fail(`ไม่พบเอกสารต้นทางของแผนเรียกเก็บ ${doc.installment.root}`);
+      if (root.status === "cancelled") fail(`เอกสารต้นทาง ${root.id} ถูกยกเลิกแล้ว`);
+      if (lines.length !== 1) fail("ใบกำกับของงวดมีได้ 1 รายการ");
+      const others = instInvoices(root.id).filter((d) => d.id !== selfId);
+      const dup = others.find((d) => d.installment.no === doc.installment.no);
+      if (dup) fail(`งวดที่ ${doc.installment.no} มีใบกำกับแล้ว (${dup.id})`);
+      const room = r2((Number(root.subtotal) || 0) - others.reduce((s, d) => s + (d.subtotal || 0), 0));
+      if (c.subtotal > room + 0.01) fail(`ยอดงวดนี้ (${c.subtotal.toLocaleString()}) เกินยอดที่เรียกเก็บได้ของ ${root.id} (เหลือ ${room.toLocaleString()} ก่อน VAT)`);
+    }
     // รายการที่อ้างอิงต้นทาง → ตรวจไม่ให้เกินคงเหลือ
     const bySrc = {};
     lines.forEach((l, i) => {
@@ -319,6 +439,7 @@ const Workflow = (function () {
         vatOn: form.vatOn != null ? !!form.vatOn : !NO_VAT_DEFAULT.includes(form.type),
         whtRate: Number(form.whtRate) || 0, billDisc: r2(form.billDisc || 0),
       };
+      if (isNew && form.installment) fields.installment = { root: form.installment.root, no: form.installment.no, of: form.installment.of, label: form.installment.label, pct: form.installment.pct };   // ใบกำกับของงวด (1B)
       if (doc.type === "RC") fields.collector = String(form.collector || "").trim();   // ผู้เก็บเงิน (พนักงานที่พกใบเสร็จไปเก็บเงิน)
       if (doc.type === "PAY") Object.assign(fields, { amount: r2(form.amount), method: form.method || "โอนเงิน", bankRef: form.bankRef || "", vatOn: false, whtRate: 0, lines: [] });
       else fields.lines = normalizeLines(form.lines);
@@ -622,6 +743,7 @@ const Workflow = (function () {
     statusInfo, can, canApproveType, canEditType, nextTypes, openSources, blank, addDays,
     saveDraft, submit, approve, reject, cancel, remove, convert, setShipStatus, createWorkOrders,
     isLive, isActive, label,
+    billingRoot, planInfo, setBillingPlan, issueInstallment, instInvoices, isInstInv, installmentLock, MAX_INST,
   };
 })();
 
