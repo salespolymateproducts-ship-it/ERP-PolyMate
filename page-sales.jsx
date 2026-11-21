@@ -219,7 +219,8 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
   const [reason, setReason] = useState(null); // "cancel" | "reject"
   const [woOpen, setWoOpen] = useState(false);
   const [shipOpen, setShipOpen] = useState(null);
-  useEffect(() => { setView("doc"); }, [id]);
+  const [sigImg, setSigImg] = useState(null);   // ภาพลายเซ็นผู้อนุมัติ (มีเฉพาะระหว่างพิมพ์)
+  useEffect(() => { setView("doc"); setSigImg(null); }, [id]);
   if (!doc) return null;
   const rel = Workflow.related(doc.id);
   const can = (a) => Workflow.can(a, doc);
@@ -238,7 +239,21 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
         onWO={() => setWoOpen(true)}
         onShip={(s) => setShipOpen(s)}
         onRelated={() => setView("related")}
-        onPrint={() => { setView("doc"); printDoc(doc.id); }}/>
+        onPrint={async () => {
+          setView("doc");
+          // ลายเซ็นอิเล็กทรอนิกส์ (ระดับ 2): ดึงภาพของผู้อนุมัติมาแสดงเฉพาะตอนพิมพ์ (บันทึก Audit Log) แล้วถอดออกหลังพิมพ์
+          setSigImg(null);
+          if (Workflow.isLive(doc) && doc.approvedBy) {
+            try {
+              const r = await Store.sigApi("GET", "/for/doc/" + doc.id);
+              const s = (r.signers || []).find((x) => x.role === "approver");
+              if (s && s.image) { setSigImg(s.image); await new Promise((res) => setTimeout(res, 150)); }
+            } catch (e) { /* พิมพ์ต่อโดยไม่มีภาพ */ }
+          }
+          const clear = () => { setSigImg(null); window.removeEventListener("afterprint", clear); };
+          window.addEventListener("afterprint", clear);
+          printDoc(doc.id);
+        }}/>
 
       {doc.type === "RC" && window.RcCollectBadge && <RcCollectBadge doc={doc}/>}
       {(doc.type === "QT" || doc.type === "SO" || Workflow.isInstInv(doc)) && <BillingPlanCard doc={doc} onOpen={onOpen}/>}
@@ -254,7 +269,7 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
         </div>
       </div>
 
-      {view === "doc" && <DocPaper doc={doc}/>}
+      {view === "doc" && <DocPaper doc={doc} sigImg={sigImg}/>}
       {view === "related" && <DocRelated doc={doc} rel={rel} onOpen={onOpen}/>}
       {view === "history" && <DocHistory doc={doc}/>}
 
@@ -534,7 +549,7 @@ function DocHistory({ doc }) {
 }
 
 // =================== เอกสารสำหรับพิมพ์ ===================
-function DocPaper({ doc }) {
+function DocPaper({ doc, sigImg }) {
   const meta = DOC_LABEL[doc.type];
   const c = doc.customerSnap || {};
   const muted = { color: "#5B6478" };
@@ -653,8 +668,10 @@ function DocPaper({ doc }) {
         <div className="print-keep sig-block" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 60, marginTop: "auto", paddingTop: 36, fontSize: 11, textAlign: "center", ...muted }}>
           <div><div style={{ borderTop: "1px solid #5B6478", paddingTop: 6 }}>{doc.type === "DO" ? "ผู้รับสินค้า" : doc.type === "PAY" || doc.type === "RC" ? "ผู้รับเงิน" : "ผู้รับเอกสาร"}</div>
             <div style={{ marginTop: 6 }}>{doc.type === "DO" && doc.ship && doc.ship.receivedBy ? doc.ship.receivedBy : "วันที่ ____ / ____ / ____"}</div></div>
-          <div><div style={{ borderTop: "1px solid #5B6478", paddingTop: 6 }}>ผู้มีอำนาจลงนาม</div>
-            <div style={{ marginTop: 6 }}>{doc.approvedBy ? `${doc.approvedBy} · ${String(doc.approvedAt).slice(0, 10)}` : "วันที่ ____ / ____ / ____"}</div></div>
+          <div style={{ position: "relative" }}>
+            {sigImg && <img src={sigImg} alt="" style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: "calc(100% - 4px)", maxHeight: 44, maxWidth: "80%", objectFit: "contain" }}/>}
+            <div style={{ borderTop: "1px solid #5B6478", paddingTop: 6 }}>ผู้มีอำนาจลงนาม</div>
+            <div style={{ marginTop: 6 }}>{doc.approvedBy ? `${doc.approvedBy} · ${String(doc.approvedAt).slice(0, 16)}` : "วันที่ ____ / ____ / ____"}</div></div>
         </div>
       </div>
     </div>

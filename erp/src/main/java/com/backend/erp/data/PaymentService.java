@@ -44,7 +44,8 @@ public class PaymentService {
 
 	private static final String PV_SEL = "select v.id, to_char(v.pv_date,'YYYY-MM-DD') as date, v.payee, v.gross::float8 as gross, v.wht::float8 as wht, v.net::float8 as net, v.note, v.status, v.account_id as \"accountId\", "
 		+ "to_char(v.pay_date,'YYYY-MM-DD') as \"payDate\", v.ref_no as \"refNo\", v.wht_cert_no as \"whtCertNo\", to_char(v.wht_cert_date,'YYYY-MM-DD') as \"whtCertDate\", v.created_by as \"createdBy\", "
-		+ "to_char(v.created_at at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI') as \"createdAt\", v.approved_by as \"approvedBy\", v.self_approved as \"selfApproved\", v.paid_by as \"paidBy\", "
+		+ "to_char(v.created_at at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI') as \"createdAt\", v.approved_by as \"approvedBy\", to_char(v.approved_at at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI') as \"approvedAt\", v.self_approved as \"selfApproved\", v.paid_by as \"paidBy\", "
+		+ "to_char(v.paid_at at time zone 'Asia/Bangkok','YYYY-MM-DD HH24:MI') as \"paidAt\", "
 		+ "v.reject_reason as \"rejectReason\", v.void_reason as \"voidReason\", v.voided_by as \"voidedBy\", to_char(v.void_date,'YYYY-MM-DD') as \"voidDate\" from fin_pay_vouchers v";
 
 	private Map<String, Object> voucher(String id) {
@@ -220,8 +221,8 @@ public class PaymentService {
 		}
 		String cert = null;
 		if (wht.signum() > 0) cert = (String) counters.next("WT", payDate.toString()).get("docNo");
-		jdbc.update("update fin_pay_vouchers set status='paid', account_id=?, pay_date=?, ref_no=?, paid_by=?, paid_at=now(), wht_cert_no=?, wht_cert_date=? where id=?",
-			acc, payDate, Json.s(b.get("refNo")).trim(), u.fullName(), cert, cert == null ? null : payDate, id);
+		jdbc.update("update fin_pay_vouchers set status='paid', account_id=?, pay_date=?, ref_no=?, paid_by=?, paid_by_id=?, paid_at=now(), wht_cert_no=?, wht_cert_date=? where id=?",
+			acc, payDate, Json.s(b.get("refNo")).trim(), u.fullName(), u.id(), cert, cert == null ? null : payDate, id);
 		for (Map<String, Object> it : jdbc.queryForList("select expense_id from fin_pay_items where voucher_id = ?", id))
 			jdbc.update("update erp_records set data = data || jsonb_build_object('status','paid','paidDate',?::text,'paidBy',?::text,'payVoucher',?::text), version = version + 1, updated_at = now(), updated_by = ? where collection = 'expenses' and id = ?",
 				payDate.toString(), u.fullName(), id, u.fullName(), it.get("expense_id"));

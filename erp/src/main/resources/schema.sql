@@ -295,3 +295,12 @@ create trigger trg_fin_receipt_rcs_guard before update or delete on fin_receipt_
 update erp_records
    set data = data || jsonb_build_object('doneAt', to_char(updated_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI:SS'))
  where collection = 'workOrders' and data->>'status' = 'done' and coalesce(data->>'doneAt', '') = '';
+
+-- ลายเซ็นอิเล็กทรอนิกส์ระดับ 2: ภาพลายเซ็นของผู้ใช้แต่ละคน (เจ้าของเท่านั้นที่ตั้ง/ลบ · ดึงไปใช้ได้เฉพาะตอนเปิดเอกสารที่ผู้นั้นอนุมัติ/จ่ายแล้ว ผ่าน /signatures/for/...)
+create table if not exists erp_user_signatures (
+  user_id      text primary key references erp_users(id) on delete cascade,
+  content_type text not null check (content_type in ('image/png', 'image/jpeg')),
+  image        bytea not null,
+  updated_at   timestamptz not null default now()
+);
+alter table fin_pay_vouchers add column if not exists paid_by_id text;

@@ -127,6 +127,7 @@ function Topbar({ crumb, theme, onToggleTheme, role, allRoles, onChangeRole, onL
   useStore();
   const notes = window.buildNotifications(role);
   const [pwOpen, setPwOpen] = useState(false);
+  const [sigOpen, setSigOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -296,6 +297,7 @@ function Topbar({ crumb, theme, onToggleTheme, role, allRoles, onChangeRole, onL
                   </div>
                 </div>
                 <ProfileItem icon="Settings" label="เปลี่ยนรหัสผ่าน" onClick={() => { setProfileOpen(false); setPwOpen(true); }}/>
+                <ProfileItem icon="Edit" label="ลายเซ็นของฉัน" onClick={() => { setProfileOpen(false); setSigOpen(true); }}/>
                 {role.pages === "*" && <ProfileItem icon="GitBranch" label="ดู Log การใช้งาน" onClick={() => { setProfileOpen(false); onNav && onNav("audit"); }}/>}
                 <div style={{ height: 1, background: "var(--border)", margin: "6px 0" }}/>
                 <ProfileItem icon="X" label="ออกจากระบบ" danger onClick={() => { setProfileOpen(false); onLogout?.(); }}/>
@@ -305,6 +307,7 @@ function Topbar({ crumb, theme, onToggleTheme, role, allRoles, onChangeRole, onL
         </div>
       </div>
       {pwOpen && <ChangePasswordModal onClose={() => setPwOpen(false)}/>}
+      {sigOpen && <SignatureModal onClose={() => setSigOpen(false)}/>}
     </header>
   );
 }

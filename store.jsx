@@ -549,6 +549,7 @@ const Store = (function () {
   // เรียก server ตรง ๆ (ตรวจกฎและตอบ error ทันที) แล้วโหลดข้อมูลใหม่
   // การเงิน (บัญชีเงิน/สมุดเงิน/รับ-จ่ายอื่น ๆ): เรียก API ตรง — กฎทั้งหมดอยู่ที่เซิร์ฟเวอร์
   const finApi = (method, path, body) => api(method, "/finance" + path, body);
+  const sigApi = (method, path, body) => api(method, "/signatures" + path, body);   // ลายเซ็นอิเล็กทรอนิกส์ (ระดับ 2)
   // ใบเสร็จ/ใบกำกับที่การเงินติดตามแล้ว (ใช้ซ่อนการติดตาม 50 ทวิ แบบเก่า) — ผู้ไม่มีสิทธิ์การเงินจะได้ 403 แล้วใช้แบบเดิม
   async function refreshRcLinks() {
     if (!token) return;
@@ -770,7 +771,7 @@ const Store = (function () {
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
     adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, adjustWoBom, woMaterial, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,
-    isBuyable, productInProduction, finApi, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
+    isBuyable, productInProduction, finApi, sigApi, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
     MACHINE_COND, machineCond, machineUsable, machinePM, machineFit, saveMachine, setMachineCondition, logMachineMaintenance,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,

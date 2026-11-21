@@ -196,13 +196,30 @@ function FinPayPrintModal({ v, accounts, onClose }) {
   const isVoid = v.status === "void", isPaid = v.status === "paid";
   const stTh = (PV_STATUS[v.status] || { th: v.status }).th;
   const b = "1px solid #0B1220", cell = { border: b, padding: "4px 6px", fontSize: 11 }, lab = { color: "#5B6478" };
-  const sig = (title, name, date) => (
-    <div style={{ flex: 1, textAlign: "center", fontSize: 11 }}>
-      <div style={{ height: 44, borderBottom: "1px dotted #0B1220", margin: "0 10px" }}>{name ? <div style={{ paddingTop: 28 }}>{name}</div> : null}</div>
-      <div style={{ marginTop: 4, fontWeight: 600 }}>{title}</div>
-      <div style={{ color: "#5B6478" }}>วันที่ {date ? fmtDate(date) : "......../......../........"}</div>
-    </div>
-  );
+  // ลายเซ็นอิเล็กทรอนิกส์: ระดับ 1 = พิมพ์ชื่อ + วันเวลาที่อนุมัติ/จ่ายจากระบบ · ระดับ 2 = ภาพลายเซ็นของผู้นั้น (ถ้าตั้งไว้) เฉพาะใบที่อนุมัติ/จ่ายแล้ว
+  // การเปิดหน้านี้ดึงภาพจากเซิร์ฟเวอร์และถูกบันทึกใน Audit Log (SIGNATURE_USE)
+  const [sigs, setSigs] = React.useState({});
+  React.useEffect(() => {
+    let live = true;
+    if (v.status === "approved" || v.status === "paid") {
+      Store.sigApi("GET", "/for/pv/" + v.id).then((r) => { if (live) setSigs(Object.fromEntries((r.signers || []).map((s) => [s.role, s]))); }).catch(() => {});
+    }
+    return () => { live = false; };
+  }, [v.id, v.status]);
+  const fmtAt = (s) => (s ? fmtDate(String(s).slice(0, 10)) + " " + String(s).slice(11, 16) : "");
+  const sig = (title, role, name, at) => {
+    const s = sigs[role];
+    return (
+      <div style={{ flex: 1, textAlign: "center", fontSize: 11 }}>
+        <div style={{ height: 48, borderBottom: "1px dotted #0B1220", margin: "0 10px", display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
+          {s && s.image ? <img src={s.image} alt="" style={{ maxHeight: 44, maxWidth: "100%", objectFit: "contain" }}/> : null}
+        </div>
+        <div style={{ marginTop: 4, fontWeight: 600 }}>{title}</div>
+        <div>{name ? "(" + name + ")" : ""}</div>
+        <div style={{ color: "#5B6478" }}>{at ? fmtAt(at) : "วันที่ ......../......../........"}</div>
+      </div>
+    );
+  };
   return (
     <ErpModal title={"พิมพ์ใบสำคัญจ่าย · " + v.id} width={900} onClose={onClose}
       footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button>
@@ -265,10 +282,10 @@ function FinPayPrintModal({ v, accounts, onClose }) {
             {isVoid ? <div style={{ color: "#B42318" }}>ยกเลิก/กลับรายการเมื่อ {v.voidDate ? fmtDate(v.voidDate) : ""}{v.voidReason ? " — " + v.voidReason : ""}</div> : null}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-            {sig("ผู้จัดทำ", v.createdBy, v.date)}
-            {sig("ผู้อนุมัติ", v.approvedBy, null)}
-            {sig("ผู้จ่ายเงิน", isPaid ? v.paidBy : "", isPaid ? v.payDate : null)}
-            {sig("ผู้รับเงิน", "", null)}
+            {sig("ผู้จัดทำ", "creator", v.createdBy, v.createdAt)}
+            {sig("ผู้อนุมัติ", "approver", v.approvedBy, v.approvedAt)}
+            {sig("ผู้จ่ายเงิน", "payer", isPaid ? v.paidBy : "", isPaid ? v.paidAt : null)}
+            {sig("ผู้รับเงิน", "recipient", "", null)}
           </div>
         </div>
       </div>

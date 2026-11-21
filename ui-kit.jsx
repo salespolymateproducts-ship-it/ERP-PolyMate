@@ -361,8 +361,78 @@ function ChangePasswordModal({ onClose }) {
   );
 }
 
+/** ลายเซ็นอิเล็กทรอนิกส์ (ระดับ 2): ตั้งภาพลายเซ็นของตัวเอง — วาดบนกรอบหรืออัปโหลด PNG/JPEG
+    ภาพเปิดดูได้เฉพาะเจ้าของ · ถูกนำไปแสดงบนเอกสารที่เราอนุมัติ/จ่ายเงินเท่านั้น (ตอนพิมพ์) และทุกครั้งบันทึกใน Audit Log */
+function SignatureModal({ onClose }) {
+  const [cur, setCur] = React.useState(null);        // { has, image, updatedAt } | null = กำลังโหลด
+  const [img, setImg] = React.useState(null);        // ภาพใหม่ (data URL) ที่ยังไม่ได้บันทึก
+  const [err, setErr] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const cv = React.useRef(null), drawing = React.useRef(false), last = React.useRef(null);
+  React.useEffect(() => { Store.sigApi("GET", "/me").then(setCur).catch((e) => { setCur({ has: false }); setErr(e.message || String(e)); }); }, []);
+  const pos = (e) => { const c = cv.current, r = c.getBoundingClientRect(); return { x: (e.clientX - r.left) * c.width / r.width, y: (e.clientY - r.top) * c.height / r.height }; };
+  const down = (e) => { drawing.current = true; last.current = pos(e); try { e.currentTarget.setPointerCapture(e.pointerId); } catch (x) { /* ignore */ } };
+  const move = (e) => {
+    if (!drawing.current) return;
+    const g = cv.current.getContext("2d"), p = pos(e);
+    g.lineWidth = 2.8; g.lineCap = "round"; g.lineJoin = "round"; g.strokeStyle = "#0B1220";
+    g.beginPath(); g.moveTo(last.current.x, last.current.y); g.lineTo(p.x, p.y); g.stroke(); last.current = p;
+  };
+  const up = () => {
+    if (!drawing.current) return;
+    drawing.current = false;
+    const c = cv.current, d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+    let any = false; for (let i = 3; i < d.length; i += 4) { if (d[i] > 0) { any = true; break; } }
+    setImg(any ? c.toDataURL("image/png") : null); setErr("");
+  };
+  const clearPad = () => { const c = cv.current; c.getContext("2d").clearRect(0, 0, c.width, c.height); setImg(null); };
+  const pick = (e) => {
+    const f = e.target.files && e.target.files[0]; e.target.value = "";
+    if (!f) return;
+    if (!/^image\/(png|jpeg)$/.test(f.type)) { setErr("ไฟล์ต้องเป็นภาพ PNG หรือ JPEG"); return; }
+    if (f.size > 300 * 1024) { setErr("ไฟล์ใหญ่เกินไป (สูงสุด 300 KB)"); return; }
+    const r = new FileReader();
+    r.onload = () => { setImg(String(r.result)); setErr(""); const c = cv.current; if (c) c.getContext("2d").clearRect(0, 0, c.width, c.height); };
+    r.readAsDataURL(f);
+  };
+  const save = async () => {
+    setErr(""); setBusy(true);
+    try { const r = await Store.sigApi("PUT", "/me", { image: img }); setCur(r); setImg(null); notify("บันทึกลายเซ็นแล้ว"); }
+    catch (e) { setErr(e && e.message ? e.message : String(e)); }
+    setBusy(false);
+  };
+  const del = async () => {
+    if (!window.confirm("ลบภาพลายเซ็นของคุณ? เอกสารที่พิมพ์หลังจากนี้จะแสดงเฉพาะชื่อและเวลา")) return;
+    setBusy(true);
+    try { setCur(await Store.sigApi("DELETE", "/me")); notify("ลบลายเซ็นแล้ว"); } catch (e) { setErr(e && e.message ? e.message : String(e)); }
+    setBusy(false);
+  };
+  const box = { border: "1px dashed var(--border)", borderRadius: 8, background: "white", display: "grid", placeItems: "center", minHeight: 90, padding: 6 };
+  return (
+    <ErpModal title="ลายเซ็นของฉัน" width={560} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button><button className="btn btn-primary btn-sm" disabled={busy || !img} onClick={save}>บันทึกลายเซ็น</button></>}>
+      <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+        ภาพนี้จะแสดงบนเอกสารที่ <b>คุณอนุมัติหรือจ่ายเงิน</b> เท่านั้น (ตอนพิมพ์ / ตัวอย่างพิมพ์) · เปิดดูภาพได้เฉพาะคุณ · ทุกครั้งที่ถูกนำไปแสดงบนเอกสารจะบันทึกใน Audit Log
+        <br/>นี่เป็นลายเซ็นที่แสดงบนเอกสารภายใน ไม่ใช่ลายเซ็นดิจิทัลพร้อมใบรับรอง — ความน่าเชื่อถือทางกฎหมายให้ผู้ทำบัญชี/ทนายยืนยัน
+      </div>
+      <div style={{ fontSize: 12, fontWeight: 600, margin: "12px 0 4px" }}>ลายเซ็นที่ใช้อยู่</div>
+      <div style={box}>{cur === null ? <span style={{ color: "var(--text-tertiary)" }}>กำลังโหลด…</span> : cur.has ? <img src={cur.image} alt="ลายเซ็น" style={{ maxHeight: 80, maxWidth: "100%" }}/> : <span style={{ color: "var(--text-tertiary)" }}>ยังไม่ได้ตั้งลายเซ็น</span>}</div>
+      {cur && cur.has && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 3 }}>อัปเดตเมื่อ {cur.updatedAt} · <a style={{ cursor: "pointer", color: "var(--danger)" }} onClick={del}>ลบลายเซ็น</a></div>}
+      <div style={{ fontSize: 12, fontWeight: 600, margin: "14px 0 4px" }}>ตั้งลายเซ็นใหม่ — วาดในกรอบ หรืออัปโหลดไฟล์ PNG / JPEG (ไม่เกิน 300 KB)</div>
+      <canvas ref={cv} width={520} height={170} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}
+        style={{ width: "100%", height: 170, border: "1px dashed var(--border)", borderRadius: 8, background: "white", touchAction: "none", cursor: "crosshair" }}/>
+      <div style={{ display: "flex", gap: 8, marginTop: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <button className="btn btn-outline btn-sm" onClick={clearPad}>ล้างกรอบ</button>
+        <label className="btn btn-outline btn-sm" style={{ cursor: "pointer" }}>อัปโหลดไฟล์<input type="file" accept="image/png,image/jpeg" onChange={pick} style={{ display: "none" }}/></label>
+        {img && <span style={{ fontSize: 12, color: "var(--success)" }}>พร้อมบันทึก — ตัวอย่าง: <img src={img} alt="ตัวอย่าง" style={{ height: 34, verticalAlign: "middle", background: "white", border: "1px solid var(--border)", borderRadius: 4 }}/></span>}
+      </div>
+      {err && <div role="alert" style={{ color: "var(--danger)", fontSize: 13, marginTop: 10 }}>{err}</div>}
+    </ErpModal>
+  );
+}
+
 Object.assign(window, { notify, ToastHost, runAction, ErpModal, ReasonModal, exportCSV, printDoc, printReport, PrintHead, EmptyRow,
-  navCount, buildNotifications, GlobalSearch, ChangePasswordModal, takeFocus });
+  navCount, buildNotifications, GlobalSearch, ChangePasswordModal, SignatureModal, takeFocus });
 
 // ป้องกันหน้าใดหน้าหนึ่งพังแล้วทั้งแอปหายไป — แสดงข้อผิดพลาดเฉพาะหน้านั้น
 class PageErrorBoundary extends React.Component {
