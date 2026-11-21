@@ -7,7 +7,8 @@
   PageCustomerPO : CPO (PO จากลูกค้า → เปิดใบสั่งขาย)
 */
 
-const SALES_TYPES = ["QT", "SO", "DO", "INV", "BN", "RC", "PAY"];
+const SALES_TYPES = ["QT", "SO", "DO", "INV", "BN", "RC", "PAY", "CN", "DN"];
+const isNoteType = (t) => t === "CN" || t === "DN";      // ใบลดหนี้/เพิ่มหนี้ ออกจากปุ่มในใบกำกับภาษีเท่านั้น (ไม่สร้างเปล่า ๆ)
 const PAY_METHODS = ["โอนเงิน", "เงินสด", "เช็ค", "บัตรเครดิต"];
 const STATUS_FILTERS = [
   { id: "all", label: "ทั้งหมด", test: () => true },
@@ -69,7 +70,7 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
   });
   const list = view.sorted;
 
-  const canCreate = types.some((t) => t !== "PAY" && Workflow.canEditType(t));
+  const canCreate = types.some((t) => t !== "PAY" && !isNoteType(t) && Workflow.canEditType(t));
 
   function exportList() {
     exportCSV(`เอกสาร-${tab}-${Store.today()}.csv`,
@@ -83,7 +84,7 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
         actions={<>
           <DataMenu/>
           <button className="btn btn-outline btn-sm" onClick={exportList} disabled={!list.length}><I.Download size={14}/> ส่งออก CSV</button>
-          {canCreate && <button className="btn btn-primary btn-sm" onClick={() => setEditor({ type: types.includes(tab) && tab !== "PAY" ? tab : types[0] })}><I.Plus size={14}/> สร้างเอกสารใหม่</button>}
+          {canCreate && <button className="btn btn-primary btn-sm" onClick={() => setEditor({ type: types.includes(tab) && tab !== "PAY" && !isNoteType(tab) ? tab : types[0] })}><I.Plus size={14}/> สร้างเอกสารใหม่</button>}
         </>}/>
 
       {showStats && <SalesStats/>}
@@ -219,8 +220,8 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
   const [reason, setReason] = useState(null); // "cancel" | "reject"
   const [woOpen, setWoOpen] = useState(false);
   const [shipOpen, setShipOpen] = useState(null);
-  const [sigImg, setSigImg] = useState(null);   // ภาพลายเซ็นผู้อนุมัติ (มีเฉพาะระหว่างพิมพ์)
-  useEffect(() => { setView("doc"); setSigImg(null); }, [id]);
+  const [noteFor, setNoteFor] = useState(null);   // "CN" | "DN" — ออกใบลดหนี้/เพิ่มหนี้จากใบกำกับนี้
+  useEffect(() => { setView("doc"); }, [id]);
   if (!doc) return null;
   const rel = Workflow.related(doc.id);
   const can = (a) => Workflow.can(a, doc);
@@ -239,24 +240,12 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
         onWO={() => setWoOpen(true)}
         onShip={(s) => setShipOpen(s)}
         onRelated={() => setView("related")}
-        onPrint={async () => {
-          setView("doc");
-          // ลายเซ็นอิเล็กทรอนิกส์ (ระดับ 2): ดึงภาพของผู้อนุมัติมาแสดงเฉพาะตอนพิมพ์ (บันทึก Audit Log) แล้วถอดออกหลังพิมพ์
-          setSigImg(null);
-          if (Workflow.isLive(doc) && doc.approvedBy) {
-            try {
-              const r = await Store.sigApi("GET", "/for/doc/" + doc.id);
-              const s = (r.signers || []).find((x) => x.role === "approver");
-              if (s && s.image) { setSigImg(s.image); await new Promise((res) => setTimeout(res, 150)); }
-            } catch (e) { /* พิมพ์ต่อโดยไม่มีภาพ */ }
-          }
-          const clear = () => { setSigImg(null); window.removeEventListener("afterprint", clear); };
-          window.addEventListener("afterprint", clear);
-          printDoc(doc.id);
-        }}/>
+        onNote={(t) => setNoteFor(t)}
+        onPrint={() => { setView("doc"); printDoc(doc.id); }}/>   {/* เอกสารขายที่ส่งให้ลูกค้า: ไม่ใส่ภาพลายเซ็นอิเล็กทรอนิกส์ — ให้ผู้มีอำนาจเซ็นจริงบนกระดาษ (ภาพลายเซ็นใช้เฉพาะเอกสารภายใน เช่น ใบสำคัญจ่าย) */}
 
       {doc.type === "RC" && window.RcCollectBadge && <RcCollectBadge doc={doc}/>}
       {(doc.type === "QT" || doc.type === "SO" || Workflow.isInstInv(doc)) && <BillingPlanCard doc={doc} onOpen={onOpen}/>}
+      {doc.type === "INV" && live && <NoteAdjCard inv={doc} onOpen={onOpen}/>}
       {doc.type === "SO" && live && <TradeStockBanner doc={doc}/>}
       <div style={{ padding: "12px 18px 0" }}>
         <DocFlowStrip doc={doc} rel={rel} onOpen={onOpen}/>
@@ -269,7 +258,7 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
         </div>
       </div>
 
-      {view === "doc" && <DocPaper doc={doc} sigImg={sigImg}/>}
+      {view === "doc" && <DocPaper doc={doc}/>}
       {view === "related" && <DocRelated doc={doc} rel={rel} onOpen={onOpen}/>}
       {view === "history" && <DocHistory doc={doc}/>}
 
@@ -281,6 +270,7 @@ function DocDrawer({ id, onClose, onOpen, onEdit, onConvert }) {
         onClose={() => setReason(null)}
         onConfirm={(r) => { const ok = runAction(() => (reason === "cancel" ? Workflow.cancel(doc.id, r) : Workflow.reject(doc.id, r)), reason === "cancel" ? `ยกเลิก ${doc.id} แล้ว` : `ตีกลับ ${doc.id} แล้ว`); if (ok) setReason(null); }}/>}
       {woOpen && <WOModal so={doc} onClose={() => setWoOpen(false)}/>}
+      {noteFor && <NoteModal inv={doc} type={noteFor} onClose={() => setNoteFor(null)} onDone={(d) => { setNoteFor(null); onOpen(d.id); }}/>}
       {shipOpen && <ShipModal doc={doc} to={shipOpen} onClose={() => setShipOpen(null)}/>}
     </Drawer>
   );
@@ -384,6 +374,78 @@ function BillingPlanModal({ root, onClose }) {
   );
 }
 
+// =================== ใบลดหนี้ / ใบเพิ่มหนี้ ===================
+// สรุปใบลดหนี้/เพิ่มหนี้ของใบกำกับนี้ + ยอดคงค้างหลังปรับ (และเตือนเมื่อลูกค้าจ่ายเกินจนต้องคืนเงิน)
+function NoteAdjCard({ inv, onOpen }) {
+  const notes = Store.state.docs.filter((d) => Workflow.isNote(d) && Workflow.isActive(d) && (d.sourceIds || []).includes(inv.id));
+  if (!notes.length) return null;
+  const p = Workflow.paymentInfo(inv), a = p.adj;
+  return (
+    <div className="no-print" style={{ margin: "12px 18px 0", padding: 12, border: "1px solid var(--border)", borderRadius: 10, fontSize: 12.5 }}>
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>ใบลดหนี้ / ใบเพิ่มหนี้ของใบกำกับนี้</div>
+      {notes.map((n) => (
+        <div key={n.id} style={{ display: "flex", gap: 8, alignItems: "center", padding: "3px 0" }}>
+          <button className="btn btn-ghost btn-sm mono" onClick={() => onOpen(n.id)}>{n.id}</button>
+          <span style={{ color: "var(--text-secondary)" }}>{DOC_LABEL[n.type].th} · {n.reason}</span><span className="spacer" style={{ flex: 1 }}/>
+          <span className="num" style={{ color: n.type === "CN" ? "var(--danger)" : "var(--amber)" }}>{n.type === "CN" ? "−" : "+"}{_fmt(n.total, 2)}</span>
+          <DocStatusBadge doc={n}/>
+        </div>
+      ))}
+      <div style={{ borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 6, color: "var(--text-secondary)" }}>
+        ปรับยอดจากใบลดหนี้/เพิ่มหนี้ที่อนุมัติแล้ว: <b className="num">{a.total >= 0 ? "+" : "−"}{_fmt(Math.abs(a.total), 2)}</b> บาท · ยอดคงค้างหลังปรับ <b className="num">{_fmt(p.outstanding, 2)}</b> บาท
+      </div>
+      {p.overpaid > 0.004 && <div style={{ marginTop: 6, padding: "7px 10px", borderRadius: 8, background: "var(--amber-subtle)", color: "var(--amber)" }}>
+        หลังลดหนี้ ลูกค้าจ่ายเกินมูลค่าใหม่ {_fmt(p.overpaid, 2)} บาท — ต้องคืนเงินลูกค้า: บันทึกที่ การเงิน → รับ/จ่าย/โอนอื่น ๆ (จ่ายอื่น ๆ หมวด "คืนเงินลูกค้า") ระบบไม่คืนให้อัตโนมัติ</div>}
+    </div>
+  );
+}
+
+function NoteModal({ inv, type, onClose, onDone }) {
+  const nm = DOC_LABEL[type].th, isCN = type === "CN";
+  const [mode, setMode] = useState("all");
+  const [reason, setReason] = useState("");
+  const [date, setDate] = useState(Store.today() < inv.date ? inv.date : Store.today());
+  const [amount, setAmount] = useState("");
+  const [lbl, setLbl] = useState("");
+  const [err, setErr] = useState("");
+  const prior = Store.state.docs.filter((d) => Workflow.isNote(d) && Workflow.isActive(d) && (d.sourceIds || []).includes(inv.id));
+  const lbs = { fontSize: 12, color: "var(--text-secondary)", marginBottom: 4, display: "block", fontWeight: 500 };
+  const go = () => {
+    setErr("");
+    try {
+      const d = Workflow.issueNote(type, inv.id, { reason, date, mode, amount, label: lbl });
+      notify("สร้าง" + nm + " " + d.id + " (ฉบับร่าง) แล้ว — ตรวจรายการแล้วส่งอนุมัติ", "success"); onDone(d);
+    } catch (e) { setErr(e && e.message ? e.message : String(e)); }
+  };
+  return (
+    <ErpModal title={"ออก" + nm + " · อ้างอิง " + inv.id} width={600} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" onClick={go}>สร้างฉบับร่าง</button></>}>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 10 }}>
+        ใบกำกับ <b>{inv.id}</b> · {inv.customerName} · มูลค่าก่อนภาษี {_fmt(inv.subtotal, 2)} · รวม {_fmt(inv.total, 2)} บาท
+        {prior.length > 0 && <div>ออกใบลดหนี้/เพิ่มหนี้ไปแล้ว: {prior.map((n) => n.id + " (" + (n.type === "CN" ? "−" : "+") + _fmt(n.subtotal, 2) + ")").join(", ")}</div>}
+      </div>
+      <div className="grid-2" style={{ gap: 12 }}>
+        <div style={{ gridColumn: "1/-1" }}><label style={lbs}>เหตุผล *</label>
+          <select className="input" value={reason} onChange={(e) => setReason(e.target.value)}><option value="">— เลือกเหตุผล —</option>{Workflow.NOTE_REASONS[type].map((r) => <option key={r} value={r}>{r}</option>)}</select></div>
+        <div><label style={lbs}>วันที่ออกเอกสาร</label><DateInput className="input" value={date} onChange={(e) => setDate(e.target.value)}/></div>
+        <div><label style={lbs}>วิธีกำหนดรายการ</label>
+          <select className="input" value={mode} onChange={(e) => setMode(e.target.value)}>
+            <option value="all">ยกรายการของใบกำกับมาทั้งหมด (แก้จำนวน/ลบรายการในขั้นถัดไป)</option>
+            <option value="amount">ระบุจำนวนเงินเอง (ไม่ผูกกับรายการสินค้า)</option>
+          </select></div>
+        {mode === "amount" && <>
+          <div><label style={lbs}>รายละเอียด</label><input className="input" value={lbl} placeholder={isCN ? "เช่น ส่วนลดตามข้อตกลง" : "เช่น ค่าใช้จ่ายเพิ่มเติม"} onChange={(e) => setLbl(e.target.value)}/></div>
+          <div><label style={lbs}>จำนวนเงินก่อน VAT (บาท) *</label><input className="input num" type="number" min="0" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)}/></div>
+        </>}
+      </div>
+      <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-tertiary)" }}>
+        VAT และหัก ณ ที่จ่ายใช้ตามใบกำกับต้นทาง · {isCN ? "ลดได้ไม่เกินมูลค่าใบกำกับ · " : ""}ไม่ตัดหรือคืนสต๊อกให้อัตโนมัติ (ถ้าเป็นการคืนสินค้า ให้ปรับสต๊อกเองที่หน้าคงคลัง)
+      </div>
+      {err && <div style={{ marginTop: 10, padding: "8px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+    </ErpModal>
+  );
+}
+
 // สินค้าซื้อมาขายไปในใบสั่งขายที่สต๊อกไม่พอ: ขาดรวมทุกใบสั่งขายที่เปิดอยู่ − สต๊อก − ที่สั่งซื้อไว้แล้ว พร้อมปุ่มสั่งซื้อ
 function TradeStockBanner({ doc }) {
   const [order, setOrder] = useState(null);
@@ -431,7 +493,7 @@ function TradeStockBanner({ doc }) {
   );
 }
 
-function DocActionBar({ doc, can, onEdit, onSubmit, onApprove, onReject, onCancel, onDelete, onConvert, onWO, onShip, onRelated, onPrint }) {
+function DocActionBar({ doc, can, onEdit, onSubmit, onApprove, onReject, onCancel, onDelete, onConvert, onWO, onShip, onRelated, onPrint, onNote }) {
   const live = Workflow.isLive(doc);
   const nexts = Workflow.nextTypes(doc);
   const conv = can("convert");
@@ -451,6 +513,7 @@ function DocActionBar({ doc, can, onEdit, onSubmit, onApprove, onReject, onCance
       {nexts.map((t) => (live
         ? btn("cv" + t, conv, (doc.type === "RC" ? "บันทึก" : "สร้าง") + DOC_LABEL[t].th, () => onConvert(t, false), "btn-primary", "ChevronRight")
         : preApprove ? btn("acv" + t, { ok: true }, `อนุมัติและสร้าง${DOC_LABEL[t].th}`, () => onConvert(t, true), "btn-primary", "ChevronRight") : null))}
+      {doc.type === "INV" && live && ["CN", "DN"].map((t) => Workflow.canEditType(t) && <button key={"nt" + t} className="btn btn-outline btn-sm" onClick={() => onNote(t)}><I.FileText size={13}/> ออก{DOC_LABEL[t].th}</button>)}
       {doc.type === "SO" && live && <button className="btn btn-outline btn-sm" onClick={onWO}><I.Factory size={13}/> เปิดใบสั่งผลิต</button>}
       {doc.type === "DO" && live && ship === "waiting" && <button className="btn btn-outline btn-sm" onClick={() => onShip("in-transit")}><I.Truck size={13}/> ออกจัดส่ง</button>}
       {doc.type === "DO" && live && ship === "in-transit" && <button className="btn btn-outline btn-sm" onClick={() => onShip("delivered")}><I.Check size={13}/> ยืนยันส่งถึงลูกค้า</button>}
@@ -549,12 +612,13 @@ function DocHistory({ doc }) {
 }
 
 // =================== เอกสารสำหรับพิมพ์ ===================
-function DocPaper({ doc, sigImg }) {
+function DocPaper({ doc }) {
   const meta = DOC_LABEL[doc.type];
   const c = doc.customerSnap || {};
   const muted = { color: "#5B6478" };
   const th = { padding: "8px 10px", fontWeight: 600, fontSize: 11 };
   const pay = doc.type === "INV" ? Workflow.paymentInfo(doc) : null;
+  const noteInv = Workflow.isNote(doc) ? Workflow.get((doc.sourceIds || [])[0]) : null;   // ใบกำกับภาษีต้นทางของใบลดหนี้/เพิ่มหนี้
   // ใบส่งสินค้า / ใบกำกับภาษี / ใบวางบิล: พิมพ์ออกมา 2 ฉบับ — ต้นฉบับ + สำเนา (เอกสารอื่นพิมพ์ฉบับเดียว)
   const hasCopies = ["DO", "INV", "BN"].includes(doc.type);
   // ใบเสร็จที่ลูกค้าหัก ณ ที่จ่าย: สถานะหนังสือรับรอง (50 ทวิ) + ทางลัดบันทึก (ไม่แสดงตอนพิมพ์)
@@ -613,6 +677,13 @@ function DocPaper({ doc, sigImg }) {
           </div>
         </div>
 
+        {noteInv && (
+          <div style={{ marginTop: 12, border: "1px solid #E6E8EC", borderRadius: 8, padding: "10px 14px", display: "grid", gridTemplateColumns: "190px 1fr", rowGap: 5, fontSize: 11.5 }}>
+            <div style={muted}>อ้างอิงใบกำกับภาษีเลขที่:</div><div className="mono"><b>{noteInv.id}</b> · ลงวันที่ {doc.refInvDate || noteInv.date}</div>
+            <div style={muted}>มูลค่าตามใบกำกับภาษีเดิม:</div><div className="num">{_fmt(noteInv.subtotal, 2)} บาท (ก่อนภาษี)</div>
+            <div style={muted}>เหตุผลที่{doc.type === "CN" ? "ลด" : "เพิ่ม"}หนี้:</div><div><b>{doc.reason || "—"}</b></div>
+          </div>
+        )}
         {doc.type === "PAY" ? (
           <div style={{ marginTop: 18, border: "1px solid #E6E8EC", borderRadius: 8, padding: 16, display: "grid", gridTemplateColumns: "160px 1fr", rowGap: 8 }}>
             <div style={muted}>รับชำระตามใบเสร็จ</div><div className="mono">{(doc.sourceIds || []).join(", ")}</div>
@@ -651,8 +722,13 @@ function DocPaper({ doc, sigImg }) {
               {doc.discount > 0 && <PaperRow k="ส่วนลดท้ายบิล" v={"(" + _fmt(doc.discount, 2) + ")"}/>}
               <PaperRow k="มูลค่าก่อนภาษี" v={_fmt(doc.subtotal, 2)}/>
               <PaperRow k={doc.vatOn ? "ภาษีมูลค่าเพิ่ม 7%" : "ภาษีมูลค่าเพิ่ม (ไม่คิด)"} v={_fmt(doc.vat, 2)}/>
+              {noteInv && <>
+                <PaperRow k="มูลค่าตามใบกำกับเดิม" v={_fmt(noteInv.subtotal, 2)}/>
+                <PaperRow k={"มูลค่าที่ถูกต้อง (" + (doc.type === "CN" ? "หลังลด" : "หลังเพิ่ม") + ")"} v={_fmt(doc.type === "CN" ? noteInv.subtotal - doc.subtotal : noteInv.subtotal + doc.subtotal, 2)}/>
+                <PaperRow k={"ผลต่างที่" + (doc.type === "CN" ? "ลด" : "เพิ่ม")} v={_fmt(doc.subtotal, 2)}/>
+              </>}
               <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 8px", marginTop: 6, background: "#0B1220", color: "white", borderRadius: 6 }}>
-                <span>จำนวนเงินรวมทั้งสิ้น</span><span className="num" style={{ fontWeight: 600 }}>{baht(doc.total, 2)}</span>
+                <span>{noteInv ? (doc.type === "CN" ? "ภาษี + ยอดลดหนี้รวม" : "ภาษี + ยอดเพิ่มหนี้รวม") : "จำนวนเงินรวมทั้งสิ้น"}</span><span className="num" style={{ fontWeight: 600 }}>{baht(doc.total, 2)}</span>
               </div>
               {doc.whtRate > 0 && <>
                 <PaperRow k={`หัก ณ ที่จ่าย ${doc.whtRate}%`} v={"(" + _fmt(doc.wht, 2) + ")"}/>
@@ -669,7 +745,6 @@ function DocPaper({ doc, sigImg }) {
           <div><div style={{ borderTop: "1px solid #5B6478", paddingTop: 6 }}>{doc.type === "DO" ? "ผู้รับสินค้า" : doc.type === "PAY" || doc.type === "RC" ? "ผู้รับเงิน" : "ผู้รับเอกสาร"}</div>
             <div style={{ marginTop: 6 }}>{doc.type === "DO" && doc.ship && doc.ship.receivedBy ? doc.ship.receivedBy : "วันที่ ____ / ____ / ____"}</div></div>
           <div style={{ position: "relative" }}>
-            {sigImg && <img src={sigImg} alt="" style={{ position: "absolute", left: "50%", transform: "translateX(-50%)", bottom: "calc(100% - 4px)", maxHeight: 44, maxWidth: "80%", objectFit: "contain" }}/>}
             <div style={{ borderTop: "1px solid #5B6478", paddingTop: 6 }}>ผู้มีอำนาจลงนาม</div>
             <div style={{ marginTop: 6 }}>{doc.approvedBy ? `${doc.approvedBy} · ${String(doc.approvedAt).slice(0, 16)}` : "วันที่ ____ / ____ / ____"}</div></div>
         </div>
@@ -877,7 +952,8 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
   const setLine = (i, patch) => setF((x) => ({ ...x, lines: x.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) }));
   const isPay = f.type === "PAY";
   const c = Workflow.calc(f);
-  const createTypes = types.filter((t) => t !== "PAY" && Workflow.canEditType(t));
+  const createTypes = types.filter((t) => t !== "PAY" && !isNoteType(t) && Workflow.canEditType(t));
+  const isNote = isNoteType(f.type);
   const preview = isNew ? Store.peekDocNo(Workflow.PREFIX[f.type], f.date).docNo : f.id;
 
   function onCode(i, code) {
@@ -927,8 +1003,13 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
           <DateInput className="input" value={f.due && f.due !== "—" ? f.due : ""} onChange={(e) => set({ due: e.target.value })}/></div>
         {!isPay && <div><label style={lbl}>เลขที่ PO ลูกค้า / อ้างอิง</label><input className="input" value={f.refNo || ""} onChange={(e) => set({ refNo: e.target.value })}/></div>}
         {f.type === "RC" && <div><label style={lbl}>ผู้เก็บเงิน (พนักงานที่พกใบเสร็จไปเก็บ)</label><input className="input" value={f.collector || ""} placeholder="เช่น ชื่อพนักงานขาย/ส่งของ" onChange={(e) => set({ collector: e.target.value })}/></div>}
+        {isNote && <div style={{ gridColumn: "1/-1" }}><label style={lbl}>เหตุผลในการออก{DOC_LABEL[f.type].th} * <span style={{ color: "var(--text-tertiary)" }}>(จะพิมพ์ลงเอกสาร)</span></label>
+          <select className="input" value={f.reason || ""} onChange={(e) => set({ reason: e.target.value })}>
+            <option value="">— เลือกเหตุผล —</option>{Workflow.NOTE_REASONS[f.type].map((r) => <option key={r} value={r}>{r}</option>)}
+            {f.reason && !Workflow.NOTE_REASONS[f.type].includes(f.reason) && <option value={f.reason}>{f.reason}</option>}
+          </select></div>}
         {!isPay && <div><label style={lbl}>หัก ณ ที่จ่าย</label>
-          <select className="input" value={f.whtRate || 0} onChange={(e) => set({ whtRate: Number(e.target.value) })}>
+          <select className="input" value={f.whtRate || 0} disabled={isNote} onChange={(e) => set({ whtRate: Number(e.target.value) })}>
             {Object.keys(WHT_RATES).map((r) => <option key={r} value={r}>{WHT_RATES[r]}</option>)}
           </select></div>}
       </div>
@@ -943,7 +1024,7 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
         <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
           <div style={{ fontWeight: 600, fontSize: 13.5 }}>รายการสินค้า / บริการ</div><span className="spacer"/>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
-            <input type="checkbox" checked={!!f.vatOn} onChange={(e) => set({ vatOn: e.target.checked })}/> คิด VAT 7%
+            <input type="checkbox" checked={!!f.vatOn} disabled={isNote} title={isNote ? "คิด VAT ตามใบกำกับต้นทาง" : ""} onChange={(e) => set({ vatOn: e.target.checked })}/> คิด VAT 7%
           </label>
         </div>
         <datalist id="erp-products">{products.map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}</datalist>

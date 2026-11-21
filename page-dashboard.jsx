@@ -16,11 +16,12 @@ function PageDashboard({ role }) {
   const aging = Analytics.arAging();
   const ar = aging.current + aging.d30 + aging.d60 + aging.d90;
   const openWO = S.workOrders.filter((w) => !["done", "cancelled"].includes(w.status));
-  const salesToday = Analytics.invoices().filter((d) => d.date === today).reduce((s, d) => s + d.subtotal, 0);
+  const salesToday = Analytics.invoices().filter((d) => d.date === today).reduce((s, d) => s + d.subtotal, 0)
+    + Analytics.notes().filter((d) => d.date === today).reduce((s, d) => s + (d.type === "CN" ? -1 : 1) * d.subtotal, 0);   // หักใบลดหนี้ / บวกใบเพิ่มหนี้
   const delta = (a, b) => (b ? ((a - b) / b * 100).toFixed(1) + "%" : "—");
 
   const kpis = [
-    { label: "ยอดขายวันนี้ (ใบกำกับภาษี)", value: baht(salesToday), icon: "Wallet", color: "accent", sub: `เดือนนี้ ${baht(cur.revenue)} · เทียบเดือนก่อน ${delta(cur.revenue, prev.revenue)}` },
+    { label: "ยอดขายวันนี้ (ใบกำกับภาษี ± ลด/เพิ่มหนี้)", value: baht(salesToday), icon: "Wallet", color: "accent", sub: `เดือนนี้ ${baht(cur.revenue)} · เทียบเดือนก่อน ${delta(cur.revenue, prev.revenue)}` },
     { label: "ยอดผลิตวันนี้", value: _fmt(prod.produced), unit: "ชิ้น", icon: "Factory", color: "violet", sub: `ใบสั่งผลิตที่เปิดอยู่ ${openWO.length} ใบ` },
     { label: "กำไรขั้นต้นเดือนนี้", value: baht(cur.gp), icon: "TrendUp", color: "success", sub: cur.revenue ? `Margin ${(cur.gp / cur.revenue * 100).toFixed(1)}%` : "ยังไม่มียอดขาย" },
     { label: "ของเสีย (NG) วันนี้", value: prod.ngRate.toFixed(2), unit: "%", icon: "Alert", color: "amber", sub: `${_fmt(prod.ng)} ชิ้น จาก ${_fmt(prod.produced)}` },

@@ -193,7 +193,7 @@ function _maintDue(m) { return m.status === "maintenance" || m.status === "alert
 function navCount(id) {
   const s = Store.state;
   const n = (v, alert) => (v ? { v, alert: !!alert } : null);
-  const salesTypes = ["QT", "SO", "DO", "INV", "BN", "RC", "PAY"];
+  const salesTypes = ["QT", "SO", "DO", "INV", "BN", "RC", "PAY", "CN", "DN"];
   switch (id) {
     case "sales": return n(s.docs.filter((d) => salesTypes.includes(d.type) && d.status === "pending").length, true);
     case "customer-po": return n(s.docs.filter((d) => d.type === "CPO" && ["pending", "approved", "partial"].includes(d.status)).length);

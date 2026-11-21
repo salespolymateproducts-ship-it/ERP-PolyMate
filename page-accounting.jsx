@@ -541,7 +541,7 @@ function PLPanel({ month }) {
   const net = ebit - tax;
   const pct = (v) => (revenue ? _fmt((v / revenue) * 100, 1) + "%" : "—");
   const rows = [
-    ["รายได้จากการขาย (ใบกำกับภาษี " + x.invoices.length + " ใบ)", revenue, false],
+    ["รายได้จากการขาย (ใบกำกับภาษี " + x.invoices.length + " ใบ" + (x.notes.length ? " · ใบลดหนี้/เพิ่มหนี้ " + x.notes.length + " ใบ" : "") + ")", revenue, false],
     ["ต้นทุนขาย (จำนวน × ต้นทุนมาตรฐานสินค้า)", -cogs, false],
     ["กำไรขั้นต้น", gp, true],
     ["ค่าใช้จ่ายดำเนินงาน (ไม่รวมวัตถุดิบ/สีผสม)", -opex, false],

@@ -265,4 +265,17 @@ class ReceiptTests {
 		assertThrows(Exception.class, () -> jdbc.update("delete from fin_receipt_allocs"));
 		assertThrows(Exception.class, () -> jdbc.update("update fin_receipt_allocs set amount = amount + 1"));
 	}
+
+	@Test @Order(10)
+	void creditAndDebitNotesAdjustOpenAmount() throws Exception {
+		inv("IV-9", "C2", 1000, 30, "approved");
+		jdbc.update("insert into erp_records(collection,id,data) values ('docs','CN-1','{\"type\":\"CN\",\"status\":\"approved\",\"customer\":\"C2\",\"sourceIds\":[\"IV-9\"],\"total\":214,\"wht\":6}'::jsonb), ('docs','CN-DRAFT','{\"type\":\"CN\",\"status\":\"draft\",\"customer\":\"C2\",\"sourceIds\":[\"IV-9\"],\"total\":500,\"wht\":0}'::jsonb)");
+		assertEquals(786.0, remaining("C2", "IV-9"), 1e-9);                                                                      // ใบลดหนี้ที่อนุมัติแล้วเท่านั้นที่ปรับยอด (ฉบับร่างไม่นับ)
+		call("POST", "/finance/receipts", rv("C2", "BANK1", 800, 0, List.of(alloc("IV-9", 800, 0))), admin, 422);               // เกินยอดคงค้างหลังลดหนี้
+		call("POST", "/finance/receipts", rv("C2", "BANK1", 100, 0, List.of(alloc("IV-9", 100, 25))), admin, 422);                // ภาษีถูกหักเกินที่เหลือของใบกำกับ (30 − 6 = 24)
+		call("POST", "/finance/receipts", rv("C2", "BANK1", 762, 0, List.of(alloc("IV-9", 762, 24))), admin, 200);               // 762 + 24 = 786 → ปิดครบ
+		assertEquals(0.0, remaining("C2", "IV-9"), 1e-9);
+		jdbc.update("insert into erp_records(collection,id,data) values ('docs','DN-1','{\"type\":\"DN\",\"status\":\"approved\",\"customer\":\"C2\",\"sourceIds\":[\"IV-9\"],\"total\":107,\"wht\":0}'::jsonb)");
+		assertEquals(107.0, remaining("C2", "IV-9"), 1e-9);                                                                     // ใบเพิ่มหนี้เปิดยอดคงค้างใหม่
+	}
 }

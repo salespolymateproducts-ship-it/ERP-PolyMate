@@ -628,7 +628,9 @@ function TaxReport({ month }) {
   const goWhtPage = () => window.dispatchEvent(new CustomEvent("erp-goto", { detail: { page: "fin-wht" } }));
   const ym = month || Store.today().slice(0, 7);
   const m = Analytics.month(ym);
-  const sales = m.invoices.filter((d) => d.vatOn).map((d) => ({ date: d.date, doc: d.id, customer: (d.customerSnap && d.customerSnap.name) || d.customerName, taxId: (d.customerSnap && d.customerSnap.taxId) || "—", subtotal: d.subtotal, vat: d.vat }));
+  // ภาษีขาย = ใบกำกับภาษี + ใบเพิ่มหนี้ − ใบลดหนี้ (ใบลดหนี้แสดงเป็นยอดติดลบ) — การนำไปยื่น ภ.พ.30 ให้ผู้ทำบัญชียืนยันก่อน
+  const sales = [...m.invoices, ...m.notes].filter((d) => d.vatOn).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id.localeCompare(b.id)))
+    .map((d) => { const k = d.type === "CN" ? -1 : 1; return { date: d.date, doc: d.id, customer: (d.customerSnap && d.customerSnap.name) || d.customerName, taxId: (d.customerSnap && d.customerSnap.taxId) || "—", subtotal: k * d.subtotal, vat: k * d.vat }; });
   const supplier = (name) => Store.state.suppliers.find((s) => name && (s.name.includes(name) || name.includes(s.code))) || null;
   const purchases = m.expenses.filter((e) => e.vat > 0).map((e) => ({ date: e.date, doc: e.id, vendor: e.vendor, taxId: (supplier(e.vendor) || {}).taxId || "—", subtotal: e.amount, vat: e.vat }));
   const salesVat = sales.reduce((s, x) => s + x.vat, 0), purchaseVat = purchases.reduce((s, x) => s + x.vat, 0), net = salesVat - purchaseVat;

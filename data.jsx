@@ -87,6 +87,8 @@ const DOC_LABEL = {
   BN: { th: "ใบวางบิล", short: "Billing Note", color: "warning" },
   RC: { th: "ใบเสร็จรับเงิน", short: "Receipt", color: "success" },
   PAY: { th: "รับชำระเงิน", short: "Payment", color: "success" },
+  CN: { th: "ใบลดหนี้", short: "Credit Note", color: "danger" },
+  DN: { th: "ใบเพิ่มหนี้", short: "Debit Note", color: "warning" },
 };
 
 // สถานะกลาง (ป้ายเฉพาะประเภทเอกสารดู Workflow.statusLabel)
@@ -219,7 +221,7 @@ const ROLES = {
     user: { name: "อรอนงค์ เลิศกุล", initial: "อร", title: "บัญชี" },
     pages: ["dashboard", "sales", "customer-po", "customers", "inventory", "shipping", "accounting", "finance", "fin-approvals", "fin-rc-wait", "fin-receipts", "fin-payments", "fin-wht", "fin-other", "fin-ledger", "fin-recon"],
     canEdit: ["sales", "accounting"],
-    approve: ["BN", "INV", "RC", "PAY"],
+    approve: ["BN", "INV", "RC", "PAY", "CN", "DN"],
   },
 };
 

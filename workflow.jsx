@@ -13,8 +13,14 @@
 */
 const Workflow = (function () {
   const S = Store;
-  const PREFIX = { CPO: "CPO", QT: "QT", SO: "SO", DO: "DO", BN: "BL", INV: "IV", RC: "RE", PAY: "RV" };
-  const NEXT = { CPO: ["SO"], QT: ["SO"], SO: ["DO"], DO: ["INV"], INV: ["BN", "RC"], BN: ["RC"], RC: ["PAY"], PAY: [] };
+  const PREFIX = { CPO: "CPO", QT: "QT", SO: "SO", DO: "DO", BN: "BL", INV: "IV", RC: "RE", PAY: "RV", CN: "CN", DN: "DN" };
+  // ใบลดหนี้ (CN) / ใบเพิ่มหนี้ (DN) ไม่อยู่ในสายออกเอกสารต่อ: ออกจากใบกำกับภาษีที่อนุมัติแล้วผ่านปุ่มเฉพาะ (issueNote) และไม่กินจำนวนรายการของใบกำกับ
+  const NEXT = { CPO: ["SO"], QT: ["SO"], SO: ["DO"], DO: ["INV"], INV: ["BN", "RC"], BN: ["RC"], RC: ["PAY"], PAY: [], CN: [], DN: [] };
+  const isNote = (d) => !!d && (d.type === "CN" || d.type === "DN");
+  const NOTE_REASONS = {
+    CN: ["คืนสินค้า/สินค้าเคลม", "ลดราคา/ส่วนลด", "ราคาหรือจำนวนในใบกำกับผิด", "ยกเลิกงวด/ยกเลิกบริการ", "อื่น ๆ"],
+    DN: ["ราคาหรือจำนวนในใบกำกับต่ำเกินจริง", "ค่าใช้จ่ายเพิ่มเติม", "อื่น ๆ"],
+  };
   const TYPES = Object.keys(DOC_LABEL);
   const VAT_RATE = 7;
   const DUE_BY_CREDIT = ["BN", "INV"]; // กำหนดชำระ = วันที่ + เครดิตลูกค้า
@@ -102,6 +108,18 @@ const Workflow = (function () {
     const gross = r2(rl.reduce((s, l) => s + lineAmount({ ...l, qty: Math.max(0, l.remaining) }), 0));
     return gross;
   }
+  // ผลรวมใบลดหนี้ (−) / ใบเพิ่มหนี้ (+) ที่อนุมัติแล้วของใบกำกับ — ปรับยอดที่ต้องเรียกเก็บ
+  function noteAdj(inv) {
+    const z = () => ({ subtotal: 0, vat: 0, total: 0, wht: 0, net: 0, n: 0 });
+    const cn = z(), dn = z();
+    docs().forEach((d) => {
+      if (!isNote(d) || !isLive(d) || !(d.sourceIds || []).includes(inv.id)) return;
+      const t = d.type === "CN" ? cn : dn;
+      t.subtotal += d.subtotal || 0; t.vat += d.vat || 0; t.total += d.total || 0; t.wht += d.wht || 0; t.net += d.net || 0; t.n++;
+    });
+    [cn, dn].forEach((t) => { Object.keys(t).forEach((k) => { t[k] = r2(t[k]); }); });
+    return { cn, dn, total: r2(dn.total - cn.total), net: r2(dn.net - cn.net), subtotal: r2(dn.subtotal - cn.subtotal), vat: r2(dn.vat - cn.vat) };
+  }
   // สถานะการรับเงินของใบกำกับภาษี (ผ่านใบเสร็จ → รับชำระ)
   function paymentInfo(inv) {
     if (!inv || inv.type !== "INV") return null;
@@ -127,9 +145,12 @@ const Workflow = (function () {
     // ใบรับเงิน (RV) ในสมุดการเงินคือข้อมูลจริง: ถ้าใบกำกับนี้มีการตัดยอดผ่าน RV ใช้ยอดคงค้างแบบเดียวกับหน้าการเงิน (ยอดรวม − (เงินรับ + ภาษีถูกหัก))
     const rv = S.state.rvSettled ? S.state.rvSettled[inv.id] : undefined;
     if (rv != null) { paid = r2(rv); receipted = Math.max(receipted, paid); }
-    const outstanding = isLive(inv) ? Math.max(0, r2((rv != null ? inv.total : inv.net) - paid)) : 0;
+    const adj = noteAdj(inv);
+    const due0 = r2((rv != null ? inv.total + adj.total : inv.net + adj.net) - paid);      // ยอดที่ต้องเรียกเก็บหลังปรับใบลดหนี้/เพิ่มหนี้
+    const outstanding = isLive(inv) ? Math.max(0, due0) : 0;
+    const overpaid = isLive(inv) ? Math.max(0, r2(-due0)) : 0;                                // ลดหนี้แล้วลูกค้าจ่ายเกิน → ต้องคืนเงิน
     const today = S.today();
-    return { paid, receipted: r2(receipted), outstanding, overdue: outstanding > 0 && inv.due && inv.due !== "—" && inv.due < today };
+    return { paid, receipted: r2(receipted), outstanding, overpaid, adjusted: adj.total, adj, overdue: outstanding > 0 && inv.due && inv.due !== "—" && inv.due < today };
   }
 
   // ---------------- สถานะ ----------------
@@ -344,6 +365,51 @@ const Workflow = (function () {
     });
   }
 
+  // ---------------- ใบลดหนี้ / ใบเพิ่มหนี้ ----------------
+  function validateNote(doc, selfId, c, final) {
+    const nm = label(doc.type);
+    if ((doc.sourceIds || []).length !== 1) fail(nm + "ต้องอ้างอิงใบกำกับภาษี 1 ใบ");
+    const inv = get(doc.sourceIds[0]);
+    if (!inv || inv.type !== "INV") fail(nm + "ต้องอ้างอิงใบกำกับภาษี");
+    if (!isLive(inv)) fail(`ใบกำกับ ${inv.id} ต้องอนุมัติแล้วและยังไม่ถูกยกเลิก`);
+    if (inv.customer !== doc.customer) fail("ลูกค้าไม่ตรงกับใบกำกับต้นทาง");
+    if (!!doc.vatOn !== !!inv.vatOn) fail("ต้องคิด VAT เหมือนใบกำกับต้นทาง");
+    if (!String(doc.reason || "").trim()) fail("กรุณาเลือกเหตุผลในการออก" + nm);
+    if (doc.date < inv.date) fail(`วันที่${nm}ต้องไม่ก่อนวันที่ใบกำกับ (${inv.date})`);
+    if (!(c.subtotal > 0)) fail("ยอดต้องมากกว่า 0");
+    const act = (t) => docs().filter((d) => d.type === t && isActive(d) && d.id !== selfId && (d.sourceIds || []).includes(inv.id));
+    const dnSub = r2(act("DN").reduce((x, d) => x + (d.subtotal || 0), 0));
+    if (doc.type === "CN" && final) {          // เพดานยอดลดหนี้ตรวจตอนส่งอนุมัติ/อนุมัติ (ฉบับร่างบันทึกได้ จะได้แก้ยอดต่อ)
+      const used = r2(act("CN").reduce((x, d) => x + (d.subtotal || 0), 0));
+      const room = r2((inv.subtotal || 0) + dnSub - used);
+      if (c.subtotal > room + 0.01) fail(`ยอดลดหนี้ (${c.subtotal.toLocaleString()}) เกินมูลค่าใบกำกับที่ลดได้ (เหลือ ${room.toLocaleString()} ก่อน VAT — ลดหนี้ไปแล้ว ${used.toLocaleString()})`);
+    }
+  }
+
+  // ออกใบลดหนี้/เพิ่มหนี้เป็นฉบับร่างจากใบกำกับภาษี: mode "all" = ยกรายการของใบกำกับมาทั้งหมด (แก้จำนวน/ลบรายการได้ในหน้าแก้ไข) · mode "amount" = ระบุจำนวนเงินเอง 1 รายการ
+  function issueNote(type, invId, opts) {
+    return S.tx("issueNote", () => {
+      opts = opts || {};
+      if (!isNote({ type })) fail("ประเภทเอกสารไม่ถูกต้อง");
+      const inv = mustGet(invId);
+      if (inv.type !== "INV") fail("ออกได้จากใบกำกับภาษีเท่านั้น");
+      if (!isLive(inv)) fail("ต้องอนุมัติใบกำกับก่อน");
+      if (!canEditType(type)) fail("ไม่มีสิทธิ์สร้าง" + label(type));
+      const reason = String(opts.reason || "").trim();
+      if (!reason) fail("กรุณาเลือกเหตุผล");
+      let lines;
+      if (opts.mode === "amount") {
+        const amt = r2(Number(opts.amount) || 0);
+        if (!(amt > 0)) fail("กรุณาระบุจำนวนเงิน (ก่อน VAT) มากกว่า 0");
+        lines = [{ code: "-", name: String(opts.label || "").trim() || (type === "CN" ? "ลดราคา" : "เพิ่มราคา") + " (อ้างอิง " + inv.id + ")", qty: 1, unit: "รายการ", price: amt, disc: 0 }];
+      } else {
+        lines = (inv.lines || []).map((l) => ({ code: l.code, name: l.name, qty: l.qty, unit: l.unit, price: l.price, disc: l.disc }));   // ไม่ใส่ src → ไม่กินจำนวนคงเหลือของใบกำกับ
+      }
+      return saveDraft({ type, customer: inv.customer, date: opts.date || S.today(), sourceIds: [inv.id], refNo: inv.refNo || "", note: opts.note || "",
+        vatOn: !!inv.vatOn, whtRate: inv.whtRate || 0, billDisc: 0, lines, reason, _fromNote: "ออกจากใบกำกับ " + inv.id + " — " + reason });
+    });
+  }
+
   // ---------------- Validation ----------------
   function customerOf(code) { return S.state.customers.find((c) => c.code === code) || null; }
   function addDays(dateStr, days) {
@@ -351,7 +417,7 @@ const Workflow = (function () {
     const p = (n) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
   }
-  function validate(doc, selfId) {
+  function validate(doc, selfId, final) {
     if (!TYPES.includes(doc.type)) fail("ประเภทเอกสารไม่ถูกต้อง");
     if (!customerOf(doc.customer)) fail("กรุณาเลือกลูกค้าที่มีอยู่ในระบบ");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(doc.date || "")) fail("วันที่ไม่ถูกต้อง");
@@ -374,6 +440,7 @@ const Workflow = (function () {
     });
     const c = calc(doc);
     if (Number(doc.billDisc) > c.gross + 0.005) fail("ส่วนลดท้ายบิลมากกว่ายอดรวม");
+    if (isNote(doc)) validateNote(doc, selfId, c, !!final);
     // ใบกำกับของงวด: 1 รายการ · งวดละใบ · ยอดทุกงวดรวมกันไม่เกินยอดต้นทาง
     if (doc.installment) {
       const root = get(doc.installment.root);
@@ -442,6 +509,11 @@ const Workflow = (function () {
         vatOn: form.vatOn != null ? !!form.vatOn : !NO_VAT_DEFAULT.includes(form.type),
         whtRate: Number(form.whtRate) || 0, billDisc: r2(form.billDisc || 0),
       };
+      if (isNote({ type: doc.type })) {            // ใบลดหนี้/เพิ่มหนี้: VAT + หัก ณ ที่จ่าย ตามใบกำกับต้นทางเสมอ
+        const inv = get(((isNew ? form.sourceIds : doc.sourceIds) || [])[0]);
+        if (inv) Object.assign(fields, { vatOn: !!inv.vatOn, whtRate: inv.whtRate || 0, refInvDate: inv.date, refInvTotal: inv.total });
+        fields.reason = String(form.reason != null ? form.reason : doc.reason || "").trim();
+      }
       if (isNew && form.installment) fields.installment = { root: form.installment.root, no: form.installment.no, of: form.installment.of, label: form.installment.label, pct: form.installment.pct };   // ใบกำกับของงวด (1B)
       if (doc.type === "RC") fields.collector = String(form.collector || "").trim();   // ผู้เก็บเงิน (พนักงานที่พกใบเสร็จไปเก็บเงิน)
       if (doc.type === "PAY") Object.assign(fields, { amount: r2(form.amount), method: form.method || "โอนเงิน", bankRef: form.bankRef || "", vatOn: false, whtRate: 0, lines: [] });
@@ -472,7 +544,7 @@ const Workflow = (function () {
     return S.tx("submit", () => {
       const doc = mustGet(id);
       const c = can("submit", doc); if (!c.ok) fail(c.reason);
-      validate(doc, doc.id);
+      validate(doc, doc.id, true);
       pushHistory(doc, "submit", doc.status, "pending");
       doc.status = "pending";
       S.log("SUBMIT", label(doc.type), doc.id, "ส่งอนุมัติ");
@@ -484,7 +556,7 @@ const Workflow = (function () {
     return S.tx("approve", () => {
       const doc = mustGet(id);
       const c = can("approve", doc); if (!c.ok) fail(c.reason);
-      validate(doc, doc.id);
+      validate(doc, doc.id, true);
       parents(doc).forEach((p) => { if (!isLive(p)) fail(`เอกสารต้นทาง ${p.id} ยังไม่อนุมัติหรือถูกยกเลิก`); });
       if (doc.type === "DO") postStock(doc, -1);
       const from = doc.status;
@@ -742,7 +814,7 @@ const Workflow = (function () {
 
   return {
     PREFIX, NEXT, TYPES, VAT_RATE, STATUS_LABEL,
-    calc, lineAmount, get, children, parents, related, remainingLines, remainingValue, rcAmounts, paymentInfo, woUsed, setWhtCert, whtCertStatus, WHT_CERT_DAYS,
+    calc, lineAmount, get, children, parents, related, remainingLines, remainingValue, rcAmounts, paymentInfo, noteAdj, isNote, issueNote, NOTE_REASONS, woUsed, setWhtCert, whtCertStatus, WHT_CERT_DAYS,
     statusInfo, can, canApproveType, canEditType, nextTypes, openSources, blank, addDays,
     saveDraft, submit, approve, reject, cancel, remove, convert, setShipStatus, createWorkOrders,
     isLive, isActive, label,

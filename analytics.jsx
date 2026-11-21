@@ -13,6 +13,9 @@ const Analytics = (function () {
     return out;
   }
   const invoices = () => S.state.docs.filter((d) => d.type === "INV" && Workflow.isLive(d));
+  // ใบลดหนี้ (−) / ใบเพิ่มหนี้ (+) ที่อนุมัติแล้ว: ปรับยอดขายและภาษีขายในเดือนที่ออกเอกสาร (ไม่ปรับต้นทุนขาย — การคืนสินค้าเข้าสต๊อกทำเอง)
+  const notes = () => S.state.docs.filter((d) => (d.type === "CN" || d.type === "DN") && Workflow.isLive(d));
+  const sgn = (d) => (d.type === "CN" ? -1 : 1);
   function unitCost(code) {
     const f = S.state.finished.find((x) => x.code === code); if (f) return f.cost || 0;
     const m = S.state.materials.find((x) => x.code === code); return m ? m.cost || 0 : 0;
@@ -32,17 +35,19 @@ const Analytics = (function () {
   function month(ym) {
     const inv = invoices().filter((d) => d.date.slice(0, 7) === ym);
     const exps = S.state.expenses.filter((e) => e.status !== "cancelled" && (e.date || "").slice(0, 7) === ym);
-    const revenue = r2(inv.reduce((s, d) => s + d.subtotal, 0));
+    const nts = notes().filter((d) => d.date.slice(0, 7) === ym);
+    const revenue = r2(inv.reduce((s, d) => s + d.subtotal, 0) + nts.reduce((s, d) => s + sgn(d) * d.subtotal, 0));
     const cogs = r2(inv.reduce((s, d) => s + cogsOf(d), 0));
     const opex = r2(exps.filter((e) => e.category !== "วัตถุดิบ" && e.category !== "สีผสม" && e.category !== "สินค้าซื้อมาขาย").reduce((s, e) => s + (e.amount || 0), 0));
-    const salesVat = r2(inv.filter((d) => d.vatOn).reduce((s, d) => s + d.vat, 0));
+    const salesVat = r2(inv.filter((d) => d.vatOn).reduce((s, d) => s + d.vat, 0) + nts.filter((d) => d.vatOn).reduce((s, d) => s + sgn(d) * d.vat, 0));
     const purchaseVat = r2(exps.reduce((s, e) => s + (e.vat || 0), 0));
-    return { ym, revenue, cogs, opex, gp: r2(revenue - cogs), ebit: r2(revenue - cogs - opex), salesVat, purchaseVat, invoices: inv, expenses: exps };
+    return { ym, revenue, cogs, opex, gp: r2(revenue - cogs), ebit: r2(revenue - cogs - opex), salesVat, purchaseVat, invoices: inv, notes: nts, expenses: exps };
   }
   function trend(n = 6) { return lastMonths(n).map((m) => { const x = month(m.ym); return { m: m.label, ym: m.ym, revenue: x.revenue / 1e6, cost: (x.cogs + x.opex) / 1e6 }; }); }
   function topCustomers(year, n = 5) {
     const by = {};
     invoices().filter((d) => d.date.slice(0, 4) === String(year)).forEach((d) => { by[d.customer] = (by[d.customer] || 0) + d.subtotal; });
+    notes().filter((d) => d.date.slice(0, 4) === String(year)).forEach((d) => { by[d.customer] = (by[d.customer] || 0) + sgn(d) * d.subtotal; });
     const total = Object.values(by).reduce((a, b) => a + b, 0);
     return Object.entries(by).sort((a, b) => b[1] - a[1]).slice(0, n).map(([code, value]) => {
       const c = S.state.customers.find((x) => x.code === code);
@@ -53,7 +58,7 @@ const Analytics = (function () {
     const inv = invoices().filter((d) => d.customer === code);
     const year = S.today().slice(0, 4);
     let outstanding = 0; inv.forEach((d) => { outstanding += Workflow.paymentInfo(d).outstanding; });
-    return { total: r2(inv.reduce((s, d) => s + d.subtotal, 0)), ytd: inv.filter((d) => d.date.slice(0, 4) === year).length,
+    return { total: r2(inv.reduce((s, d) => s + d.subtotal, 0) + notes().filter((d) => d.customer === code).reduce((s, d) => s + sgn(d) * d.subtotal, 0)), ytd: inv.filter((d) => d.date.slice(0, 4) === year).length,
       outstanding: r2(outstanding), docs: S.state.docs.filter((d) => d.customer === code).length };
   }
   function productionOn(day) {
@@ -71,6 +76,6 @@ const Analytics = (function () {
     });
     return b;
   }
-  return { lastMonths, month, trend, topCustomers, customerStats, productionOn, cogsOf, arAging, invoices, TH_M };
+  return { lastMonths, month, trend, topCustomers, customerStats, productionOn, cogsOf, arAging, invoices, notes, TH_M };
 })();
 window.Analytics = Analytics;

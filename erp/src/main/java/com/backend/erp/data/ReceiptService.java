@@ -123,6 +123,14 @@ public class ReceiptService {
 		return jdbc.queryForObject("select coalesce(sum(a.amount + a.wht),0) from fin_receipt_allocs a join fin_receipts r on r.id = a.receipt_id where a.invoice_id = ? and r.status in ('pending','confirmed')", BigDecimal.class, invoiceId);
 	}
 
+	/** ผลรวมใบเพิ่มหนี้ (+) / ใบลดหนี้ (−) ที่อนุมัติแล้วของใบกำกับ: [ยอดรวม, ภาษีหัก ณ ที่จ่าย] — ปรับยอดที่ต้องเรียกเก็บของใบกำกับ */
+	private BigDecimal[] noteAdj(String invoiceId) {
+		Map<String, Object> m = jdbc.queryForMap("select coalesce(sum(case data->>'type' when 'DN' then 1 else -1 end * coalesce((data->>'total')::numeric,0)),0) as t, "
+			+ "coalesce(sum(case data->>'type' when 'DN' then 1 else -1 end * coalesce((data->>'wht')::numeric,0)),0) as w from erp_records "
+			+ "where collection = 'docs' and data->>'type' in ('CN','DN') and data->>'status' in ('approved','partial','completed') and jsonb_exists(data->'sourceIds', ?)", invoiceId);
+		return new BigDecimal[] { bd(m.get("t")), bd(m.get("w")) };
+	}
+
 	private static final String INV_SEL = "select id, data->>'customer' as customer, data->>'customerName' as cname, data->>'status' as status, data->>'type' as type, coalesce(data->>'total','0') as total, "
 		+ "coalesce(data->>'wht','0') as wht, coalesce(data->>'date','') as date, coalesce(data->>'due','') as due from erp_records where collection = 'docs' and id = ?";
 
@@ -134,11 +142,12 @@ public class ReceiptService {
 		List<Map<String, Object>> out = new ArrayList<>();
 		for (Map<String, Object> r : rows) {
 			Map<String, Object> i = jdbc.queryForList(INV_SEL, r.get("id")).get(0);
-			BigDecimal total = bd(i.get("total")), done = settled(String.valueOf(i.get("id"))), rem = total.subtract(done);
+			BigDecimal[] adj = noteAdj(String.valueOf(i.get("id")));
+			BigDecimal total = bd(i.get("total")).add(adj[0]), done = settled(String.valueOf(i.get("id"))), rem = total.subtract(done);
 			if (rem.signum() <= 0) continue;
 			Map<String, Object> m = new LinkedHashMap<>();
 			m.put("id", i.get("id")); m.put("date", i.get("date")); m.put("due", i.get("due"));
-			m.put("total", total.doubleValue()); m.put("wht", bd(i.get("wht")).doubleValue()); m.put("settled", done.doubleValue()); m.put("remaining", rem.doubleValue());
+			m.put("total", total.doubleValue()); m.put("wht", bd(i.get("wht")).add(adj[1]).max(BigDecimal.ZERO).doubleValue()); m.put("adjusted", adj[0].doubleValue()); m.put("settled", done.doubleValue()); m.put("remaining", rem.doubleValue());
 			out.add(m);
 		}
 		return out;
@@ -183,10 +192,11 @@ public class ReceiptService {
 			Map<String, Object> i = r.get(0);
 			if (!customerId.equals(i.get("customer"))) throw ApiException.badRequest("ใบกำกับ " + inv + " ไม่ใช่ของลูกค้าที่เลือก");
 			if (!List.of("approved", "partial", "completed").contains(String.valueOf(i.get("status")))) throw ApiException.conflict("INVOICE_NOT_OPEN", "ใบกำกับ " + inv + " ยังไม่อนุมัติหรือถูกยกเลิกแล้ว");
-			BigDecimal total = bd(i.get("total")), rem = total.subtract(settled(inv));
+			BigDecimal[] adj = noteAdj(inv);
+			BigDecimal total = bd(i.get("total")).add(adj[0]), rem = total.subtract(settled(inv));
 			BigDecimal pay = e.getValue()[0].add(e.getValue()[1]);
 			if (pay.compareTo(rem) > 0) throw ApiException.unprocessable("OVER_ALLOCATION", "ใบกำกับ " + inv + " คงค้าง " + rem + " แต่จัดสรร " + pay + " — จัดสรรเกินยอดคงค้างไม่ได้");
-			if (e.getValue()[1].compareTo(bd(i.get("wht"))) > 0) throw ApiException.unprocessable("WHT_EXCEEDS_INVOICE", "ภาษีถูกหักของ " + inv + " (" + e.getValue()[1] + ") เกินที่ระบุในใบกำกับ (" + bd(i.get("wht")) + ")");
+			if (e.getValue()[1].compareTo(bd(i.get("wht")).add(adj[1]).max(BigDecimal.ZERO)) > 0) throw ApiException.unprocessable("WHT_EXCEEDS_INVOICE", "ภาษีถูกหักของ " + inv + " (" + e.getValue()[1] + ") เกินที่ระบุในใบกำกับ (" + bd(i.get("wht")) + ")");
 			sumAmt = sumAmt.add(e.getValue()[0]);
 			sumWht = sumWht.add(e.getValue()[1]);
 		}
