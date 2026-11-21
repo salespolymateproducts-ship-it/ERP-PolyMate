@@ -472,7 +472,7 @@ function Donut({ data, size = 168, thickness = 22, colors = ["#2D6CDF", "#7C3AED
 function DocBadge({ type }) {
   const meta = window.DOC_LABEL[type];
   if (!meta) return null;
-  return <span className={"badge badge-" + meta.color} title={meta.short}>{meta.th}</span>;
+  return <span className="badge" title={meta.short} style={{ background: (window.DOC_TINT || {})[type] || undefined, color: "#2B3345", WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{meta.th}</span>;
 }
 function StatusBadge({ status, dict }) {
   const meta = dict[status];

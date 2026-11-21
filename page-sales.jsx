@@ -612,8 +612,6 @@ function DocHistory({ doc }) {
 }
 
 // =================== เอกสารสำหรับพิมพ์ ===================
-// แถบสีพาสเทลหลังข้อความภาษาอังกฤษใต้ชื่อเอกสาร (เช่น Receipt) — สีตามชนิดเอกสาร ช่วยแยกชนิดตอนกองบนโต๊ะ · ชื่อเอกสารยังเป็นตัวอักษรเสมอ เผื่อถ่ายสำเนาขาวดำ
-const DOC_TINT = { QT: "#CFE8FC", SO: "#C5CDEB", DO: "#E3E5E8", INV: "#FFDDBF", BN: "#E4D9FA", RC: "#CDEBD6", CN: "#FAD0D0", DN: "#FFF1B8", CPO: "#CBEFEA", PAY: "#CDEBD6" };
 function DocPaper({ doc }) {
   const meta = DOC_LABEL[doc.type];
   const c = doc.customerSnap || {};
@@ -621,8 +619,8 @@ function DocPaper({ doc }) {
   const th = { padding: "8px 10px", fontWeight: 600, fontSize: 11 };
   const pay = doc.type === "INV" ? Workflow.paymentInfo(doc) : null;
   const noteInv = Workflow.isNote(doc) ? Workflow.get((doc.sourceIds || [])[0]) : null;   // ใบกำกับภาษีต้นทางของใบลดหนี้/เพิ่มหนี้
-  // ใบส่งสินค้า / ใบกำกับภาษี / ใบวางบิล: พิมพ์ออกมา 2 ฉบับ — ต้นฉบับ + สำเนา (เอกสารอื่นพิมพ์ฉบับเดียว)
-  const hasCopies = ["DO", "INV", "BN"].includes(doc.type);
+  // เอกสารขายที่ส่งลูกค้า (ใบเสนอราคา → ใบเสร็จ รวมใบลดหนี้/เพิ่มหนี้): พิมพ์ออกมา 2 ฉบับ — ต้นฉบับ + สำเนา (PO ลูกค้า/รับชำระพิมพ์ฉบับเดียว)
+  const hasCopies = ["QT", "SO", "DO", "INV", "BN", "RC", "CN", "DN"].includes(doc.type);
   // ใบเสร็จที่ลูกค้าหัก ณ ที่จ่าย: สถานะหนังสือรับรอง (50 ทวิ) + ทางลัดบันทึก (ไม่แสดงตอนพิมพ์)
   const whtSt = doc.type === "RC" ? Workflow.whtCertStatus(doc) : null;
   const [whtOpen, setWhtOpen] = useState(false);

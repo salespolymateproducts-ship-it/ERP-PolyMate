@@ -91,6 +91,9 @@ const DOC_LABEL = {
   DN: { th: "ใบเพิ่มหนี้", short: "Debit Note", color: "warning" },
 };
 
+// สีพาสเทลประจำชนิดเอกสาร — ใช้กับแถบใต้ชื่อเอกสารบนใบพิมพ์ และป้ายชนิดเอกสารในรายการ (ให้ตรงกัน)
+const DOC_TINT = { QT: "#CFE8FC", SO: "#C5CDEB", DO: "#E3E5E8", INV: "#FFDDBF", BN: "#E4D9FA", RC: "#CDEBD6", CN: "#FAD0D0", DN: "#FFF1B8", CPO: "#CBEFEA", PAY: "#CDEBD6" };
+
 // สถานะกลาง (ป้ายเฉพาะประเภทเอกสารดู Workflow.statusLabel)
 const DOC_STATUS = {
   draft: { th: "ฉบับร่าง", color: "neutral" },
@@ -231,6 +234,6 @@ Object.assign(window, {
   EXPENSES, EXPENSE_CATEGORIES, EXPENSE_CATEGORY_GROUPS, EMPLOYEES,
   SALES_TREND, TOP_CUSTOMERS, NOTIFICATIONS,
   ROLES,
-  baht, _fmt,
+  baht, _fmt, DOC_TINT,
   WHT_RATES, whtAmount,
 });
