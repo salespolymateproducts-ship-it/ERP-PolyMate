@@ -840,6 +840,11 @@ function WhtCertPanel() {
   const years = [...new Set(all.map((d) => d.date.slice(0, 4)))].sort().reverse();
   const st = (d) => Workflow.whtCertStatus(d);
   const rows = all.filter((d) => (year === "ALL" || d.date.startsWith(year)) && (status === "ALL" || st(d).state === status));
+  const wv = useListView(rows, {
+    text: (d) => [d.id, d.customerName, d.whtCert ? d.whtCert.no : ""].join(" "), dateKey: (d) => d.date, dateLabel: "วันที่ใบเสร็จ", filterKey: status + "|" + year,
+    sorts: { date: (d) => d.date, id: (d) => d.id, cust: (d) => d.customerName, base: (d) => d.subtotal, rate: (d) => d.whtRate, wht: (d) => d.wht, st: (d) => st(d).state, cert: (d) => (d.whtCert ? d.whtCert.no : "") },
+    defaultSort: { key: "date", dir: "desc" },
+  });
   const sum = (list, f) => list.reduce((t, d) => t + f(d), 0);
   const pending = all.filter((d) => st(d).state === "pending"), overdue = pending.filter((d) => st(d).overdue), received = all.filter((d) => st(d).state === "received");
   // เครดิตภาษีที่ได้รับหนังสือแล้ว สรุปรายเดือน (ตามวันที่หนังสือ)
@@ -867,11 +872,12 @@ function WhtCertPanel() {
           <span className="spacer"/>
           <button className="btn btn-outline btn-sm" disabled={!rows.length} onClick={exportRows}><I.Download size={14}/> ส่งออก CSV</button>
         </div>
+        <ListToolbar view={wv} placeholder="ค้นหาใบเสร็จ / ลูกค้า / เลขหนังสือ…"/>
         <div style={{ overflow: "auto" }}>
           <table className="table">
-            <thead><tr><th>วันที่</th><th>ใบเสร็จ</th><th>ลูกค้า</th><th className="num">ฐานภาษี</th><th className="num">หัก %</th><th className="num">ภาษีที่ควรถูกหัก</th><th>สถานะ</th><th>หนังสือรับรอง</th><th></th></tr></thead>
+            <thead><tr><SortTh view={wv} k="date">วันที่</SortTh><SortTh view={wv} k="id">ใบเสร็จ</SortTh><SortTh view={wv} k="cust">ลูกค้า</SortTh><SortTh view={wv} k="base" className="num">ฐานภาษี</SortTh><SortTh view={wv} k="rate" className="num">หัก %</SortTh><SortTh view={wv} k="wht" className="num">ภาษีที่ควรถูกหัก</SortTh><SortTh view={wv} k="st">สถานะ</SortTh><SortTh view={wv} k="cert">หนังสือรับรอง</SortTh><th></th></tr></thead>
             <tbody>
-              {rows.map((d) => {
+              {wv.pageRows.map((d) => {
                 const w = st(d);
                 return (
                   <tr key={d.id}>
@@ -888,6 +894,7 @@ function WhtCertPanel() {
             </tbody>
           </table>
         </div>
+        <Pager view={wv}/>
       </div>
       {monthsSorted.length > 0 && (
         <div className="card" style={{ marginTop: 14 }}>

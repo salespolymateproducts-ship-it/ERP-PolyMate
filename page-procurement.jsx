@@ -445,13 +445,19 @@ function POTotalRow({ k, v }) {
 
 function ReceiveView({ onReceive }) {
   const pending = PURCHASE_ORDERS.filter((p) => p.status === "approved");
+  const rv = useListView(pending, {
+    text: (p) => [p.id, p.supplierName, (p.lines || []).map((l) => l.name).join(" ")].join(" "), dateKey: (p) => p.expectedDate, dateLabel: "วันที่นัด",
+    sorts: { id: (p) => p.id, sup: (p) => p.supplierName, item: (p) => (p.lines[0] ? p.lines[0].name : ""), exp: (p) => p.expectedDate, total: (p) => p.total || 0 },
+    defaultSort: { key: "exp", dir: "asc" },
+  });
   return (
     <div className="card">
       <div className="card-head"><div className="card-title">รอรับเข้า ({pending.length} ใบ) <span style={{ fontWeight: 400, fontSize: 12, color: "var(--text-tertiary)" }}>เฉพาะใบสั่งซื้อที่อนุมัติแล้ว</span></div></div>
+      <ListToolbar view={rv} placeholder="ค้นหา PO / Supplier / รายการ…"/>
       <table className="table">
-        <thead><tr><th>PO</th><th>Supplier</th><th>รายการ</th><th>วันที่นัด</th><th className="num">มูลค่า</th><th></th></tr></thead>
+        <thead><tr><SortTh view={rv} k="id">PO</SortTh><SortTh view={rv} k="sup">Supplier</SortTh><SortTh view={rv} k="item">รายการ</SortTh><SortTh view={rv} k="exp">วันที่นัด</SortTh><SortTh view={rv} k="total" className="num">มูลค่า</SortTh><th></th></tr></thead>
         <tbody>
-          {pending.map((p) => (
+          {rv.pageRows.map((p) => (
             <tr key={p.id}>
               <td className="mono"><b>{p.id}</b></td>
               <td>{p.supplierName}</td>
@@ -466,6 +472,7 @@ function ReceiveView({ onReceive }) {
           {!pending.length && <tr><td colSpan={6} style={{ textAlign: "center", padding: 40, color: "var(--text-tertiary)" }}>ไม่มีรายการรอรับเข้า</td></tr>}
         </tbody>
       </table>
+      <Pager view={rv}/>
     </div>
   );
 }

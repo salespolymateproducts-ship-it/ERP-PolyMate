@@ -332,6 +332,11 @@ function FinRcWaiting({ accounts, reload, tick }) {
   const list = rows.filter((d) => collector === "ALL" || (d.collector || "—") === collector);
   const total = list.reduce((s, d) => s + Workflow.rcAmounts(d).outstanding, 0);
   const late = list.filter((d) => day(d) > 30);
+  const lv = useListView(list, {
+    text: (d) => [d.id, d.customerName, d.collector, rcInvoiceIds(d).join(" ")].join(" "), dateKey: (d) => d.date, dateLabel: "วันที่ออก",
+    sorts: { id: (d) => d.id, date: (d) => d.date, age: (d) => day(d), cust: (d) => d.customerName, inv: (d) => rcInvoiceIds(d).join(","), col: (d) => d.collector, amt: (d) => Workflow.rcAmounts(d).outstanding },
+    defaultSort: { key: "date", dir: "asc" }, filterKey: collector,
+  });
   return (
     <>
       <div className="grid-4" style={{ margin: "0 0 12px" }}>
@@ -342,10 +347,11 @@ function FinRcWaiting({ accounts, reload, tick }) {
       </div>
       <div className="card">
         <div style={{ padding: "12px 16px", fontSize: 12.5, color: "var(--text-secondary)" }}>ใบเสร็จที่ออกให้ลูกค้าแล้ว (พนักงานพกไปเก็บเงิน) ที่ยังไม่มีการบันทึกรับเงิน — เก็บเงินได้แล้วกด "บันทึกรับเงิน" ระบบเติมลูกค้าและใบกำกับให้ ถ้าลูกค้าไม่จ่าย ให้ยกเลิกใบเสร็จที่หน้าเอกสารขาย</div>
+        <ListToolbar view={lv} placeholder="ค้นหาใบเสร็จ / ลูกค้า / ผู้เก็บเงิน…"/>
         <table className="table">
-          <thead><tr><th>ใบเสร็จ</th><th>วันที่ออก</th><th className="num">อายุ (วัน)</th><th>ลูกค้า</th><th>ใบกำกับ</th><th>ผู้เก็บเงิน</th><th className="num">ยอดที่ต้องเก็บ</th><th></th></tr></thead>
+          <thead><tr><SortTh view={lv} k="id">ใบเสร็จ</SortTh><SortTh view={lv} k="date">วันที่ออก</SortTh><SortTh view={lv} k="age" className="num">อายุ (วัน)</SortTh><SortTh view={lv} k="cust">ลูกค้า</SortTh><SortTh view={lv} k="inv">ใบกำกับ</SortTh><SortTh view={lv} k="col">ผู้เก็บเงิน</SortTh><SortTh view={lv} k="amt" className="num">ยอดที่ต้องเก็บ</SortTh><th></th></tr></thead>
           <tbody>
-            {list.map((d) => {
+            {lv.pageRows.map((d) => {
               const age = day(d);
               return (
                 <tr key={d.id}>
@@ -361,6 +367,7 @@ function FinRcWaiting({ accounts, reload, tick }) {
             {!list.length && <tr><td colSpan={8} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>ไม่มีใบเสร็จรอเก็บเงิน</td></tr>}
           </tbody>
         </table>
+        <Pager view={lv}/>
       </div>
       {open && <FinReceiptModal accounts={accounts} prefill={rcPrefill(open)} onClose={() => setOpen(null)} onDone={() => { setOpen(null); reload(); }}/>}
     </>

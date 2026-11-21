@@ -377,6 +377,11 @@ function FinApprovals({ txns, receipts, vouchers, accName, isAdmin, user, setMod
     ...vouchers.map((v) => ({ kind: "pv", id: v.id, date: v.date, label: "ใบสำคัญจ่าย", cls: "badge-info",
       what: v.payee + " · " + v.items.map((i) => i.expenseId + (i.ref ? " (" + i.ref + ")" : "")).join(", "), amount: v.net, sign: -1, by: v.createdBy, raw: v })),
   ].sort((a, b) => (a.date < b.date ? 1 : -1));
+  const av = useListView(rows, {
+    text: (x) => [x.id, x.label, x.what, x.by].join(" "), dateKey: (x) => x.date,
+    sorts: { label: (x) => x.label, id: (x) => x.id, date: (x) => x.date, what: (x) => x.what, amount: (x) => x.amount, by: (x) => x.by },
+    defaultSort: { key: "date", dir: "desc" },
+  });
   const base = { txn: "/txns/", rv: "/receipts/", pv: "/payments/" };
   const approve = async (x) => { try { await Store.finApi("POST", base[x.kind] + x.id + "/approve"); notify("อนุมัติ " + x.id + " แล้ว", "success"); setSub(null); reload(); } catch (e) { finErr(e); } };
   const reject = (x) => setModal({ t: { txn: "reject", rv: "rvreject", pv: "pvreject" }[x.kind], id: x.id });
@@ -384,10 +389,11 @@ function FinApprovals({ txns, receipts, vouchers, accName, isAdmin, user, setMod
   return (
     <div className="card">
       <div style={{ padding: "12px 16px", fontSize: 12.5, color: "var(--text-secondary)" }}>รวมทุกเอกสารที่รออนุมัติ — กด "รายละเอียด" เพื่อดูว่าเป็นเอกสารที่มาจากใบกำกับ/ค่าใช้จ่าย/PO ใบไหน ก่อนอนุมัติ</div>
+      <ListToolbar view={av} placeholder="ค้นหาเลขที่ / ชื่อ / ผู้บันทึก…"/>
       <table className="table">
-        <thead><tr><th>ชนิดเอกสาร</th><th>เลขที่</th><th>วันที่</th><th>เรื่อง / ที่มา</th><th className="num">จำนวนเงิน</th><th>ผู้บันทึก</th><th></th></tr></thead>
+        <thead><tr><SortTh view={av} k="label">ชนิดเอกสาร</SortTh><SortTh view={av} k="id">เลขที่</SortTh><SortTh view={av} k="date">วันที่</SortTh><SortTh view={av} k="what">เรื่อง / ที่มา</SortTh><SortTh view={av} k="amount" className="num">จำนวนเงิน</SortTh><SortTh view={av} k="by">ผู้บันทึก</SortTh><th></th></tr></thead>
         <tbody>
-          {rows.map((x) => {
+          {av.pageRows.map((x) => {
             const mine = user && x.by === user.fullName;
             return (
               <tr key={x.kind + x.id}>
@@ -406,6 +412,7 @@ function FinApprovals({ txns, receipts, vouchers, accName, isAdmin, user, setMod
           {!rows.length && <tr><td colSpan={7} style={{ textAlign: "center", padding: 28, color: "var(--text-tertiary)" }}>ไม่มีรายการรออนุมัติ</td></tr>}
         </tbody>
       </table>
+      <Pager view={av}/>
       {sub && sub.kind === "pv" && <FinPayDetailModal v={sub.raw} isAdmin={isAdmin} user={user} onClose={() => setSub(null)} onApprove={() => approve(sub)} onReject={() => { setSub(null); reject(sub); }} onPay={() => setSub(null)} onCancel={() => { setSub(null); cancel(sub); }}/>}
       {sub && sub.kind === "rv" && <FinReceiptDetailModal r={sub.raw} isAdmin={isAdmin} user={user} onClose={() => setSub(null)} onApprove={() => approve(sub)} onReject={() => { setSub(null); reject(sub); }} onCancel={() => { setSub(null); cancel(sub); }}/>}
     </div>

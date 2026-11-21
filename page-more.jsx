@@ -43,7 +43,6 @@ function bomLineText(l) {
 
 function BOMViewer() {
   useStore();
-  const [q, setQ] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const [form, setForm] = useState(null); // { mode: "new" | "edit" | "copy", rec }
   const [toast, setToast] = useState(null);
@@ -53,10 +52,15 @@ function BOMViewer() {
   const boms = Store.state.boms;
   const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2600); };
 
-  const list = boms.filter((b) => (showInactive || b.status !== "inactive")
-    && (!q || (b.productCode + " " + b.name + " " + (b.color || "")).toLowerCase().includes(q.toLowerCase())));
+  const list = boms.filter((b) => showInactive || b.status !== "inactive");
   const byProduct = {};
   list.forEach((b) => { (byProduct[b.productCode] = byProduct[b.productCode] || []).push(b); });
+  const groups = Object.entries(byProduct).map(([code, items]) => { const fg = Store.state.finished.find((f) => f.code === code); return { id: code, code, items, name: fg ? fg.name : "" }; });
+  const gv = useListView(groups, {
+    text: (g) => g.code + " " + g.name + " " + g.items.map((b) => b.name + " " + (b.color || "")).join(" "), filterKey: String(showInactive), pageSize: 10,
+    sorts: { code: (g) => g.code, name: (g) => g.name, n: (g) => g.items.length },
+    defaultSort: { key: "code", dir: "asc" },
+  });
   const withoutBom = Store.state.finished.filter((f) => f.jobType !== "trade" && !boms.some((b) => b.productCode === f.code && b.status === "active"));
 
   const act = async (fn, okMsg) => {
@@ -67,8 +71,14 @@ function BOMViewer() {
 
   return (
     <>
+      <div className="card" style={{ marginBottom: 12 }}>
+        <ListToolbar view={gv} placeholder="ค้นหารหัสสินค้า / ชื่อสูตร / สี…">
+          <select className="select" style={{ width: 200 }} aria-label="เรียงตาม" value={gv.sort ? gv.sort.key + ":" + gv.sort.dir : "code:asc"} onChange={(e) => { const [key, dir] = e.target.value.split(":"); gv.setSort({ key, dir }); }}>
+            <option value="code:asc">เรียง: รหัสสินค้า</option><option value="name:asc">เรียง: ชื่อสินค้า</option><option value="n:desc">เรียง: จำนวนสูตรมากสุด</option>
+          </select>
+        </ListToolbar>
+      </div>
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
-        <input className="input" style={{ maxWidth: 260 }} placeholder="ค้นหารหัสสินค้า / ชื่อสูตร / สี" value={q} onChange={(e) => setQ(e.target.value)}/>
         <label style={{ fontSize: 12.5, color: "var(--text-secondary)", display: "flex", gap: 6, alignItems: "center" }}>
           <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)}/> แสดงสูตรที่เลิกใช้
         </label>
@@ -83,8 +93,8 @@ function BOMViewer() {
         </div>
       )}
 
-      {!list.length && <div className="card" style={{ padding: 24, textAlign: "center", color: "var(--text-tertiary)" }}>ยังไม่มีสูตร BOM{q ? " ที่ตรงกับคำค้น" : ""}</div>}
-      {Object.entries(byProduct).map(([code, items]) => {
+      {!list.length && <div className="card" style={{ padding: 24, textAlign: "center", color: "var(--text-tertiary)" }}>ยังไม่มีสูตร BOM{gv.active ? " ที่ตรงกับคำค้น" : ""}</div>}
+      {gv.pageRows.map(({ code, items }) => {
         const fg = Store.state.finished.find((f) => f.code === code);
         return (
           <div key={code} style={{ marginBottom: 18 }}>
@@ -104,6 +114,7 @@ function BOMViewer() {
           </div>
         );
       })}
+      {gv.total > 0 && <div className="card" style={{ marginBottom: 14 }}><Pager view={gv}/></div>}
 
       <Drawer open={!!form} onClose={() => setForm(null)} width={760}
         title={form ? (form.mode === "edit" ? "แก้ไขสูตร " + form.rec.name : form.mode === "copy" ? "คัดลอกสูตร " + form.rec.name : "สร้างสูตร BOM") : ""}>
@@ -736,13 +747,16 @@ function PageUsers({ role }) {
   useStore();
   const me = Store.user();
   const users = Store.state.users;
-  const [q, setQ] = useState("");
+  const uv = useListView(users, {
+    text: (u) => [u.username, u.fullName, u.email, u.dept].join(" "),
+    sorts: { name: (u) => u.fullName, role: (u) => (ROLES[u.role] || {}).label || u.role, st: (u) => u.status, login: (u) => u.lastLogin },
+    defaultSort: { key: "name", dir: "asc" },
+  });
   const [form, setForm] = useState(null); // {mode:'new'|'edit', ...}
   const [tempPw, setTempPw] = useState(null);
   if (!me || me.role !== "admin") {
     return (<><window.PageHeader title="จัดการผู้ใช้" subtitle="เฉพาะผู้ดูแลระบบ"/><div className="card" style={{ padding: 48, textAlign: "center" }}>ไม่มีสิทธิ์เข้าถึง</div></>);
   }
-  const list = users.filter((u) => !q || [u.username, u.fullName, u.email].join(" ").toLowerCase().includes(q.toLowerCase()));
   const admins = users.filter((u) => u.role === "admin" && u.status === "active");
 
   async function save() {
@@ -783,10 +797,10 @@ function PageUsers({ role }) {
       <window.PageHeader title="จัดการผู้ใช้" subtitle="สร้างบัญชี กำหนด Role/สิทธิ์ ระงับ และรีเซ็ตรหัสผ่าน"
         actions={<button className="btn btn-primary btn-sm" onClick={() => setForm({ mode: "new", username: "", fullName: "", role: "sales", email: "", dept: "" })}><I.Plus size={14}/> เพิ่มผู้ใช้</button>}/>
       <div className="card">
-        <div style={{ padding: 14 }}><input className="input" style={{ maxWidth: 300 }} placeholder="ค้นหาชื่อ / username / อีเมล" value={q} onChange={(e) => setQ(e.target.value)}/></div>
+        <ListToolbar view={uv} placeholder="ค้นหาชื่อ / username / อีเมล"/>
         <table className="table">
-          <thead><tr><th>ผู้ใช้</th><th>Role / สิทธิ์</th><th>สถานะ</th><th>เข้าใช้ล่าสุด</th><th style={{ width: 300 }}></th></tr></thead>
-          <tbody>{list.map((u) => (
+          <thead><tr><SortTh view={uv} k="name">ผู้ใช้</SortTh><SortTh view={uv} k="role">Role / สิทธิ์</SortTh><SortTh view={uv} k="st">สถานะ</SortTh><SortTh view={uv} k="login">เข้าใช้ล่าสุด</SortTh><th style={{ width: 300 }}></th></tr></thead>
+          <tbody>{uv.pageRows.map((u) => (
             <tr key={u.id}>
               <td><b>{u.fullName}</b>{u.id === me.id && <span className="badge badge-info" style={{ marginLeft: 6 }}>คุณ</span>}<div className="mono" style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{u.username} {u.email && "· " + u.email}</div></td>
               <td>{(ROLES[u.role] || {}).label || u.role}<div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>อนุมัติได้: {ROLES[u.role] && ROLES[u.role].approve === "*" ? "ทุกเอกสาร" : ((ROLES[u.role] || {}).approve || []).map((t) => DOC_LABEL[t].th).join(", ") || "—"}</div></td>
@@ -801,6 +815,7 @@ function PageUsers({ role }) {
             </tr>
           ))}</tbody>
         </table>
+        <Pager view={uv}/>
       </div>
       {form && (
         <ErpModal title={form.mode === "new" ? "เพิ่มผู้ใช้" : "แก้ไข " + form.username} width={460} onClose={() => setForm(null)}

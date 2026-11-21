@@ -36,6 +36,9 @@ public class ReceiptController {
 	@GetMapping("/rc-status")
 	public List<Map<String, Object>> rcStatus(HttpServletRequest req) { return rc.rcStatus(AuthInterceptor.user(req)); }
 
+	@GetMapping("/inv-settled")
+	public Map<String, Double> invSettled(HttpServletRequest req) { return rc.invoiceSettled(AuthInterceptor.user(req)); }
+
 	@GetMapping("/wht-invoices")
 	public List<String> whtInvoices(HttpServletRequest req) { return rc.whtInvoices(AuthInterceptor.user(req)); }
 

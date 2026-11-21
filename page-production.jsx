@@ -260,11 +260,24 @@ function MachineGrid() {
   const [showRetired, setShowRetired] = useState(false);
   const [toast, setToast] = useState(null);
   const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2600); };
-  const list = MACHINES.filter((m) => showRetired || m.condition !== "retired");
+  const allList = MACHINES.filter((m) => showRetired || m.condition !== "retired");
+  const view = useListView(allList, {
+    text: (m) => [m.id, m.name, m.location, m.note].join(" "), pageSize: 24, filterKey: String(showRetired),
+    sorts: { id: (m) => m.id, name: (m) => m.name, ton: (m) => m.tonnage || 0, maint: (m) => m.lastMaint || "" },
+    defaultSort: { key: "id", dir: "asc" },
+  });
+  const list = view.pageRows;
   const retiredCount = MACHINES.filter((m) => m.condition === "retired").length;
   const histRec = histM ? MACHINES.find((m) => m.id === histM) : null;
   return (
     <>
+      <div className="card" style={{ marginBottom: 12 }}>
+        <ListToolbar view={view} placeholder="รหัสเครื่อง / ชื่อ / ที่ตั้ง…">
+          <select className="select" style={{ width: 210 }} aria-label="เรียงตาม" value={view.sort ? view.sort.key + ":" + view.sort.dir : "id:asc"} onChange={(e) => { const [key, dir] = e.target.value.split(":"); view.setSort({ key, dir }); }}>
+            <option value="id:asc">เรียง: รหัส</option><option value="name:asc">เรียง: ชื่อ</option><option value="ton:desc">เรียง: ขนาดตัน มากสุด</option><option value="maint:asc">เรียง: บำรุงรักษาเก่าสุด</option>
+          </select>
+        </ListToolbar>
+      </div>
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
         {retiredCount > 0 && <label style={{ fontSize: 12.5, color: "var(--text-secondary)", display: "flex", gap: 6, alignItems: "center" }}>
           <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)}/> แสดงเครื่องที่เลิกใช้ ({retiredCount})
@@ -352,6 +365,7 @@ function MachineGrid() {
           );
         })}
       </div>
+      {view.total > 0 && <div className="card" style={{ marginTop: 12 }}><Pager view={view}/></div>}
 
       {form && <MachineForm key={form.mode + (form.rec ? form.rec.id : "")} mode={form.mode} rec={form.rec} onClose={() => setForm(null)} onDone={(m) => { setForm(null); flash(m); }}/>}
       {condM && <MachineConditionModal m={MACHINES.find((x) => x.id === condM.id) || condM} onClose={() => setCondM(null)} onDone={(m) => { setCondM(null); flash(m); }}/>}

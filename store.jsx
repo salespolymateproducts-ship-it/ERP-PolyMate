@@ -39,6 +39,7 @@ const Store = (function () {
     settings: { company: null },
     counters: {}, // { "IV202611": 3, ... }
     rcLinked: [],      // เลขที่ใบเสร็จ (RC) ที่ผูกกับใบรับเงิน (RV) แล้ว — ไม่ซิงก์กับเซิร์ฟเวอร์ (อ่านจาก API การเงิน)
+    rvSettled: {},     // ยอดที่ตัดแล้วต่อใบกำกับจากใบรับเงิน (RV) — ไม่ซิงก์กับเซิร์ฟเวอร์ (อ่านจาก API การเงิน)
     whtInvoices: [],   // ใบกำกับที่ภาษีถูกหักถูกบันทึกผ่านใบรับเงินแล้ว
   };
   const ARRAY_KEYS = ["docs", "customers", "suppliers", "workOrders", "purchaseOrders", "expenses", "employees",
@@ -553,6 +554,8 @@ const Store = (function () {
   // ใบเสร็จ/ใบกำกับที่การเงินติดตามแล้ว (ใช้ซ่อนการติดตาม 50 ทวิ แบบเก่า) — ผู้ไม่มีสิทธิ์การเงินจะได้ 403 แล้วใช้แบบเดิม
   async function refreshRcLinks() {
     if (!token) return;
+    // ยอดที่ตัดแล้วต่อใบกำกับจากใบรับเงิน (RV) — ใช้คำนวณลูกหนี้คงค้างให้ตรงสมุดการเงิน (ทุกบทบาทอ่านได้)
+    try { state.rvSettled = await api("GET", "/finance/receipts/inv-settled"); notify(); } catch (e) { /* ignore */ }
     try {
       const [l, w] = await Promise.all([api("GET", "/finance/receipts/rc-status"), api("GET", "/finance/receipts/wht-invoices")]);
       state.rcLinked = l.map((x) => x.rcId); state.whtInvoices = w; notify();

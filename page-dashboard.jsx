@@ -89,7 +89,7 @@ function PageDashboard({ role }) {
               const wo = S.workOrders.find((w) => w.machine === m.id && ["running", "setup"].includes(w.status)) || S.workOrders.find((w) => w.id === m.workOrder);
               const pct = wo ? Math.min(100, Math.round(((wo.produced - wo.ng) / wo.quantity) * 100)) : 0;
               const meta = ({ running: { tone: "var(--success)", label: "กำลังผลิต" }, setup: { tone: "var(--amber)", label: "ตั้งเครื่อง" },
-                idle: { tone: "var(--text-tertiary)", label: "ว่าง" }, maintenance: { tone: "var(--danger)", label: "ซ่อมบำรุง" }, due: { tone: "var(--amber)", label: "ควรซ่อมบำรุง" } })[m.condition === "maintenance" ? "maintenance" : (m.condition === "due" && m.status !== "running") ? "due" : m.status] || { tone: "var(--text-tertiary)", label: m.status };
+                idle: { tone: "var(--text-tertiary)", label: "ว่าง" }, maintenance: { tone: "var(--danger)", label: "ซ่อมบำรุง" }, due: { tone: "var(--amber)", label: "ควรซ่อมบำรุง" } })[m.condition === "maintenance" ? "maintenance" : (m.condition === "due" && m.status !== "running") ? "due" : (["running", "setup"].includes(m.status) ? m.status : "idle")] || { tone: "var(--text-tertiary)", label: "ว่าง" };   // สถานะ "ซ่อมบำรุง" ดูจากสภาพเครื่อง (condition) เท่านั้น ให้ตรงหน้าเครื่องจักร
               return (
                 <div key={m.id} style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

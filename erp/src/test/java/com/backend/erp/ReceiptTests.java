@@ -183,6 +183,11 @@ class ReceiptTests {
 		call("POST", "/finance/receipts", rv("C1", "BANK1", 300.01, 0, List.of(alloc("IV-2", 300.01, 0))), admin, 422);          // เกินคงค้าง 1 สตางค์
 		call("POST", "/finance/receipts", rv("C1", "BANK1", 300, 0, List.of(alloc("IV-2", 300, 0))), admin, 200);
 		assertEquals(0.0, remaining("C1", "IV-2"), 1e-9);
+		// แดชบอร์ด/รายการขายอ่านยอดที่ตัดแล้วต่อใบกำกับได้ทุกบทบาท (เงินรับ + ภาษีถูกหัก)
+		Map<String, Object> st = call("GET", "/finance/receipts/inv-settled", null, sales, 200);
+		assertEquals(1070.0, ((Number) st.get("IV-1")).doubleValue(), 1e-9);
+		assertEquals(500.0, ((Number) st.get("IV-2")).doubleValue(), 1e-9);
+		call("GET", "/finance/receipts/inv-settled", null, null, 401);
 	}
 
 	@Test @Order(5)

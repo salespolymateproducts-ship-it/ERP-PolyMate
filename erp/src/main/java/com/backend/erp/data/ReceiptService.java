@@ -73,6 +73,15 @@ public class ReceiptService {
 			+ "from fin_receipt_rcs l join fin_receipts r on r.id = l.receipt_id where r.status in ('pending','confirmed') order by l.rc_id, r.id");
 	}
 
+	/** ยอดที่ตัดแล้วต่อใบกำกับ (ใบรับเงิน pending/confirmed: amount + wht) — ให้ทุกบทบาทที่ล็อกอินอ่านได้ เพื่อให้แดชบอร์ด/รายการขายแสดงลูกหนี้ตรงกับสมุดการเงิน (ไม่มีข้อมูลลูกค้า/บัญชี) */
+	public Map<String, Double> invoiceSettled(AuthUser u) {
+		if (u == null) throw ApiException.forbidden("ต้องเข้าสู่ระบบ");
+		Map<String, Double> out = new LinkedHashMap<>();
+		jdbc.query("select a.invoice_id as id, sum(a.amount + a.wht)::float8 as s from fin_receipt_allocs a join fin_receipts r on r.id = a.receipt_id where r.status in ('pending','confirmed') group by a.invoice_id",
+			(rs) -> { out.put(rs.getString("id"), rs.getDouble("s")); });
+		return out;
+	}
+
 	/** ใบกำกับที่ภาษีถูกหัก ณ ที่จ่ายถูกบันทึกผ่านใบรับเงินแล้ว (pending/confirmed) — การติดตามหนังสือ 50 ทวิ ของฝั่งลูกค้าใช้ใบรับเงินที่เดียว */
 	public List<String> whtInvoices(AuthUser u) {
 		FinanceService.needRead(u);

@@ -124,7 +124,10 @@ const Workflow = (function () {
       });
     });
     paid = r2(paid);
-    const outstanding = isLive(inv) ? Math.max(0, r2(inv.net - paid)) : 0;
+    // ใบรับเงิน (RV) ในสมุดการเงินคือข้อมูลจริง: ถ้าใบกำกับนี้มีการตัดยอดผ่าน RV ใช้ยอดคงค้างแบบเดียวกับหน้าการเงิน (ยอดรวม − (เงินรับ + ภาษีถูกหัก))
+    const rv = S.state.rvSettled ? S.state.rvSettled[inv.id] : undefined;
+    if (rv != null) { paid = r2(rv); receipted = Math.max(receipted, paid); }
+    const outstanding = isLive(inv) ? Math.max(0, r2((rv != null ? inv.total : inv.net) - paid)) : 0;
     const today = S.today();
     return { paid, receipted: r2(receipted), outstanding, overdue: outstanding > 0 && inv.due && inv.due !== "—" && inv.due < today };
   }
