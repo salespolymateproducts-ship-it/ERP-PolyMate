@@ -612,6 +612,8 @@ function DocHistory({ doc }) {
 }
 
 // =================== เอกสารสำหรับพิมพ์ ===================
+// แถบสีพาสเทลหลังข้อความภาษาอังกฤษใต้ชื่อเอกสาร (เช่น Receipt) — สีตามชนิดเอกสาร ช่วยแยกชนิดตอนกองบนโต๊ะ · ชื่อเอกสารยังเป็นตัวอักษรเสมอ เผื่อถ่ายสำเนาขาวดำ
+const DOC_TINT = { QT: "#CFE8FC", SO: "#C5CDEB", DO: "#E3E5E8", INV: "#FFDDBF", BN: "#E4D9FA", RC: "#CDEBD6", CN: "#FAD0D0", DN: "#FFF1B8", CPO: "#CBEFEA", PAY: "#CDEBD6" };
 function DocPaper({ doc }) {
   const meta = DOC_LABEL[doc.type];
   const c = doc.customerSnap || {};
@@ -653,7 +655,7 @@ function DocPaper({ doc }) {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 20, fontWeight: 700 }}>{meta.th}</div>
-            <div style={{ fontSize: 11, ...muted }}>{meta.short}</div>
+            <div style={{ fontSize: 11, color: "#3B4457", background: DOC_TINT[doc.type] || "transparent", borderRadius: 4, padding: "1px 8px", WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}>{meta.short}</div>
             {hasCopies && <div className="copy-mark" style={{ display: "inline-block", marginTop: 4, padding: "1px 12px", border: "1.5px solid #0B1220", borderRadius: 4, fontSize: 12, fontWeight: 700, color: "#0B1220" }}>ต้นฉบับ</div>}
             <div style={{ marginTop: 10, fontSize: 11, ...muted }}>เลขที่ / No.</div><div className="mono" style={{ fontWeight: 600 }}>{doc.id}</div>
             <div style={{ marginTop: 6, fontSize: 11, ...muted }}>วันที่ / Date</div><div className="num">{doc.date}</div>
