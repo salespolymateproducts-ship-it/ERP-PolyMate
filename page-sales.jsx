@@ -717,24 +717,22 @@ function DocPaper({ doc }) {
               <div style={{ color: "#0B1220", fontWeight: 600, marginBottom: 4 }}>หมายเหตุ</div>{doc.note || "—"}
               {pay && pay.paid > 0 && <div style={{ marginTop: 10, color: "#15803D" }}>รับชำระแล้ว {_fmt(pay.paid, 2)} บาท · คงค้าง {_fmt(pay.outstanding, 2)} บาท</div>}
             </div>
-            <div style={{ width: 280, fontSize: 12 }}>
-              <PaperRow k="รวมเป็นเงิน" v={_fmt(doc.gross, 2)}/>
-              {doc.discount > 0 && <PaperRow k="ส่วนลดท้ายบิล" v={"(" + _fmt(doc.discount, 2) + ")"}/>}
-              <PaperRow k="มูลค่าก่อนภาษี" v={_fmt(doc.subtotal, 2)}/>
-              <PaperRow k={doc.vatOn ? "ภาษีมูลค่าเพิ่ม 7%" : "ภาษีมูลค่าเพิ่ม (ไม่คิด)"} v={_fmt(doc.vat, 2)}/>
-              {noteInv && <>
-                <PaperRow k="มูลค่าตามใบกำกับเดิม" v={_fmt(noteInv.subtotal, 2)}/>
-                <PaperRow k={"มูลค่าที่ถูกต้อง (" + (doc.type === "CN" ? "หลังลด" : "หลังเพิ่ม") + ")"} v={_fmt(doc.type === "CN" ? noteInv.subtotal - doc.subtotal : noteInv.subtotal + doc.subtotal, 2)}/>
-                <PaperRow k={"ผลต่างที่" + (doc.type === "CN" ? "ลด" : "เพิ่ม")} v={_fmt(doc.subtotal, 2)}/>
+            <div style={{ width: 300, fontSize: 12 }}>
+              {doc.discount > 0 && <>
+                <TotalRow k="รวมเป็นเงิน" v={_fmt(doc.gross, 2)}/>
+                <TotalRow k="ส่วนลดท้ายบิล" v={"(" + _fmt(doc.discount, 2) + ")"}/>
               </>}
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 8px", marginTop: 6, background: "#0B1220", color: "white", borderRadius: 6 }}>
-                <span>{noteInv ? (doc.type === "CN" ? "ภาษี + ยอดลดหนี้รวม" : "ภาษี + ยอดเพิ่มหนี้รวม") : "จำนวนเงินรวมทั้งสิ้น"}</span><span className="num" style={{ fontWeight: 600 }}>{baht(doc.total, 2)}</span>
-              </div>
+              <TotalRow k="มูลค่าก่อนภาษี" v={_fmt(doc.subtotal, 2)} line={doc.discount > 0}/>
+              <TotalRow k={doc.vatOn ? "ภาษีมูลค่าเพิ่ม 7%" : "ภาษีมูลค่าเพิ่ม (ไม่คิด)"} v={_fmt(doc.vat, 2)}/>
+              {noteInv && <>
+                <TotalRow k="มูลค่าตามใบกำกับเดิม" v={_fmt(noteInv.subtotal, 2)}/>
+                <TotalRow k={"มูลค่าที่ถูกต้อง (" + (doc.type === "CN" ? "หลังลด" : "หลังเพิ่ม") + ")"} v={_fmt(doc.type === "CN" ? noteInv.subtotal - doc.subtotal : noteInv.subtotal + doc.subtotal, 2)}/>
+                <TotalRow k={"ผลต่างที่" + (doc.type === "CN" ? "ลด" : "เพิ่ม")} v={_fmt(doc.subtotal, 2)}/>
+              </>}
+              <TotalRow strong k={noteInv ? (doc.type === "CN" ? "ภาษี + ยอดลดหนี้รวม" : "ภาษี + ยอดเพิ่มหนี้รวม") : "จำนวนเงินรวมทั้งสิ้น"} v={_fmt(doc.total, 2)}/>
               {doc.whtRate > 0 && <>
-                <PaperRow k={`หัก ณ ที่จ่าย ${doc.whtRate}%`} v={"(" + _fmt(doc.wht, 2) + ")"}/>
-                <div style={{ display: "flex", justifyContent: "space-between", padding: "8px", background: "#F0FDF4", border: "1px solid #16A34A", color: "#15803D", borderRadius: 6 }}>
-                  <span style={{ fontWeight: 600 }}>ยอดชำระสุทธิ</span><span className="num" style={{ fontWeight: 700 }}>{baht(doc.net, 2)}</span>
-                </div>
+                <TotalRow k={`หัก ณ ที่จ่าย ${doc.whtRate}%`} v={"(" + _fmt(doc.wht, 2) + ")"} double/>
+                <TotalRow strong k="ยอดชำระสุทธิ" v={_fmt(doc.net, 2)}/>
               </>}
             </div>
           </div>
@@ -754,6 +752,17 @@ function DocPaper({ doc }) {
 }
 function PaperRow({ k, v }) {
   return <div style={{ display: "flex", justifyContent: "space-between", padding: "5px 8px" }}><span style={{ color: "#5B6478" }}>{k}</span><span className="num">{v}</span></div>;
+}
+
+// แถวสรุปยอดท้ายเอกสารขาย: เส้นบางคั่นทุกบรรทัด · ยอดสำคัญตัวหนา · ยอดสุทธิล่างสุดมีเส้นคู่ (พิมพ์ขาวดำได้ ไม่ใช้พื้นสีเข้ม)
+function TotalRow({ k, v, strong, line, double }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: strong ? "8px 8px" : "5px 8px",
+      borderTop: double ? "3px double #0B1220" : line ? "1px solid #D5D9E0" : "none", fontSize: strong ? 14 : 12, fontWeight: strong ? 700 : 400, color: "#0B1220" }}>
+      <span style={{ color: strong ? "#0B1220" : "#3A4254", fontWeight: strong ? 700 : 400 }}>{k}</span>
+      <span className="num">{v} บาท</span>
+    </div>
+  );
 }
 
 // =================== บันทึกรับเงินจากใบเสร็จ → เปิดหน้ารับเงินใหม่ของการเงิน (เลือกบัญชี · เข้าสมุดเงินจริง) ===================
