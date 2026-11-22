@@ -4,6 +4,7 @@ function PageQC() {
   const [tab, setTab] = useState("INSPECT");
   const [open, setOpen] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [ipOpen, setIpOpen] = useState(false);
   useStore();
 
   const total = QC_INSPECTIONS.length;
@@ -25,12 +26,13 @@ function PageQC() {
     <>
       <PageHeader
         title="ตรวจคุณภาพ (QC)"
-        subtitle="ตรวจสอบสินค้าก่อนส่งมอบ · บันทึก defect · ติดตามคุณภาพ"
+        subtitle="ตรวจระหว่างผลิต (FR-SWL-PR-05-05) · ตรวจก่อนส่งมอบ · บันทึก defect · ติดตามคุณภาพ"
         actions={
           <>
             <button className="btn btn-outline btn-sm" onClick={() => printReport("รายงานตรวจสอบคุณภาพ (QC)")}><I.Printer size={14}/> พิมพ์ / PDF</button>
             <button className="btn btn-outline btn-sm" disabled={!total} onClick={() => exportCSV(`QC-${Store.today()}.csv`, ["เลขที่", "วันที่", "ใบสั่งผลิต", "สินค้า", "ผู้ตรวจ", "ตัวอย่าง", "ผ่าน", "เสีย", "Defects", "ผล"], view.sorted.map((q) => [q.id, q.date, q.wo, q.product, q.inspector, q.sampleSize, q.passed, q.failed, q.defects.map((d) => d.type + "x" + d.count).join(" "), QC_RESULT[q.result].th]))}><I.Download size={14}/> รายงาน QC (CSV)</button>
-            <button className="btn btn-primary btn-sm" onClick={() => setFormOpen(true)}><I.Plus size={14}/> บันทึก QC ใหม่</button>
+            <button className="btn btn-outline btn-sm" onClick={() => setFormOpen(true)}><I.Plus size={14}/> บันทึกตรวจก่อนส่งมอบ</button>
+            <button className="btn btn-primary btn-sm" onClick={() => setIpOpen(true)}><I.Plus size={14}/> บันทึกตรวจระหว่างผลิต</button>
           </>
         }
       />
@@ -80,7 +82,7 @@ function PageQC() {
                     <td className="mono"><b>{q.id}</b></td>
                     <td className="num" style={{ fontSize: 12 }}>{q.date}</td>
                     <td>
-                      <div style={{ fontSize: 13, fontWeight: 500 }}>{q.product}</div>
+                      <div style={{ fontSize: 13, fontWeight: 500 }}>{q.product}{q.kind === "inprocess" && <span className="badge badge-neutral" style={{ marginLeft: 6 }}>ระหว่างผลิต · กะ{q.round}</span>}</div>
                       <div className="mono" style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{q.wo}</div>
                     </td>
                     <td style={{ fontSize: 12.5 }}>{q.inspector}</td>
@@ -92,9 +94,10 @@ function PageQC() {
                       <span style={{ fontSize: 11, color: "var(--text-tertiary)", marginLeft: 6 }}>({_fmt(failRate, 1)}%)</span>
                     </td>
                     <td>
-                      {q.defects.length === 0
+                      {q.defects.length === 0 && !(q.failedItems || []).length
                         ? <span style={{ color: "var(--text-tertiary)", fontSize: 12 }}>—</span>
-                        : q.defects.map((d, i) => <span key={i} className="badge badge-warning" style={{ marginRight: 3 }}>{d.type} ×{d.count}</span>)
+                        : <>{q.defects.map((d, i) => <span key={i} className="badge badge-warning" style={{ marginRight: 3 }}>{d.type} ×{d.count}</span>)}
+                            {(q.failedItems || []).map((h, i) => <span key={"h" + i} className="badge badge-warning" style={{ marginRight: 3 }}>{h}</span>)}</>
                       }
                     </td>
                     <td><span className={"badge badge-" + meta.color}><span className="b-dot"/>{meta.th}</span></td>
@@ -111,7 +114,7 @@ function PageQC() {
       {tab === "DEFECTS" && (
         <div className="grid-2">
           {DEFECT_TYPES.map((d) => {
-            const count = QC_INSPECTIONS.reduce((s, q) => s + (q.defects.find((x) => x.type === d.name)?.count || 0), 0);
+            const count = QC_INSPECTIONS.reduce((s, q) => s + ((q.defects || []).find((x) => x.type === d.name)?.count || 0), 0);
             return (
               <div key={d.name} className="card" style={{ padding: 16, display: "flex", gap: 12, alignItems: "center" }}>
                 <div style={{ width: 44, height: 44, borderRadius: 10, background: count > 3 ? "var(--danger-subtle)" : count > 0 ? "var(--amber-subtle)" : "var(--bg-subtle)", color: count > 3 ? "var(--danger)" : count > 0 ? "var(--amber)" : "var(--text-secondary)", display: "grid", placeItems: "center" }}>
@@ -132,9 +135,10 @@ function PageQC() {
       )}
 
       {formOpen && <QCForm onClose={() => setFormOpen(false)}/>}
+      {ipOpen && <InProcessQCForm onClose={() => setIpOpen(false)}/>}
       <Drawer open={!!open} onClose={() => setOpen(null)} title={open ? `บันทึก QC · ${open.id}` : ""} width={640}
         footer={open && <button className="btn btn-outline btn-sm" onClick={() => printDoc(open.id)}><I.Printer size={13}/> พิมพ์ใบตรวจ QC</button>}>
-        {open && <div className="print-area" style={{ background: "var(--bg-elevated)" }}><div style={{ padding: "0 20px" }}><PrintHead title="ใบรายงานผลตรวจสอบคุณภาพ" en="QC Inspection Report" no={open.id} date={open.date}/></div><QCDetail q={open}/></div>}
+        {open && <div className="print-area" style={{ background: "var(--bg-elevated)" }}><div style={{ padding: "0 20px" }}><PrintHead title={open.kind === "inprocess" ? "บันทึกผลการตรวจสอบระหว่างการผลิต" : "ใบรายงานผลตรวจสอบคุณภาพ"} en={open.kind === "inprocess" ? "In-process Inspection Record" : "QC Inspection Report"} no={open.id} date={open.date}/></div><QCDetail q={open}/></div>}
       </Drawer>
     </>
   );
@@ -172,7 +176,7 @@ function QCForm({ onClose }) {
       footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={!wo} onClick={save}><I.Check size={14}/> บันทึก</button></>}>
       {!wos.length && <div style={{ color: "var(--amber)", fontSize: 13, marginBottom: 10 }}>ยังไม่มีใบสั่งผลิตที่บันทึกการผลิตแล้ว</div>}
       <div className="grid-2" style={{ gap: 12 }}>
-        <div><label className="field-label">ใบสั่งผลิต</label><select className="input" value={wo} onChange={(e) => setWo(e.target.value)}>{wos.map((w) => <option key={w.id} value={w.id}>{w.id} · {w.product}</option>)}</select></div>
+        <WoPicker wos={wos} value={wo} onChange={setWo} label="ใบสั่งผลิต"/>
         <div><label className="field-label">จำนวนตัวอย่าง (ชิ้น)</label><input className="input num" type="number" min="1" value={sample} onChange={(e) => setSample(e.target.value)}/></div>
       </div>
       <div style={{ fontWeight: 600, fontSize: 13, margin: "14px 0 6px" }}>จำนวนของเสียตามประเภท</div>
@@ -190,6 +194,112 @@ function QCForm({ onClose }) {
       </div>
       <label className="field-label" style={{ marginTop: 12 }}>หมายเหตุ</label>
       <input className="input" value={note} onChange={(e) => setNote(e.target.value)}/>
+    </ErpModal>
+  );
+}
+
+const WO_PICK_MAX = 30;
+function WoPicker({ wos, value, onChange, label, openOnly }) {
+  const [q, setQ] = useState("");
+  const [showClosed, setShowClosed] = useState(false);
+  const base = (openOnly && !showClosed ? wos.filter((w) => w.status !== "done") : wos).slice().sort((a, b) => String(b.id).localeCompare(String(a.id)));
+  const term = q.trim().toLowerCase();
+  const hit = term ? base.filter((w) => [w.id, w.product, w.productCode, w.customer, w.machine].join(" ").toLowerCase().includes(term)) : base;
+  const shown = hit.slice(0, WO_PICK_MAX);
+  // ใบที่เลือกอยู่ต้องอยู่ในลิสต์เสมอ แม้ไม่ตรงคำค้น
+  const cur = wos.find((w) => w.id === value);
+  const list = cur && !shown.some((w) => w.id === cur.id) ? [cur, ...shown] : shown;
+  return (
+    <div>
+      <label className="field-label">{label}</label>
+      <input className="input" style={{ marginBottom: 6 }} placeholder="ค้นหา เลขที่ใบสั่งผลิต / สินค้า / ลูกค้า / เครื่อง" value={q} onChange={(e) => setQ(e.target.value)}/>
+      <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
+        {list.map((w) => <option key={w.id} value={w.id}>{w.id} · {w.product}{w.status === "done" ? " (ปิดแล้ว)" : ""}</option>)}
+      </select>
+      <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <span>{hit.length > WO_PICK_MAX ? "แสดง " + WO_PICK_MAX + " ใบล่าสุดจาก " + hit.length + " — พิมพ์ค้นหาเพื่อกรอง" : "พบ " + hit.length + " ใบ"}</span>
+        {openOnly && <label style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)}/> รวมใบที่ปิดแล้ว</label>}
+      </div>
+    </div>
+  );
+}
+
+// ตรวจระหว่างผลิต ตามฟอร์ม FR-SWL-PR-05-05 — กระดาษคือหลักฐานต้นฉบับ ERP เก็บแบบสรุป (ผล/หัวข้อที่ตก/NC/ผู้ตรวจ)
+const IP_HEADINGS = ["การติดสติ๊กเกอร์", "สีของชิ้นงาน", "รูปร่างชิ้นงาน", "ลักษณะทั่วไป", "ด้านความปลอดภัย"];
+function InProcessQCForm({ onClose }) {
+  const wos = Store.state.workOrders.filter((w) => w.status !== "cancelled");
+  const hr = new Date().getHours();
+  const openFirst = wos.filter((w) => w.status !== "done").sort((a, b) => String(b.id).localeCompare(String(a.id)))[0] || wos[0];
+  const [wo, setWo] = useState(openFirst ? openFirst.id : "");
+  const [round, setRound] = useState(hr >= 6 && hr < 17 ? "เช้า" : "ดึก");
+  const [lot, setLot] = useState("");
+  const [model, setModel] = useState("");
+  const [sample, setSample] = useState(5);
+  const [failedItems, setFailedItems] = useState([]);
+  const [failedPieces, setFailedPieces] = useState(0);
+  const [extra, setExtra] = useState("none");
+  const [ncNo, setNcNo] = useState("");
+  const [inspector, setInspector] = useState(Store.userName());
+  const [approver, setApprover] = useState("");
+  const [paperRef, setPaperRef] = useState("");
+  const [note, setNote] = useState("");
+  const hasFail = failedItems.length > 0;
+  // กฎในฟอร์ม: ไม่ผ่าน 1 ชิ้น → สุ่มเพิ่ม 4 ชิ้น ต้องผ่านทุกชิ้นจึงถือว่าผ่าน
+  const result = !hasFail ? "pass" : extra === "pass" ? "pass" : "fail";
+  const dup = QC_INSPECTIONS.some((q) => q.kind === "inprocess" && q.wo === wo && q.date === Store.today() && q.round === round);
+  const toggle = (h) => setFailedItems(failedItems.includes(h) ? failedItems.filter((x) => x !== h) : [...failedItems, h]);
+  function save() {
+    const w = wos.find((x) => x.id === wo);
+    const ok = runAction(() => {
+      if (!w) Store.fail("กรุณาเลือกใบสั่งผลิต");
+      if (!inspector.trim()) Store.fail("กรุณาระบุชื่อผู้ตรวจ");
+      if (!(Number(sample) > 0)) Store.fail("จำนวนชิ้นที่สุ่มต้องมากกว่า 0");
+      if (hasFail && !(Number(failedPieces) > 0)) Store.fail("ระบุจำนวนชิ้นที่ไม่ผ่าน");
+      if (hasFail && Number(failedPieces) > Number(sample)) Store.fail("จำนวนชิ้นที่ไม่ผ่านมากกว่าจำนวนที่สุ่ม");
+      const n = Store.nextDocNo("QC");
+      const fp = hasFail ? Number(failedPieces) : 0;
+      const rec = { id: n.docNo, seq: n.seq, counterKey: n.counterKey, kind: "inprocess", date: Store.today(), wo: w.id, product: w.product,
+        round, lot: lot.trim(), model: model.trim(), inspector: inspector.trim(), approver: approver.trim(),
+        sampleSize: Number(sample), passed: Number(sample) - fp, failed: fp, defects: [], failedItems, extra: hasFail ? extra : "none",
+        ncNo: ncNo.trim(), paperRef: paperRef.trim(), result, note: note.trim() };
+      Store.add("qc", rec, `ตรวจระหว่างผลิต ${w.id} กะ${round} ผล ${QC_RESULT[result].th}`);
+      return rec;
+    }, (r) => `บันทึกตรวจระหว่างผลิต ${r.id} แล้ว`);
+    if (ok) onClose();
+  }
+  return (
+    <ErpModal title="บันทึกผลตรวจระหว่างการผลิต" width={640} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={!wo} onClick={save}><I.Check size={14}/> บันทึก</button></>}>
+      <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 10 }}>ใช้ฟอร์มกระดาษ FR-SWL-PR-05-05 ตรวจตามเดิม แล้วสรุปผลลงที่นี่ (ไม่ต้องกรอกรายชิ้นรายข้อ)</div>
+      <div className="grid-2" style={{ gap: 12 }}>
+        <WoPicker wos={wos} value={wo} onChange={setWo} label="ใบสั่งผลิต *" openOnly/>
+        <div><label className="field-label">รอบตรวจ *</label><select className="input" value={round} onChange={(e) => setRound(e.target.value)}><option value="เช้า">กะเช้า (8:00 น.)</option><option value="ดึก">กะกลางคืน (19:00 น.)</option></select></div>
+        <div><label className="field-label">หมายเลขล็อต</label><input className="input" maxLength={60} value={lot} onChange={(e) => setLot(e.target.value)}/></div>
+        <div><label className="field-label">แบบรุ่น</label><input className="input" maxLength={60} value={model} onChange={(e) => setModel(e.target.value)}/></div>
+        <div><label className="field-label">ผู้ตรวจ *</label><input className="input" maxLength={100} placeholder="พิมพ์ชื่อ" value={inspector} onChange={(e) => setInspector(e.target.value)}/></div>
+        <div><label className="field-label">ผู้อนุมัติ (หัวหน้างาน)</label><input className="input" maxLength={100} placeholder="พิมพ์ชื่อ (ลงทีหลังได้)" value={approver} onChange={(e) => setApprover(e.target.value)}/></div>
+        <div><label className="field-label">จำนวนชิ้นที่สุ่ม</label><input className="input num" type="number" min="1" value={sample} onChange={(e) => setSample(e.target.value)}/></div>
+      </div>
+      {dup && <div style={{ marginTop: 10, fontSize: 12, color: "var(--amber)" }}>มีบันทึกตรวจของ {wo} กะ{round} วันนี้แล้ว — ตรวจให้แน่ใจว่าไม่ได้บันทึกซ้ำ</div>}
+      <div style={{ fontWeight: 600, fontSize: 13, margin: "14px 0 6px" }}>หัวข้อที่ไม่ผ่าน (ไม่ติ๊ก = ผ่านทุกหัวข้อ)</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 16px" }}>
+        {IP_HEADINGS.map((h) => <label key={h} style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}><input type="checkbox" checked={failedItems.includes(h)} onChange={() => toggle(h)}/> {h}</label>)}
+      </div>
+      {hasFail && (
+        <div style={{ marginTop: 12, padding: 12, borderRadius: 10, background: "var(--amber-subtle)" }}>
+          <div className="grid-2" style={{ gap: 12 }}>
+            <div><label className="field-label">จำนวนชิ้นที่ไม่ผ่าน *</label><input className="input num" type="number" min="1" value={failedPieces} onChange={(e) => setFailedPieces(e.target.value)}/></div>
+            <div><label className="field-label">สุ่มเพิ่ม 4 ชิ้น</label><select className="input" value={extra} onChange={(e) => setExtra(e.target.value)}><option value="none">ยังไม่ได้สุ่มเพิ่ม</option><option value="pass">สุ่มเพิ่ม — ผ่านทุกชิ้น</option><option value="fail">สุ่มเพิ่ม — ไม่ผ่าน</option></select></div>
+            <div><label className="field-label">เลขที่ NC (FR-SWL-PR-07-03)</label><input className="input" maxLength={60} value={ncNo} onChange={(e) => setNcNo(e.target.value)}/></div>
+          </div>
+          {result === "fail" && !ncNo.trim() && <div style={{ marginTop: 8, fontSize: 12, color: "var(--danger)" }}>ผลไม่ผ่าน — ต้องแจ้งหัวหน้างานและลงฟอร์ม NC แล้วใส่เลขที่ที่นี่</div>}
+        </div>
+      )}
+      <div className="grid-2" style={{ gap: 12, marginTop: 12 }}>
+        <div><label className="field-label">เอกสารกระดาษ (เลขที่ / ที่เก็บ)</label><input className="input" maxLength={100} value={paperRef} onChange={(e) => setPaperRef(e.target.value)}/></div>
+        <div><label className="field-label">หมายเหตุ</label><input className="input" value={note} onChange={(e) => setNote(e.target.value)}/></div>
+      </div>
+      <div style={{ marginTop: 14, fontSize: 13 }}>สรุปผล: <span className={"badge badge-" + QC_RESULT[result].color}>{QC_RESULT[result].th}</span></div>
     </ErpModal>
   );
 }
@@ -221,7 +331,21 @@ function QCDetail({ q }) {
         <Mini k="ไม่ผ่าน" v={q.failed} tone="danger"/>
       </div>
 
-      <div className="card" style={{ marginBottom: 14 }}>
+      {q.kind === "inprocess" && (
+        <div className="card" style={{ marginBottom: 14, padding: 16 }}>
+          <div className="grid-2" style={{ gap: 12 }}>
+            <KV k="รอบตรวจ" v={q.round === "เช้า" ? "กะเช้า (8:00 น.)" : "กะกลางคืน (19:00 น.)"}/>
+            <KV k="หมายเลขล็อต" v={q.lot || "—"}/>
+            <KV k="แบบรุ่น" v={q.model || "—"}/>
+            <KV k="ผู้อนุมัติ (หัวหน้างาน)" v={q.approver || "— (ยังไม่ลงชื่อ)"}/>
+            <KV k="หัวข้อที่ไม่ผ่าน" v={(q.failedItems || []).length ? q.failedItems.join(", ") : "ไม่มี"}/>
+            <KV k="สุ่มเพิ่ม 4 ชิ้น" v={q.extra === "pass" ? "สุ่มเพิ่ม — ผ่านทุกชิ้น" : q.extra === "fail" ? "สุ่มเพิ่ม — ไม่ผ่าน" : "ไม่ได้สุ่มเพิ่ม"}/>
+            <KV k="เลขที่ NC (FR-SWL-PR-07-03)" v={q.ncNo || "—"}/>
+            <KV k="เอกสารกระดาษ (เลขที่ / ที่เก็บ)" v={q.paperRef || "—"}/>
+          </div>
+        </div>
+      )}
+      {q.kind !== "inprocess" && <div className="card" style={{ marginBottom: 14 }}>
         <div className="card-head"><div className="card-title">รายละเอียด Defect</div></div>
         <div style={{ padding: 18 }}>
           {q.defects.length === 0 && <div style={{ color: "var(--text-tertiary)", textAlign: "center", padding: 16, fontSize: 13 }}>✓ ไม่พบข้อบกพร่อง</div>}
@@ -236,7 +360,7 @@ function QCDetail({ q }) {
             </div>
           ))}
         </div>
-      </div>
+      </div>}
 
       {q.note && (
         <div style={{ padding: 12, background: "var(--bg-subtle)", borderRadius: 10, fontSize: 13 }}>

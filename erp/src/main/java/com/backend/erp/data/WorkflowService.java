@@ -277,9 +277,19 @@ public class WorkflowService {
 	}
 
 	// ---------- produce WO ----------
-	@Transactional
 	public Map<String, Object> produceWO(AuthUser u, String woId, double produced, double ng) {
+		return produceWO(u, woId, produced, ng, "", "", "");
+	}
+
+	/** shift = "เช้า" | "ดึก" (ว่างได้); หัวหน้าช่าง/คนนั่งเครื่อง = ชื่อที่พิมพ์เอง บันทึกลงประวัติการผลิตของใบสั่งผลิต */
+	@Transactional
+	public Map<String, Object> produceWO(AuthUser u, String woId, double produced, double ng, String shift, String supervisor, String operator) {
 		need(u, "admin", "production");
+		shift = shift == null ? "" : shift.trim();
+		if (!shift.isEmpty() && !shift.equals("เช้า") && !shift.equals("ดึก")) throw ApiException.badRequest("กะต้องเป็น เช้า หรือ ดึก");
+		supervisor = supervisor == null ? "" : supervisor.trim();
+		operator = operator == null ? "" : operator.trim();
+		if (supervisor.length() > 100 || operator.length() > 100) throw ApiException.badRequest("ชื่อยาวเกินไป (สูงสุด 100 ตัวอักษร)");
 		Map<String, Object> wo = lock("workOrders", woId, "ไม่พบใบสั่งผลิต " + woId);
 		if ("cancelled".equals(Json.s(wo.get("status")))) throw ApiException.conflict("ALREADY_CANCELLED", woId + " ถูกยกเลิกแล้ว");
 		if (!(produced > 0)) throw ApiException.badRequest("จำนวนผลิตต้องมากกว่า 0");
@@ -428,6 +438,9 @@ public class WorkflowService {
 		entry.put("by", u.fullName());
 		entry.put("produced", produced);
 		entry.put("ng", ng);
+		entry.put("shift", shift);
+		entry.put("supervisor", supervisor);
+		entry.put("operator", operator);
 		logs.add(entry);
 		if (wo.get("logs") instanceof List<?> old) logs.addAll(old);
 		wo.put("logs", logs);

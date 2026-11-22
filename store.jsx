@@ -399,13 +399,13 @@ const Store = (function () {
 
   // บันทึกผลิต → server ตัดวัตถุดิบตาม snapshot สูตรของใบสั่ง + รับสินค้าสำเร็จรูป + นับ shot แม่พิมพ์ ใน transaction เดียว
   // วัตถุดิบไม่พอ = ปฏิเสธทั้งหมด (ไม่ตัดสต๊อกหรือบันทึกผลิตเลย) แล้วโหลดข้อมูลจริงจากเซิร์ฟเวอร์ใหม่
-  async function produceWO(woId, addProduced, addNg) {
+  async function produceWO(woId, addProduced, addNg, who) {
     if (!token) fail("ยังไม่ได้เข้าสู่ระบบ");
     if (!(addProduced > 0)) fail("จำนวนผลิตต้องมากกว่า 0");
     if ((addNg || 0) > addProduced) fail("จำนวน NG มากกว่าจำนวนผลิต");
     await settleSync();
     try {
-      const r = await api("POST", "/actions/work-orders/" + encodeURIComponent(woId) + "/produce", { produced: addProduced, ng: addNg || 0 });
+      const r = await api("POST", "/actions/work-orders/" + encodeURIComponent(woId) + "/produce", { produced: addProduced, ng: addNg || 0, shift: (who && who.shift) || "", supervisor: (who && who.supervisor) || "", operator: (who && who.operator) || "" });
       await refresh(true);
       return r;
     } catch (e) {

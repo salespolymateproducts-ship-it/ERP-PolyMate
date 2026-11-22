@@ -306,6 +306,32 @@ class BomRulesTests {
 		for (String t : List.of(proc, sales, acct)) call("POST", "/actions/work-orders/WO-1/produce", Map.of("produced", 1, "ng", 0), t, 403);
 	}
 
+	@Test @Order(99)
+	void produceRecordsShiftSupervisorOperatorInLog() throws Exception {
+		call("POST", "/workOrders", with(wo("WO-CREW", "P-1", 100), "bomId", "B-PC"), prod, 201);
+		// กะต้องเป็น เช้า/ดึก เท่านั้น → ไม่ผ่านต้องไม่เปลี่ยนอะไร
+		call("POST", "/actions/work-orders/WO-CREW/produce", Map.of("produced", 5, "ng", 0, "shift", "บ่าย", "supervisor", "ก", "operator", "ข"), prod, 400);
+		call("POST", "/actions/work-orders/WO-CREW/produce", Map.of("produced", 5, "ng", 0, "shift", "เช้า", "supervisor", "x".repeat(101), "operator", "ข"), prod, 400);
+		assertEquals(0.0, ((Number) call("GET", "/workOrders/WO-CREW", null, admin, 200).get("produced")).doubleValue(), 1e-9);
+		// บันทึก 2 ครั้ง (เพิ่มเรื่อยๆ) → ประวัติ 2 รายการ ใหม่สุดอยู่บนสุด พร้อมชื่อที่พิมพ์
+		call("POST", "/actions/work-orders/WO-CREW/produce", Map.of("produced", 10, "ng", 1, "shift", "เช้า", "supervisor", " สมชาย ", "operator", "สมหญิง"), prod, 200);
+		call("POST", "/actions/work-orders/WO-CREW/produce", Map.of("produced", 20, "ng", 0, "shift", "ดึก", "supervisor", "สมชาย", "operator", "สมศักดิ์"), prod, 200);
+		Map<String, Object> w = call("GET", "/workOrders/WO-CREW", null, admin, 200);
+		assertEquals(30.0, ((Number) w.get("produced")).doubleValue(), 1e-9);
+		List<?> logs = (List<?>) w.get("logs");
+		assertEquals(2, logs.size());
+		Map<?, ?> last = (Map<?, ?>) logs.get(0), first = (Map<?, ?>) logs.get(1);
+		assertEquals("ดึก", last.get("shift"));
+		assertEquals("สมศักดิ์", last.get("operator"));
+		assertEquals("เช้า", first.get("shift"));
+		assertEquals("สมชาย", first.get("supervisor"));   // ตัดช่องว่างหัวท้าย
+		assertEquals("สมหญิง", first.get("operator"));
+		// ไม่ส่งฟิลด์เลย (client เก่า) ยังบันทึกได้ ค่าว่าง
+		call("POST", "/actions/work-orders/WO-CREW/produce", Map.of("produced", 1, "ng", 0), prod, 200);
+		Map<?, ?> legacy = (Map<?, ?>) ((List<?>) call("GET", "/workOrders/WO-CREW", null, admin, 200).get("logs")).get(0);
+		assertEquals("", legacy.get("shift"));
+	}
+
 	@Test @Order(7)
 	void mixedBomConsumesAllLinesAtomically() throws Exception {
 		double abs0 = stockOf("materials", "R-ABS"), mb0 = stockOf("materials", "MB-BK"), rg0 = stockOf("materials", "RG-1");

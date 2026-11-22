@@ -137,7 +137,9 @@ public class DataController {
 
 	@PostMapping("/actions/work-orders/{id}/produce")
 	public Map<String, Object> produce(@PathVariable String id, @RequestBody Map<String, Object> b, HttpServletRequest req) {
-		return workflow.produceWO(AuthInterceptor.user(req), id, Json.num(b.get("produced")), Json.num(b.get("ng")));
+		return workflow.produceWO(AuthInterceptor.user(req), id, Json.num(b.get("produced")), Json.num(b.get("ng")),
+			b.get("shift") == null ? "" : String.valueOf(b.get("shift")), b.get("supervisor") == null ? "" : String.valueOf(b.get("supervisor")),
+			b.get("operator") == null ? "" : String.valueOf(b.get("operator")));
 	}
 
 	@PostMapping("/actions/work-orders/{id}/material")

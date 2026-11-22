@@ -94,14 +94,13 @@ function KanbanBoard({ onOpen, onShowAll }) {
   const inWin = (w) => days == null || (!!w.doneAt && String(w.doneAt).slice(0, 10) >= cutoff);
   const cols = [
     { id: "queued", title: "รอผลิต", tone: "var(--text-secondary)" },
-    { id: "setup", title: "ตั้งเครื่อง", tone: "var(--amber)" },
     { id: "running", title: "กำลังผลิต", tone: "var(--accent)" },
     { id: "done", title: "เสร็จแล้ว", tone: "var(--success)" },
   ];
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12 }}>
       {cols.map((col) => {
-        const all = WORK_ORDERS.filter((w) => w.status === col.id);
+        const all = WORK_ORDERS.filter((w) => w.status === col.id || (col.id === "queued" && w.status === "setup"));   // ไม่มีคอลัมน์ "ตั้งเครื่อง" แล้ว — ใบเก่าที่ค้างสถานะนี้แสดงรวมใน "รอผลิต"
         const items = col.id === "done" ? all.filter(inWin).sort((a, b) => String(b.doneAt || "").localeCompare(String(a.doneAt || ""))) : all;
         return (
           <div key={col.id} style={{ background: "var(--bg-subtle)", borderRadius: 12, padding: 10, minHeight: 360 }}>
@@ -1128,6 +1127,12 @@ function ProductionRecorder({ wo, onProduce }) {
   const remaining = Math.max(0, wo.quantity - (wo.produced || 0));
   const [qty, setQty] = useState("");
   const [ng, setNg] = useState("");
+  // กะ/หัวหน้าช่าง/คนนั่งเครื่อง: จำค่าล่าสุดไว้ในเบราว์เซอร์ ไม่ต้องพิมพ์ซ้ำทุกครั้ง
+  const memo = (() => { try { return JSON.parse(localStorage.getItem("erp.prodCrew") || "{}"); } catch (e) { return {}; } })();
+  const hr = new Date().getHours();
+  const [shift, setShift] = useState(memo.shift || (hr >= 6 && hr < 18 ? "เช้า" : "ดึก"));
+  const [supervisor, setSupervisor] = useState(memo.supervisor || "");
+  const [operator, setOperator] = useState(memo.operator || "");
   const bom = _bomOfWo(wo);
   const [busy, setBusy] = useState(false);
   const sh = Store.woShortage(wo);
@@ -1144,14 +1149,16 @@ function ProductionRecorder({ wo, onProduce }) {
   const inactiveBom = _inactiveInBom(bom);
   const fg = FINISHED.find((f) => f.code === wo.productCode);
   const anyShort = preview.some((p) => p.short);
-  const valid = n > 0 && ngN <= n && !done && !busy;
+  const crewOk = supervisor.trim() !== "" && operator.trim() !== "";
+  const valid = n > 0 && ngN <= n && crewOk && !done && !busy;
 
   // server ตัดวัตถุดิบ + เพิ่มสินค้าสำเร็จรูปใน transaction เดียว; วัตถุดิบไม่พอ = ปฏิเสธทั้งหมด
   const commit = async () => {
     if (!valid) return;
     setBusy(true);
     try {
-      const r = await Store.produceWO(wo.id, n, ngN);
+      const r = await Store.produceWO(wo.id, n, ngN, { shift, supervisor: supervisor.trim(), operator: operator.trim() });
+      try { localStorage.setItem("erp.prodCrew", JSON.stringify({ shift, supervisor: supervisor.trim(), operator: operator.trim() })); } catch (e) { /* ignore */ }
       setQty(""); setNg("");
       if (r.ok) onProduce(
         `บันทึกผลิต ${wo.id}: +${_fmt(r.good)} ชิ้นเข้าคลัง` +
@@ -1222,6 +1229,23 @@ function ProductionRecorder({ wo, onProduce }) {
                 </div>
               );
             })()}
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 12 }}>
+              <div style={{ width: 130 }}>
+                <label className="field-label">กะ</label>
+                <select className="select" value={shift} onChange={(e) => setShift(e.target.value)}>
+                  <option value="เช้า">กะเช้า</option>
+                  <option value="ดึก">กะดึก</option>
+                </select>
+              </div>
+              <div style={{ width: 200 }}>
+                <label className="field-label">หัวหน้าช่าง *</label>
+                <input className="input" maxLength={100} placeholder="พิมพ์ชื่อ" value={supervisor} onChange={(e) => setSupervisor(e.target.value)}/>
+              </div>
+              <div style={{ width: 200 }}>
+                <label className="field-label">คนนั่งเครื่อง *</label>
+                <input className="input" maxLength={100} placeholder="พิมพ์ชื่อ" value={operator} onChange={(e) => setOperator(e.target.value)}/>
+              </div>
+            </div>
             <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
               <div style={{ width: 150 }}>
                 <label className="field-label">จำนวนที่ผลิต (ชิ้น)</label>
@@ -1260,6 +1284,7 @@ function ProductionRecorder({ wo, onProduce }) {
             )}
 
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14 }}>
+              {n > 0 && !crewOk && <span style={{ fontSize: 12, color: "var(--amber)" }}>กรอกชื่อหัวหน้าช่างและคนนั่งเครื่องก่อนบันทึก</span>}
               {anyShort && <span style={{ fontSize: 12, color: "var(--danger)", display: "flex", alignItems: "center", gap: 5 }}><I.Alert size={13}/> วัตถุดิบบางรายการไม่พอ — ระบบจะปฏิเสธการบันทึกผลิต (ไม่ตัดสต๊อกใดๆ)</span>}
               <div className="spacer"/>
               <button type="button" className="btn btn-primary" disabled={!valid || anyShort} onClick={commit}>
@@ -1267,6 +1292,25 @@ function ProductionRecorder({ wo, onProduce }) {
               </button>
             </div>
           </>
+        )}
+        {(wo.logs || []).length > 0 && (
+          <div style={{ marginTop: 14, border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden" }}>
+            <div style={{ padding: "7px 12px", background: "var(--bg-subtle)", fontSize: 11.5, fontWeight: 600, color: "var(--text-secondary)" }}>ประวัติการบันทึกผลิต ({wo.logs.length} ครั้ง)</div>
+            <div style={{ display: "grid", gridTemplateColumns: "140px 60px 70px 60px 1fr 1fr 1fr", gap: 8, padding: "6px 12px", fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>
+              <div>เวลา</div><div>กะ</div><div style={{ textAlign: "right" }}>ผลิต</div><div style={{ textAlign: "right" }}>NG</div><div>หัวหน้าช่าง</div><div>คนนั่งเครื่อง</div><div>ผู้บันทึก</div>
+            </div>
+            {wo.logs.filter((l) => l.produced != null).map((l, i) => (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "140px 60px 70px 60px 1fr 1fr 1fr", gap: 8, padding: "6px 12px", borderTop: "1px solid var(--border)", fontSize: 12.5 }}>
+                <div style={{ color: "var(--text-secondary)" }}>{l.at}</div>
+                <div>{l.shift || "—"}</div>
+                <div className="num" style={{ textAlign: "right" }}>{_fmt(l.produced)}</div>
+                <div className="num" style={{ textAlign: "right", color: l.ng > 0 ? "var(--danger)" : "var(--text-tertiary)" }}>{_fmt(l.ng)}</div>
+                <div>{l.supervisor || "—"}</div>
+                <div>{l.operator || "—"}</div>
+                <div>{l.by || "—"}</div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </div>
@@ -1302,7 +1346,8 @@ function AddWorkOrderForm({ onSubmit, onCancel }) {
     }
   };
 
-  const valid = productCode && (parseInt(quantity, 10) || 0) > 0 && machine;
+  const moldUnderRepair = !!(MOLDS.find((x) => x.id === mold) || {}).repair;   // แม่พิมพ์มีใบแจ้งซ่อมเปิดอยู่ = ใช้ผลิตไม่ได้
+  const valid = productCode && (parseInt(quantity, 10) || 0) > 0 && machine && !moldUnderRepair;
 
   const nextWoId = () => Store.nextDocNo("WO").docNo;
 
@@ -1395,7 +1440,7 @@ function AddWorkOrderForm({ onSubmit, onCancel }) {
           <label className="field-label">แม่พิมพ์</label>
           <select className="select" value={mold} onChange={(e) => setMold(e.target.value)}>
             <option value="">— เลือกแม่พิมพ์ —</option>
-            {MOLDS.map((m) => <option key={m.id} value={m.id}>{m.id} · {m.name}</option>)}
+            {MOLDS.map((m) => <option key={m.id} value={m.id} disabled={!!m.repair}>{m.id} · {m.name}{m.repair ? " (อยู่ระหว่างซ่อม — เลือกไม่ได้)" : ""}</option>)}
           </select>
         </div>
         <div>

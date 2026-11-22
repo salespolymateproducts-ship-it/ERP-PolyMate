@@ -6,6 +6,8 @@ function PageMolds() {
   const [flt, setFlt] = useState("ALL");
   const [addOpen, setAddOpen] = useState(false);
   const [maint, setMaint] = useState(null);
+  const [repairOpen, setRepairOpen] = useState(null);
+  const [start, setStart] = useState(null);
   useStore();
   const role = Store.user() ? ROLES[Store.user().role] : null;
   const canEdit = role && (role.canEdit === "*" || (role.canEdit || []).includes("molds"));
@@ -110,14 +112,29 @@ function PageMolds() {
         footer={liveOpen && canEdit && <>
           <select className="input" style={{ width: 170 }} aria-label="สถานะแม่พิมพ์" value={liveOpen.status} onChange={(e) => runAction(() => Store.update("molds", liveOpen.id, { status: e.target.value }, "id", "สถานะ → " + MOLD_STATUS_TH[e.target.value]), "อัปเดตสถานะแล้ว")}>
             {Object.entries(MOLD_STATUS_TH).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
-          <button className="btn btn-primary btn-sm" onClick={() => setMaint(liveOpen)}><I.Wrench size={13}/> บันทึกซ่อมบำรุง</button></>}>
+          {liveOpen.repair
+            ? <>{liveOpen.repair.status === "waiting" && <button className="btn btn-outline btn-sm" onClick={() => setStart(liveOpen)}>เริ่มซ่อม</button>}
+                <button className="btn btn-primary btn-sm" onClick={() => setMaint(liveOpen)}><I.Check size={13}/> ซ่อมเสร็จ / ปิดใบแจ้งซ่อม</button></>
+            : <><button className="btn btn-outline btn-sm" onClick={() => setMaint(liveOpen)}><I.Wrench size={13}/> บันทึกซ่อมที่ทำเสร็จแล้ว</button>
+                <button className="btn btn-primary btn-sm" onClick={() => setRepairOpen(liveOpen)}><I.Wrench size={13}/> แจ้งซ่อม</button></>}</>}>
+        {liveOpen && liveOpen.repair && <RepairTicket r={liveOpen.repair}/>}
         {liveOpen && <MoldDetail m={liveOpen}/>}
-        {liveOpen && (liveOpen.maintLog || []).length > 0 && <div style={{ padding: "0 20px 20px" }}><div className="card"><div className="card-head"><div className="card-title">ประวัติซ่อมบำรุง</div></div>
-          <table className="table" style={{ fontSize: 12.5 }}><thead><tr><th>วันที่</th><th>รายละเอียด</th><th className="num">Shot ขณะซ่อม</th><th className="num">ค่าใช้จ่าย</th><th>โดย</th></tr></thead>
-          <tbody>{liveOpen.maintLog.map((x, i) => <tr key={i}><td>{x.date}</td><td>{x.note}</td><td className="num">{_fmt(x.shotsAt || 0)}</td><td className="num">{_fmt(x.cost || 0)}</td><td>{x.by}</td></tr>)}</tbody></table></div></div>}
+        {liveOpen && (liveOpen.maintLog || []).length > 0 && <div style={{ padding: "0 20px 20px" }}><div className="card"><div className="card-head"><div className="card-title">ประวัติซ่อมบำรุง ({liveOpen.maintLog.length})</div></div>
+          <div style={{ padding: "0 18px 8px" }}>{liveOpen.maintLog.map((x, i) => (
+            <div key={i} style={{ display: "flex", gap: 12, padding: "10px 0", borderTop: i ? "1px solid var(--border)" : "none" }}>
+              <div style={{ width: 4, alignSelf: "stretch", background: "var(--accent-subtle)", borderRadius: 99 }}/>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 500 }}>{x.symptom ? x.symptom + " — " + x.note : x.note}</div>
+                <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginTop: 2 }}>{x.date}{x.type ? " · " + x.type : ""}{x.downDays != null ? " · หยุดใช้ " + _fmt(x.downDays) + " วัน" : ""} · Shot {_fmt(x.shotsAt || 0)}</div>
+                <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>ผู้สั่งซ่อม {x.orderedBy || "—"} · ผู้ซ่อม {x.repairedBy || "—"} · บันทึกโดย {x.by}</div>
+              </div>
+              <div className="num" style={{ fontSize: 13, fontWeight: 500, color: "var(--text-secondary)" }}>฿{_fmt(x.cost || 0)}</div>
+            </div>))}</div></div></div>}
       </Drawer>
       {addOpen && <MoldForm onClose={() => setAddOpen(false)}/>}
       {maint && <MoldMaintModal m={maint} onClose={() => setMaint(null)}/>}
+      {repairOpen && <MoldRepairOpenModal m={repairOpen} onClose={() => setRepairOpen(null)}/>}
+      {start && <MoldRepairStartModal m={start} onClose={() => setStart(null)}/>}
     </>
   );
 }
@@ -162,15 +179,23 @@ function MoldMaintModal({ m, onClose }) {
   const [note, setNote] = useState("");
   const [cost, setCost] = useState(0);
   const [resetShots, setResetShots] = useState(false);
+  const tk = m.repair || null;
+  const [type, setType] = useState(tk ? tk.type : "ซ่อมเสีย");
+  const [orderedBy, setOrderedBy] = useState(tk ? tk.orderedBy : Store.userName());
+  const [repairedBy, setRepairedBy] = useState(tk ? (tk.repairedBy || "") : "");
   function save() {
     let done = false;
     runAction(() => Store.tx("moldMaint", () => {
       if (!note.trim()) Store.fail("กรุณาระบุรายละเอียดงานซ่อม");
+      if (!orderedBy.trim() || !repairedBy.trim()) Store.fail("กรุณาระบุชื่อผู้สั่งซ่อมและผู้ซ่อม");
       const mold = Store.find("molds", m.id);
       mold.maintLog = mold.maintLog || [];
-      mold.maintLog.unshift({ date: Store.today(), note: note.trim(), cost: Number(cost) || 0, by: Store.userName(), shotsAt: mold.shots });
+      const t = mold.repair || null;
+      const downDays = t ? Math.max(0, Math.round((new Date(Store.today()) - new Date(String(t.openedAt).slice(0, 10))) / 86400000)) : null;
+      mold.maintLog.unshift({ date: Store.today(), type, symptom: t ? t.symptom : "", note: note.trim(), orderedBy: orderedBy.trim(), repairedBy: repairedBy.trim(), downDays, cost: Number(cost) || 0, by: Store.userName(), shotsAt: mold.shots });
       mold.lastMaint = Store.today();
       mold.status = "available";
+      delete mold.repair;
       if (resetShots) mold.shots = 0;
       if (Number(cost) > 0) {
         const n = Store.nextDocNo("EXP");
@@ -182,12 +207,85 @@ function MoldMaintModal({ m, onClose }) {
     if (done) onClose();
   }
   return (
-    <ErpModal title={"บันทึกซ่อมบำรุง " + m.code} width={480} onClose={onClose}
+    <ErpModal title={(tk ? "ปิดใบแจ้งซ่อม " : "บันทึกซ่อมบำรุง ") + m.code} width={480} onClose={onClose}
       footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" onClick={save}>บันทึก</button></>}>
+      {tk && <div style={{ marginBottom: 10, fontSize: 12.5, color: "var(--text-secondary)" }}>อาการที่แจ้ง: <b>{tk.symptom}</b></div>}
+      <div className="grid-2" style={{ gap: 10, marginBottom: 10 }}>
+        <div><label className="field-label">ผู้สั่งซ่อม *</label><input className="input" maxLength={100} value={orderedBy} onChange={(e) => setOrderedBy(e.target.value)}/></div>
+        <div><label className="field-label">ผู้ซ่อม *</label><input className="input" maxLength={100} placeholder="พิมพ์ชื่อ" value={repairedBy} onChange={(e) => setRepairedBy(e.target.value)}/></div>
+      </div>
+      <label className="field-label">ประเภทงาน</label>
+      <select className="input" style={{ marginBottom: 10 }} value={type} onChange={(e) => setType(e.target.value)}>{MOLD_REPAIR_TYPES.map((x) => <option key={x}>{x}</option>)}</select>
       <label className="field-label">รายละเอียดงาน *</label><input className="input" value={note} onChange={(e) => setNote(e.target.value)}/>
       <label className="field-label" style={{ marginTop: 10 }}>ค่าใช้จ่าย (บาท) — บันทึกเข้าค่าใช้จ่ายอัตโนมัติ</label><input className="input num" type="number" min="0" value={cost} onChange={(e) => setCost(e.target.value)}/>
       <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, marginTop: 10 }}><input type="checkbox" checked={resetShots} onChange={(e) => setResetShots(e.target.checked)}/> ยกเครื่อง / เปลี่ยนชิ้นส่วนหลัก (รีเซ็ตจำนวน shot)</label>
     </ErpModal>
+  );
+}
+
+const MOLD_REPAIR_TYPES = ["ซ่อมเสีย", "PM ตามรอบ", "ปรับปรุง"];
+
+// ใบแจ้งซ่อม: เปิดแล้วแม่พิมพ์สถานะ "ซ่อมบำรุง" และเลือกใช้ในใบสั่งผลิตใหม่ไม่ได้ จนกว่าจะปิดใบ (ซ่อมเสร็จ)
+function MoldRepairOpenModal({ m, onClose }) {
+  const [symptom, setSymptom] = useState("");
+  const [type, setType] = useState("ซ่อมเสีย");
+  const [orderedBy, setOrderedBy] = useState(Store.userName());
+  function save() {
+    let done = false;
+    runAction(() => Store.tx("moldRepairOpen", () => {
+      if (!symptom.trim()) Store.fail("กรุณาระบุอาการ / งานที่ต้องซ่อม");
+      if (!orderedBy.trim()) Store.fail("กรุณาระบุชื่อผู้สั่งซ่อม");
+      const mold = Store.find("molds", m.id);
+      if (mold.repair) Store.fail("แม่พิมพ์นี้มีใบแจ้งซ่อมเปิดอยู่แล้ว");
+      mold.repair = { openedAt: Store.today(), symptom: symptom.trim(), type, orderedBy: orderedBy.trim(), reportedBy: Store.userName(), status: "waiting" };
+      mold.status = "maintenance";
+      Store.log("MAINT", "แม่พิมพ์", mold.code, "แจ้งซ่อม: " + symptom.trim() + " · ผู้สั่ง " + orderedBy.trim());
+      done = true;
+    }), "เปิดใบแจ้งซ่อมแล้ว");
+    if (done) onClose();
+  }
+  return (
+    <ErpModal title={"แจ้งซ่อมแม่พิมพ์ " + m.code} width={480} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" onClick={save}>เปิดใบแจ้งซ่อม</button></>}>
+      <div className="grid-2" style={{ gap: 10, marginBottom: 10 }}>
+        <div><label className="field-label">ผู้สั่งซ่อม *</label><input className="input" maxLength={100} value={orderedBy} onChange={(e) => setOrderedBy(e.target.value)}/></div>
+        <div><label className="field-label">ประเภทงาน</label><select className="input" value={type} onChange={(e) => setType(e.target.value)}>{MOLD_REPAIR_TYPES.map((x) => <option key={x}>{x}</option>)}</select></div>
+      </div>
+      <label className="field-label">อาการ / งานที่ต้องซ่อม *</label><input className="input" placeholder="เช่น ชิ้นงานมีครีบ, ชิ้นงานติดแม่พิมพ์, น้ำรั่ว" value={symptom} onChange={(e) => setSymptom(e.target.value)}/>
+      <div style={{ marginTop: 10, fontSize: 11.5, color: "var(--text-tertiary)" }}>เมื่อเปิดใบ แม่พิมพ์จะถูกตั้งเป็น "ซ่อมบำรุง" และเลือกในใบสั่งผลิตใหม่ไม่ได้จนกว่าจะปิดใบแจ้งซ่อม</div>
+    </ErpModal>
+  );
+}
+
+function MoldRepairStartModal({ m, onClose }) {
+  const [by, setBy] = useState("");
+  function save() {
+    let done = false;
+    runAction(() => Store.tx("moldRepairStart", () => {
+      if (!by.trim()) Store.fail("กรุณาระบุชื่อผู้ซ่อม");
+      const mold = Store.find("molds", m.id);
+      if (!mold.repair) Store.fail("ไม่มีใบแจ้งซ่อมที่เปิดอยู่");
+      mold.repair.status = "repairing"; mold.repair.repairedBy = by.trim(); mold.repair.startedAt = Store.today();
+      Store.log("MAINT", "แม่พิมพ์", mold.code, "เริ่มซ่อม · ผู้ซ่อม " + by.trim());
+      done = true;
+    }), "เริ่มซ่อมแล้ว");
+    if (done) onClose();
+  }
+  return (
+    <ErpModal title={"เริ่มซ่อม " + m.code} width={420} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" onClick={save}>เริ่มซ่อม</button></>}>
+      <label className="field-label">ผู้ซ่อม *</label><input className="input" maxLength={100} placeholder="พิมพ์ชื่อ" value={by} onChange={(e) => setBy(e.target.value)}/>
+    </ErpModal>
+  );
+}
+
+function RepairTicket({ r }) {
+  return (
+    <div style={{ margin: "0 20px 16px", padding: "12px 14px", borderRadius: 10, background: "var(--amber-subtle)", color: "var(--text-primary)", fontSize: 13 }}>
+      <div style={{ fontWeight: 600, color: "var(--amber)", marginBottom: 6 }}>ใบแจ้งซ่อมที่เปิดอยู่ · {r.status === "repairing" ? "กำลังซ่อม" : "รอซ่อม"} · {r.type}</div>
+      <div>อาการ: <b>{r.symptom}</b></div>
+      <div style={{ color: "var(--text-secondary)", marginTop: 4 }}>แจ้งเมื่อ {r.openedAt} · ผู้สั่งซ่อม {r.orderedBy}{r.repairedBy ? " · ผู้ซ่อม " + r.repairedBy : " · ยังไม่มีผู้ซ่อม"}</div>
+    </div>
   );
 }
 
@@ -257,27 +355,6 @@ function MoldDetail({ m }) {
             <div style={{ width: lifePct + "%", height: "100%", background: "linear-gradient(90deg,#2D6CDF,#7C3AED)" }}/>
           </div>
           <div className="num" style={{ marginTop: 6, fontSize: 12, color: "var(--text-secondary)" }}>{_fmt(lifePct, 1)}% ของอายุการใช้งาน · คาดบำรุงรักษาครั้งถัดไปที่ {_fmt(Math.round(m.shots / 10000) * 10000 + 50000)} shots</div>
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-head"><div className="card-title">ประวัติบำรุงรักษา</div></div>
-        <div style={{ padding: "4px 18px 12px" }}>
-          {[
-            { date: m.lastMaint, type: "ทำความสะอาด + เปลี่ยน O-Ring", by: "ช่างธีรพงศ์", cost: 8500 },
-            { date: "2026-01-12", type: "ปรับ Cooling Channel", by: "Cosmoplast Mold", cost: 24000 },
-            { date: "2025-09-28", type: "ทำความสะอาดทั่วไป", by: "ช่างธีรพงศ์", cost: 3200 },
-            { date: "2025-05-04", type: "เปลี่ยน Insert Cavity #2", by: "Cosmoplast Mold", cost: 18500 },
-          ].map((r, i) => (
-            <div key={i} style={{ display: "flex", gap: 12, padding: "10px 0", borderBottom: "1px solid var(--border)" }}>
-              <div style={{ width: 4, alignSelf: "stretch", background: "var(--accent-subtle)", borderRadius: 99 }}/>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 500 }}>{r.type}</div>
-                <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>{r.date} · โดย {r.by}</div>
-              </div>
-              <div className="num" style={{ fontSize: 13, fontWeight: 500, color: "var(--text-secondary)" }}>฿{_fmt(r.cost)}</div>
-            </div>
-          ))}
         </div>
       </div>
     </div>
