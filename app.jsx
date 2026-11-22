@@ -50,6 +50,7 @@ function App() {
     return () => { alive = false; window.removeEventListener("erp-session-expired", onExpired); window.removeEventListener("erp-goto", onGo); };
   }, []);
   const [page, setPage] = useState("dashboard");
+  const [navOpen, setNavOpen] = useState(false); // เมนูซ้ายบนมือถือ
   const [navTick, setNavTick] = useState(0); // บังคับเปิดหน้าใหม่เมื่อกดลิงก์จากการค้นหา/แจ้งเตือน
   const [t, setThemeSetting] = useThemeSettings(THEME_DEFAULTS);
   const theme = t.theme;
@@ -80,9 +81,11 @@ function App() {
 
   return (
     <div className="app" data-screen-label={"ERP / " + PAGES[page].title}>
-      <Sidebar active={page} onNav={setPage} role={role}/>
+      <Sidebar active={page} onNav={(p) => { setPage(p); setNavOpen(false); }} role={role} open={navOpen}/>
+      {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)}/>}
       <div className="main">
         <Topbar
+          onMenu={() => setNavOpen(true)}
           crumb={crumb}
           theme={theme}
           onToggleTheme={() => setThemeSetting("theme", theme === "light" ? "dark" : "light")}

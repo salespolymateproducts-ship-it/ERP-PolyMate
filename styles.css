@@ -581,10 +581,19 @@ a { color: inherit; text-decoration: none; }
   color: var(--text-secondary);
 }
 
+.menu-btn { display: none; align-items: center; justify-content: center; width: 38px; height: 38px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); color: var(--text-primary); cursor: pointer; }
 /* responsive */
 @media (max-width: 900px) {
+  /* หน้าเข้าสู่ระบบบนมือถือ: ซ่อนแผงแบรนด์ซ้าย ให้ฟอร์มเต็มจอ */
+  .login-root { grid-template-columns: 1fr !important; }
+  .login-brand { display: none !important; }
   .app { grid-template-columns: 1fr; }
-  .sidebar { display: none; }
+  /* มือถือ/แท็บเล็ต: เมนูซ้ายเป็นแผงเลื่อนออกมา เปิดด้วยปุ่ม ☰ บน topbar */
+  .sidebar { position: fixed; left: 0; top: 0; bottom: 0; width: 264px; max-width: 82vw; z-index: 60; transform: translateX(-102%); transition: transform .2s ease; overflow-y: auto; }
+  .sidebar.open { transform: none; box-shadow: 0 0 40px rgba(0,0,0,.35); }
+  .nav-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.45); z-index: 55; }
+  .menu-btn { display: inline-flex; }
+  .topbar { padding: 0 12px; gap: 10px; }
   .kpi-grid, .grid-4 { grid-template-columns: repeat(2, minmax(0,1fr)); }
   .grid-3 { grid-template-columns: 1fr; }
   .content { padding: 16px; }

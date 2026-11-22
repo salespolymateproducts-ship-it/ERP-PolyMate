@@ -46,7 +46,7 @@ const NAV = [
   { id: "settings", label: "ตั้งค่า", icon: "Settings" },
 ];
 
-function Sidebar({ active, onNav, role }) {
+function Sidebar({ active, onNav, role, open }) {
   useStore();
   // กลุ่ม "การเงิน" พับเก็บได้ (จำค่าไว้ในเครื่อง) · ตัวเลขรออนุมัติรวมทุกเอกสารการเงินจากเซิร์ฟเวอร์
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("erp.nav.fin.collapsed") === "1"; } catch (e) { return false; } });
@@ -83,7 +83,7 @@ function Sidebar({ active, onNav, role }) {
   });
 
   return (
-    <aside className="sidebar">
+    <aside className={"sidebar" + (open ? " open" : "")}>
       <div className="sidebar-brand">
         <img src="assets/polymate-logo.png" alt="PolyMate" style={{ width: 38, height: 38, objectFit: "contain", flexShrink: 0 }}/>
         <div style={{ minWidth: 0 }}>
@@ -125,7 +125,7 @@ function Sidebar({ active, onNav, role }) {
 }
 
 // --- Topbar ---
-function Topbar({ crumb, theme, onToggleTheme, role, allRoles, onChangeRole, onLogout, onNav }) {
+function Topbar({ onMenu, crumb, theme, onToggleTheme, role, allRoles, onChangeRole, onLogout, onNav }) {
   useStore();
   const notes = window.buildNotifications(role);
   const [pwOpen, setPwOpen] = useState(false);
@@ -135,6 +135,7 @@ function Topbar({ crumb, theme, onToggleTheme, role, allRoles, onChangeRole, onL
   const [profileOpen, setProfileOpen] = useState(false);
   return (
     <header className="topbar">
+      <button type="button" className="menu-btn" aria-label="เมนู" onClick={onMenu}><I.Menu size={20}/></button>
       <div className="crumb">
         {crumb.map((c, i) => (
           <React.Fragment key={i}>

@@ -36,14 +36,14 @@ function LoginScreen({ onLogin }) {
   };
 
   return (
-    <div style={{
+    <div className="login-root" style={{
       minHeight: "100vh",
       display: "grid",
       gridTemplateColumns: "1fr 1fr",
       background: "var(--bg)",
     }}>
       {/* Left — branding panel */}
-      <div style={{
+      <div className="login-brand" style={{
         background: "linear-gradient(135deg, #0F2A5A 0%, #1E4DAB 45%, #2D6CDF 100%)",
         position: "relative",
         overflow: "hidden",
