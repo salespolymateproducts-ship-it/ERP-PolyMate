@@ -304,6 +304,68 @@ function ProductOrderModal({ f, onClose, onDone }) {
   );
 }
 
+// สั่งซื้อสินค้าที่ขายหลายรายการพร้อมกัน: แก้จำนวน/ราคา/ผู้ขายต่อรายการ แล้วสร้าง PO 1 ใบต่อผู้ขาย (รออนุมัติ)
+function BulkProductOrderModal({ items, onClose, onDone }) {
+  const [rows, setRows] = useState(() => items.map(({ f, pos }) => {
+    const ps = productPurchaseStats(f);
+    return { f, qty: String(Math.max(1, Math.ceil(pos.short))), price: String(ps.last > 0 ? ps.last : (f.cost > 0 ? f.cost : "")), supplier: f.supplier || "" };
+  }));
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const set = (i, patch) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const go = async () => {
+    setErr("");
+    for (const r of rows) {
+      if (!r.supplier) return setErr("กรุณาเลือก Supplier ให้ครบ: " + r.f.code);
+      if (!(Number(r.qty) > 0)) return setErr("จำนวนต้องมากกว่า 0: " + r.f.code);
+      if (!(Number(r.price) > 0)) return setErr("กรุณากรอกราคาซื้อ (มากกว่า 0): " + r.f.code);
+    }
+    const bySup = {};
+    rows.forEach((r) => { (bySup[r.supplier] = bySup[r.supplier] || []).push(r); });
+    setBusy(true);
+    const made = [];
+    try {
+      for (const code of Object.keys(bySup)) {
+        const sup = SUPPLIERS.find((x) => x.code === code);
+        const lines = bySup[code].map((r) => {
+          const q = Number(r.qty), p = Number(r.price);
+          return { itemType: "product", item: r.f.id, name: r.f.code + " " + r.f.name, qty: q, unit: r.f.unit || "PCS", price: p, amount: Math.round(q * p * 100) / 100 };
+        });
+        const subtotal = Math.round(lines.reduce((t, l) => t + l.amount, 0) * 100) / 100, vat = Math.round(subtotal * 7) / 100;
+        const rec = { id: Store.nextDocNo("PO").docNo, date: Store.today(), supplier: code, supplierName: sup ? sup.name : code, items: lines.length, subtotal, vat, whtRate: 0,
+          total: Math.round((subtotal + vat) * 100) / 100, expectedDate: "—", status: "pending", createdBy: Store.userName(), lines };
+        await Store.savePO(rec);
+        made.push(rec.id);
+      }
+      onDone("สร้างใบสั่งซื้อ " + made.join(", ") + " (รออนุมัติ) แล้ว — ดูได้ที่เมนูใบสั่งซื้อ");
+    } catch (e) {
+      setErr((made.length ? "สร้างสำเร็จแล้ว " + made.join(", ") + " แต่ " : "") + (e && e.message ? e.message : String(e)));
+      setBusy(false);
+    }
+  };
+  const nSup = new Set(rows.map((r) => r.supplier).filter(Boolean)).size;
+  return (
+    <ErpModal title={"สั่งซื้อสินค้าที่ขาด " + rows.length + " รายการ"} width={760} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={go}>สร้างใบสั่งซื้อ{nSup > 0 ? " (" + nSup + " ใบ)" : ""}</button></>}>
+      <table className="table" style={{ fontSize: 12 }}>
+        <thead><tr><th>สินค้า</th><th>Supplier *</th><th className="num">จำนวน</th><th className="num">ราคา/หน่วย</th></tr></thead>
+        <tbody>{rows.map((r, i) => (
+          <tr key={r.f.id}>
+            <td><b>{r.f.code}</b> {r.f.name}</td>
+            <td><select className="select" value={r.supplier} onChange={(e) => set(i, { supplier: e.target.value })}>
+              <option value="">— เลือก —</option>
+              {SUPPLIERS.filter((x) => x.status !== "inactive").map((x) => <option key={x.id} value={x.code}>{x.name}</option>)}
+            </select></td>
+            <td><input className="input num" type="number" min="0" step="any" style={{ width: 90 }} value={r.qty} onChange={(e) => set(i, { qty: e.target.value })}/></td>
+            <td><input className="input num" type="number" min="0" step="0.01" style={{ width: 90 }} value={r.price} onChange={(e) => set(i, { price: e.target.value })}/></td>
+          </tr>))}</tbody>
+      </table>
+      <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginTop: 8 }}>รายการที่เลือก Supplier เดียวกันจะรวมเป็น PO ใบเดียว · ราคาตั้งต้น = ราคาซื้อล่าสุด แก้ได้ · PO ใหม่รออนุมัติ</div>
+      {err && <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+    </ErpModal>
+  );
+}
+
 function MaterialTable({ canManage, onAdd, onEdit }) {
   const [showInactive, setShowInactive] = useState(true);
   const inactiveCount = MATERIALS.filter((m) => m.active === false).length;

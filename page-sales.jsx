@@ -451,6 +451,8 @@ function TradeStockBanner({ doc }) {
   const [order, setOrder] = useState(null);
   const [toast, setToast] = useState(null);
   const [woOpen, setWoOpen] = useState(false);
+  const [picked, setPicked] = useState({});
+  const [bulk, setBulk] = useState(null);
   const canMake = Store.user() && ["admin", "production", "sales"].includes(Store.user().role);
   const canBuy = Store.user() && ["admin", "procurement"].includes(Store.user().role);
   const rows = [];
@@ -478,9 +480,25 @@ function TradeStockBanner({ doc }) {
             <b>{f.code}</b> {f.name}
             <div style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>ใบนี้ต้องส่ง {_fmt(need)} · ทุกใบสั่งขายรวม {_fmt(pos.demand)} · สต๊อก {_fmt(pos.stock)} · {Store.isBuyable(f) ? "สั่งไว้แล้ว" : "กำลังผลิต"} {_fmt(pos.incoming)} · <b style={{ color: pos.short > 0.0005 ? "var(--danger)" : "var(--amber)" }}>{pos.short > 0.0005 ? "ขาด " + _fmt(Math.ceil(pos.short)) : Store.isBuyable(f) ? "รอรับของ" : "รอผลิต"}</b></div>
           </div>
-          {canBuy && Store.isBuyable(f) && pos.short > 0.0005 && <button className="btn btn-primary btn-sm" onClick={() => setOrder({ ...f, onOrder: pos.incoming, demandOpen: pos.demand, suggestQty: Math.ceil(pos.short) })}>สั่งซื้อ</button>}
+          {canBuy && Store.isBuyable(f) && pos.short > 0.0005 && <>
+            <label style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 12 }}><input type="checkbox" checked={!!picked[f.id]} onChange={(e) => setPicked({ ...picked, [f.id]: e.target.checked })}/> เลือก</label>
+            <button className="btn btn-outline btn-sm" onClick={() => setOrder({ ...f, onOrder: pos.incoming, demandOpen: pos.demand, suggestQty: Math.ceil(pos.short) })}>สั่งซื้อ</button>
+          </>}
         </div>
       ))}
+      {canBuy && (() => {
+        const buyRows = rows.filter((r) => Store.isBuyable(r.f) && r.pos.short > 0.0005);
+        if (!buyRows.length) return null;
+        const sel = buyRows.filter((r) => picked[r.f.id]);
+        const allOn = sel.length === buyRows.length;
+        return (
+          <div style={{ padding: "8px 12px", borderTop: "1px solid var(--border)", display: "flex", gap: 10, alignItems: "center" }}>
+            <label style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 12 }}><input type="checkbox" checked={allOn} onChange={(e) => setPicked(Object.fromEntries(buyRows.map((r) => [r.f.id, e.target.checked])))}/> เลือกทั้งหมด</label>
+            <button className="btn btn-primary btn-sm" disabled={!sel.length} onClick={() => setBulk(sel)}>สั่งซื้อที่เลือก ({sel.length})</button>
+          </div>
+        );
+      })()}
+      {bulk && <BulkProductOrderModal items={bulk} onClose={() => setBulk(null)} onDone={(m) => { setBulk(null); setPicked({}); setToast(m); setTimeout(() => setToast(null), 4000); }}/>}
       {canMake && rows.some((r) => !Store.isBuyable(r.f) && r.pos.short > 0.0005) && (
         <div style={{ padding: "8px 12px", borderTop: "1px solid var(--border)" }}>
           <button className="btn btn-primary btn-sm" onClick={() => setWoOpen(true)}><I.Factory size={13}/> เปิดใบสั่งผลิต</button>
