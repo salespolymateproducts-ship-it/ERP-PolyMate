@@ -585,6 +585,11 @@ const Store = (function () {
   // ---------- สินค้าซื้อมาขายไป ----------
   // สินค้าที่ออก PO ซื้อได้ = ประเภทซื้อมาขายไป หรือเปิดธง buyable (เช่น สินค้า OEM ที่จ้างผู้อื่นผลิต) — ต้นทุนของสินค้ากลุ่มนี้มาจากการรับ PO
   const isBuyable = (f) => !!f && (f.buyable === true || f.jobType === "trade");
+  // ---------- สินค้าหลายสี: แต่ละสี = สินค้า (SKU) แยกรหัส มีสต็อก/ต้นทุน/ราคาของตัวเอง ผูกกันด้วย baseCode (รหัสของสินค้าตั้งต้น) ----------
+  const productFamilyKey = (f) => String((f && (f.baseCode || f.code)) || "").trim().toUpperCase();
+  const productFamily = (f) => { const k = productFamilyKey(f); return k ? state.finished.filter((x) => productFamilyKey(x) === k) : []; };
+  // ชื่อสำหรับเลือกในเอกสาร/ใบสั่งผลิต: สินค้าที่มีหลายสีจะต่อท้ายด้วยสี เพื่อแยกแต่ละสีออกจากกัน
+  const productLabel = (f) => (f ? f.name + (f.color && productFamily(f).length > 1 ? " (" + f.color + ")" : "") : "");
   const saveProduct = (rec) => serverCall("PUT", "/finished/" + encodeURIComponent(rec.id), rec);
   const savePO = (rec) => serverCall("POST", "/purchaseOrders", rec);
   const adjustProductCost = (id, cost, reason) => serverCall("POST", "/actions/products/" + encodeURIComponent(id) + "/adjust-cost", { cost, reason });
@@ -774,7 +779,7 @@ const Store = (function () {
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
     adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, adjustWoBom, woMaterial, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,
-    isBuyable, productInProduction, finApi, sigApi, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
+    isBuyable, productFamilyKey, productFamily, productLabel, productInProduction, finApi, sigApi, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
     MACHINE_COND, machineCond, machineUsable, machinePM, machineFit, saveMachine, setMachineCondition, logMachineMaintenance,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,

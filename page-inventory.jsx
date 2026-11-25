@@ -112,7 +112,7 @@ function SmallStat({ label, value, unit, tone, icon, alert }) {
 // รับเข้า / เบิกออก / ปรับยอดสต๊อกด้วยมือ (ต้องระบุเหตุผล — บันทึก Stock Movement + Audit Log)
 function StockAdjustModal({ onClose }) {
   const items = [...Store.state.materials.filter((m) => m.active !== false).map((m) => ({ code: m.code, name: m.name, unit: m.unit, stock: m.stock })),
-    ...Store.state.finished.map((f) => ({ code: f.code, name: f.name, unit: f.unit || "PCS", stock: f.stock }))];
+    ...Store.state.finished.map((f) => ({ code: f.code, name: Store.productLabel(f), unit: f.unit || "PCS", stock: f.stock }))];
   const [code, setCode] = useState(items[0] ? items[0].code : "");
   const [mode, setMode] = useState("IN");
   const [qty, setQty] = useState("");
@@ -806,6 +806,7 @@ function FinishedTable({ onAdd }) {
   useStore();
   const [pe, setPe] = useState(null);
   const [po, setPo] = useState(null);
+  const [ac, setAc] = useState(null);   // เพิ่มสีใหม่ให้สินค้า
   const [toast, setToast] = useState(null);
   const flash = (m) => { setToast(m); setTimeout(() => setToast(null), 2800); };
   const canBuy = Store.user() && ["admin", "procurement"].includes(Store.user().role);
@@ -819,16 +820,17 @@ function FinishedTable({ onAdd }) {
   const fgLevelOf = (f) => (f.stock <= 0 ? "out" : (Store.isBuyable(f) && f.min > 0 && f.stock < f.min) ? "low" : "ok");
   const marginOf = (f) => (f.price && f.cost > 0 ? ((f.price - f.cost) / f.price) * 100 : 0);
   const view = useListView(FINISHED, {
-    text: (f) => [f.code, f.name, f.customer, custName(f.customer), f.color, f.supplier, (JOB_TYPES[f.jobType] || {}).short].join(" "),
+    text: (f) => [f.code, f.baseCode, f.name, f.customer, custName(f.customer), f.color, f.supplier, (JOB_TYPES[f.jobType] || {}).short].join(" "),
     filter: (f) => (fgJob === "ALL" || f.jobType === fgJob) && (fgLevel === "ALL" || fgLevelOf(f) === fgLevel), filterKey: fgJob + "|" + fgLevel,
-    defaultSort: { key: "code", dir: "asc" },
-    sorts: { code: (f) => f.code, name: (f) => f.name, job: (f) => (JOB_TYPES[f.jobType] || {}).short || "", customer: (f) => custName(f.customer) || "", weight: (f) => (f.weight == null ? "" : f.weight),
+    defaultSort: { key: "family", dir: "asc" },   // สินค้าหลายสีอยู่ติดกัน (เรียงตามรหัสตั้งต้น แล้วตามรหัสสินค้า)
+    sorts: { family: (f) => Store.productFamilyKey(f) + "\u0000" + f.code, code: (f) => f.code, name: (f) => f.name, job: (f) => (JOB_TYPES[f.jobType] || {}).short || "", customer: (f) => custName(f.customer) || "", weight: (f) => (f.weight == null ? "" : f.weight),
       stock: (f) => f.stock || 0, cost: (f) => f.cost || 0, price: (f) => f.price || 0, margin: (f) => marginOf(f) },
   });
   return (
     <div className="card">
       {pe && <ProductEditModal f={Store.state.finished.find((x) => x.id === pe.id) || pe} onClose={() => setPe(null)} onDone={(m) => { setPe(null); flash(m); }}/>}
       {po && <ProductOrderModal f={po} onClose={() => setPo(null)} onDone={(m) => { setPo(null); flash(m); }}/>}
+      {ac && <AddColorModal f={ac} onClose={() => setAc(null)} onDone={(m) => { setAc(null); flash(m); }}/>}
       {toast && <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 1100, background: "var(--text-primary)", color: "white", padding: "12px 18px", borderRadius: 10, boxShadow: "var(--shadow-lg)", fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 10 }}><I.Check size={16}/> {toast}</div>}
       <ListToolbar view={view} placeholder="รหัส / ชื่อสินค้า / ลูกค้า / สี / ผู้ขาย…">
         <select className="select" style={{ width: 150 }} value={fgJob} onChange={(e) => setFgJob(e.target.value)}>
@@ -861,12 +863,18 @@ function FinishedTable({ onAdd }) {
             const buy = Store.isBuyable(f);
             const low = buy && f.min > 0 && f.stock < f.min;
             const supName = buy && f.supplier ? ((SUPPLIERS.find((x) => x.code === f.supplier) || {}).name || f.supplier) : null;
+            const fam = Store.productFamily(f);
             return (
               <tr key={f.id}>
                 <td className="mono"><b>{f.code}</b></td>
                 <td>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>{f.name}</div>
                   {f.color && <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>สี: {f.color}</div>}
+                  {fam.length > 1 && (
+                    <div style={{ fontSize: 10.5, color: "var(--text-tertiary)", marginTop: 2 }}>
+                      สินค้านี้มี {fam.length} สี: {fam.map((x) => (x.id === f.id ? <b key={x.id} style={{ color: "var(--text-secondary)" }}>{x.color || x.code}</b> : <span key={x.id}>{x.color || x.code}</span>)).reduce((a, b) => [a, " · ", b])}
+                    </div>
+                  )}
                   {supName && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 2 }}>ผู้ขายประจำ: {supName}{f.leadDays != null ? " · " + f.leadDays + " วัน" : ""}</div>}
                 </td>
                 <td><JobBadge type={f.jobType}/></td>
@@ -885,6 +893,7 @@ function FinishedTable({ onAdd }) {
                 <td className="num" style={{ color: margin > 40 ? "var(--success)" : "var(--text-primary)", fontWeight: 500 }}>{_fmt(margin, 1)}%</td>
                 <td style={{ whiteSpace: "nowrap" }}>
                   <button className="btn btn-ghost btn-sm" onClick={() => setPe(f)}><I.Edit size={13}/> แก้ไข</button>
+                  <button className="btn btn-ghost btn-sm" title="เพิ่มสีใหม่ของสินค้านี้ (แยกรหัสและสต็อกตามสี)" onClick={() => setAc(f)}><I.Plus size={13}/> เพิ่มสี</button>
                   {buy && canBuy && <button className="btn btn-outline btn-sm" style={{ marginLeft: 4 }} onClick={() => setPo({ ...f, onOrder: Store.productOnOrder(f.id), demandOpen: Store.productDemand ? Store.productDemand(f.code) : 0 })}>สั่งซื้อ</button>}
                 </td>
               </tr>
@@ -901,6 +910,52 @@ function FinishedTable({ onAdd }) {
       </div>
       <Pager view={view}/>
     </div>
+  );
+}
+
+// เพิ่มสีใหม่ให้สินค้า: สร้างสินค้า (SKU) ใหม่ 1 รหัสต่อ 1 สี คัดลอกข้อมูลหลักจากสินค้าต้นแบบ สต็อกเริ่มที่ 0
+// ผูกกลุ่มด้วย baseCode — ใบสั่งขาย/ใบสั่งผลิต/BOM/สต็อกทำงานแยกตามรหัสสินค้าอยู่แล้ว จึงแยกตามสีโดยอัตโนมัติ
+function AddColorModal({ f, onClose, onDone }) {
+  const base = f.baseCode || f.code;
+  const fam = Store.productFamily(f);
+  const taken = (c) => Store.state.finished.some((x) => String(x.code).trim().toUpperCase() === String(c).trim().toUpperCase());
+  const suggest = () => { for (let n = fam.length + 1; n < 200; n++) { const c = base + "-" + String(n).padStart(2, "0"); if (!taken(c)) return c; } return base + "-"; };
+  const [color, setColor] = useState("");
+  const [code, setCode] = useState(suggest);
+  const [err, setErr] = useState("");
+  const managed = Store.isBuyable(f);
+  const save = () => {
+    const c = color.trim(), cd = code.trim().toUpperCase();
+    if (!c) return setErr("กรุณาระบุสี");
+    if (!cd) return setErr("กรุณาระบุรหัสสินค้า");
+    if (taken(cd)) return setErr("รหัสสินค้านี้มีอยู่แล้ว");
+    if (fam.some((x) => String(x.color || "").trim().toLowerCase() === c.toLowerCase())) return setErr("สินค้านี้มีสี \"" + c + "\" อยู่แล้ว");
+    const rec = {
+      id: "FG-" + Date.now().toString().slice(-6),
+      code: cd, baseCode: base, name: f.name, customer: f.customer || "—", jobType: f.jobType, color: c,
+      weight: f.weight == null ? null : f.weight, unit: f.unit || "PCS", stock: 0,
+      cost: managed ? 0 : (f.cost || 0), price: f.price || 0,
+      ...(f.buyable ? { buyable: true } : {}),
+      ...(managed ? { supplier: f.supplier || undefined, min: f.min, leadDays: f.leadDays } : {}),
+    };
+    try { Store.add("finished", rec, rec.code); } catch (e) { return setErr(e && e.message ? e.message : String(e)); }
+    // ถ้าสินค้าต้นแบบยังไม่มี baseCode ไม่ต้องแก้ — ใช้รหัสของตัวเองเป็นกุญแจกลุ่มอยู่แล้ว
+    onDone("เพิ่มสี " + c + " (" + cd + ") ให้ " + f.name + " แล้ว — สต็อกเริ่มที่ 0");
+  };
+  return (
+    <ErpModal title={"เพิ่มสีใหม่ · " + f.name} width={520} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" onClick={save}>เพิ่มสี</button></>}>
+      <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 12, lineHeight: 1.6 }}>
+        แต่ละสีเป็นสินค้า (SKU) แยกรหัส มีสต็อก ต้นทุน และราคาของตัวเอง · ข้อมูลหลัก (ชื่อ ลูกค้า น้ำหนัก ราคา) คัดลอกจากสินค้าต้นแบบ แก้ภายหลังได้<br/>
+        สีที่มีแล้ว: {fam.map((x) => x.color || x.code).join(" · ")}
+      </div>
+      <div className="grid-2" style={{ gap: 10 }}>
+        <div><label className="field-label">สีใหม่ *</label><input className="input" autoFocus placeholder="เช่น น้ำเงิน 2925" value={color} onChange={(e) => setColor(e.target.value)}/></div>
+        <div><label className="field-label">รหัสสินค้า (SKU) ของสีนี้ *</label><input className="input" style={{ fontFamily: "var(--font-mono)" }} value={code} onChange={(e) => setCode(e.target.value)}/></div>
+      </div>
+      {managed && <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginTop: 10 }}>สินค้านี้สั่งซื้อได้ — ต้นทุนของสีใหม่จะเกิดจากการรับ PO ครั้งแรก</div>}
+      {err && <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+    </ErpModal>
   );
 }
 

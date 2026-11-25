@@ -376,7 +376,7 @@ function BomForm({ mode, rec, onCancel, onDone }) {
           <label className="field-label">สินค้า *</label>
           <select className="select" value={f.productCode} disabled={editing} onChange={(e) => pickProduct(e.target.value)}>
             <option value="">— เลือกสินค้าสำเร็จรูป —</option>
-            {Store.state.finished.map((p) => <option key={p.id} value={p.code}>{p.code} · {p.name}</option>)}
+            {Store.state.finished.map((p) => <option key={p.id} value={p.code}>{p.code} · {Store.productLabel(p)}</option>)}
           </select>
           {editing && <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 }}>เปลี่ยนสินค้าของสูตรไม่ได้ — คัดลอกไปสร้างสูตรใหม่แทน</div>}
         </div>

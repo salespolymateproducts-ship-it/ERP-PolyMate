@@ -363,7 +363,7 @@ function AddPOForm({ onSubmit, onCancel }) {
                   {MATERIALS.filter((m) => m.active !== false).map((m) => <option key={"m" + m.id} value={"m:" + m.id}>{m.code} · {m.name}</option>)}
                 </optgroup>
                 <optgroup label="สินค้าซื้อมาขาย (สั่งซื้อได้)">
-                  {FINISHED.filter((f) => Store.isBuyable(f) && f.active !== false).map((f) => <option key={"p" + f.id} value={"p:" + f.id}>{f.code} · {f.name}</option>)}
+                  {FINISHED.filter((f) => Store.isBuyable(f) && f.active !== false).map((f) => <option key={"p" + f.id} value={"p:" + f.id}>{f.code} · {Store.productLabel(f)}</option>)}
                 </optgroup>
                 <option value="custom">อื่นๆ / บริการ (ไม่เข้าคลัง · ลงค่าใช้จ่ายเมื่อตรวจรับงาน)</option>
               </select>

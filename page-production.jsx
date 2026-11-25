@@ -1374,7 +1374,7 @@ function AddWorkOrderForm({ onSubmit, onCancel }) {
         <label className="field-label">สินค้าที่ผลิต *</label>
         <select className="select" value={productCode} onChange={(e) => onProduct(e.target.value)}>
           <option value="">— เลือกสินค้าสำเร็จรูป —</option>
-          {FINISHED.map((f) => <option key={f.id} value={f.code}>{f.code} · {f.name}</option>)}
+          {FINISHED.map((f) => <option key={f.id} value={f.code}>{f.code} · {Store.productLabel(f)}</option>)}
         </select>
         {product && (
           <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)", display: "flex", gap: 14 }}>
