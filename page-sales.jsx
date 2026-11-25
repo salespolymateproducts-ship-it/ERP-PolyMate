@@ -712,14 +712,14 @@ function DocPaper({ doc }) {
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 16, fontSize: 12 }}>
             <thead><tr style={{ background: "#F1F3F7" }}>
-              <th style={{ ...th, textAlign: "left" }}>#</th><th style={{ ...th, textAlign: "left" }}>รหัส / รายการ</th>
+              <th style={{ ...th, textAlign: "left" }}>#</th><th style={{ ...th, textAlign: "left" }}>{doc.hideCode ? "รายการ" : "รหัส / รายการ"}</th>
               <th style={{ ...th, textAlign: "right" }}>จำนวน</th><th style={{ ...th, textAlign: "right" }}>หน่วยละ</th>
               <th style={{ ...th, textAlign: "right" }}>ส่วนลด</th><th style={{ ...th, textAlign: "right" }}>จำนวนเงิน</th>
             </tr></thead>
             <tbody>{(doc.lines || []).map((it, i) => (
               <tr key={i} style={{ borderBottom: "1px solid #E6E8EC" }}>
                 <td style={{ padding: 10, ...muted }}>{i + 1}</td>
-                <td style={{ padding: 10 }}><div className="mono" style={{ fontSize: 11, ...muted }}>{it.code}</div><div style={{ fontWeight: 500, whiteSpace: "pre-line" }}>{it.name}</div></td>
+                <td style={{ padding: 10 }}>{!doc.hideCode && it.code && it.code !== "-" && <div className="mono" style={{ fontSize: 11, ...muted }}>{it.code}</div>}<div style={{ fontWeight: 500, whiteSpace: "pre-line" }}>{it.name}</div></td>
                 <td className="num" style={{ padding: 10, textAlign: "right" }}>{_fmt(it.qty)} <span style={{ fontSize: 11, ...muted }}>{it.unit}</span></td>
                 <td className="num" style={{ padding: 10, textAlign: "right" }}>{_fmt(it.price, 2)}</td>
                 <td className="num" style={{ padding: 10, textAlign: "right" }}>{it.disc ? it.disc + "%" : "—"}</td>
@@ -1050,6 +1050,9 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
       ) : (<>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 8 }}>
           <div style={{ fontWeight: 600, fontSize: 13.5 }}>รายการสินค้า / บริการ</div><span className="spacer"/>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer", marginRight: 16 }} title="ซ่อนเฉพาะบนใบพิมพ์/PDF — รหัสยังอยู่ในระบบสำหรับตัดสต็อกและค้นหา">
+            <input type="checkbox" checked={!f.hideCode} onChange={(e) => set({ hideCode: !e.target.checked })}/> แสดงรหัสสินค้าบนเอกสาร
+          </label>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
             <input type="checkbox" checked={!!f.vatOn} disabled={isNote} title={isNote ? "คิด VAT ตามใบกำกับต้นทาง" : ""} onChange={(e) => set({ vatOn: e.target.checked })}/> คิด VAT 7%
           </label>

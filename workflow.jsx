@@ -355,7 +355,7 @@ const Workflow = (function () {
       if (row.amount <= 0.004) fail("ยอดงวดนี้เป็นศูนย์ (เรียกเก็บครบแล้ว)");
       const doc = saveDraft({
         type: "INV", customer: root.customer, date: opts.date || S.today(), sourceIds: [root.id], refNo: root.refNo || "", note: opts.note || "",
-        vatOn: !!root.vatOn, whtRate: root.whtRate || 0, billDisc: 0,
+        vatOn: !!root.vatOn, whtRate: root.whtRate || 0, billDisc: 0, hideCode: !!root.hideCode,
         lines: [{ code: "-", name: `งวดที่ ${no}/${info.N} — ${row.label} (${row.pct}% ของ ${root.id})`, qty: 1, unit: "งวด", price: row.amount, disc: 0 }],
         installment: { root: root.id, no, of: info.N, label: row.label, pct: row.pct },
         _fromNote: `งวดที่ ${no}/${info.N} จากแผนเรียกเก็บของ ${root.id}`,
@@ -406,7 +406,7 @@ const Workflow = (function () {
         lines = (inv.lines || []).map((l) => ({ code: l.code, name: l.name, qty: l.qty, unit: l.unit, price: l.price, disc: l.disc }));   // ไม่ใส่ src → ไม่กินจำนวนคงเหลือของใบกำกับ
       }
       return saveDraft({ type, customer: inv.customer, date: opts.date || S.today(), sourceIds: [inv.id], refNo: inv.refNo || "", note: opts.note || "",
-        vatOn: !!inv.vatOn, whtRate: inv.whtRate || 0, billDisc: 0, lines, reason, _fromNote: "ออกจากใบกำกับ " + inv.id + " — " + reason });
+        vatOn: !!inv.vatOn, whtRate: inv.whtRate || 0, billDisc: 0, hideCode: !!inv.hideCode, lines, reason, _fromNote: "ออกจากใบกำกับ " + inv.id + " — " + reason });
     });
   }
 
@@ -506,6 +506,7 @@ const Workflow = (function () {
         customer: form.customer, customerName: cust ? (cust.nameEn || cust.name) : form.customer,
         date: form.date, due: form.due || (DUE_BY_CREDIT.includes(form.type) && cust ? addDays(form.date, cust.credit) : "—"),
         refNo: form.refNo || "", note: form.note || "",
+        hideCode: !!form.hideCode,   // ซ่อนรหัสสินค้าบนเอกสารพิมพ์ (เก็บรหัสในระบบตามเดิม) — เอกสารเก่าไม่มีค่านี้ = แสดงรหัส
         vatOn: form.vatOn != null ? !!form.vatOn : !NO_VAT_DEFAULT.includes(form.type),
         whtRate: Number(form.whtRate) || 0, billDisc: r2(form.billDisc || 0),
       };
@@ -651,6 +652,7 @@ const Workflow = (function () {
         type: target, customer: cust, date, sourceIds: sources.map((s) => s.id),
         refNo: [...new Set(sources.map((s) => s.refNo).filter(Boolean))].join(", "),
         note: opts.note || src0.note || "",
+        hideCode: !!src0.hideCode,   // สืบทอดการซ่อน/แสดงรหัสจากเอกสารต้นทาง
         vatOn: target === "DO" ? false : (src0.type === "DO" ? true : !!src0.vatOn),
         whtRate: src0.whtRate || 0,
         _fromNote: "สร้างจาก " + sources.map((s) => s.id).join(", "),
@@ -804,7 +806,7 @@ const Workflow = (function () {
 
   // ---------------- ค่าเริ่มต้นฟอร์ม ----------------
   function blank(type) {
-    return { type, customer: "", date: S.today(), due: "", refNo: "", note: "", vatOn: !NO_VAT_DEFAULT.includes(type), whtRate: 0, billDisc: 0,
+    return { type, customer: "", date: S.today(), due: "", refNo: "", note: "", hideCode: false, vatOn: !NO_VAT_DEFAULT.includes(type), whtRate: 0, billDisc: 0,
       lines: [{ code: "", name: "", qty: 1, unit: "ชิ้น", price: 0, disc: 0 }], sourceIds: [] };
   }
   // เอกสารที่ยังเปิดอยู่ของลูกค้าเดียวกัน (ใช้รวมหลายใบเป็นเอกสารเดียว เช่น วางบิลรวม)
