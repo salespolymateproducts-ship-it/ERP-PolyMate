@@ -91,6 +91,55 @@
   --shadow-lg: 0 20px 40px -8px rgba(0,0,0,0.6);
 }
 
+/* ===== ธีมสำเร็จรูป (ค่าสีเขียนขึ้นเองสำหรับ PolyMate ERP) ===== */
+
+/* 1) พาสเทล — ชมพู/ม่วงลาเวนเดอร์/มิ้นต์ นุ่มตา */
+:root[data-theme="pastel"] {
+  --bg: #FBF6FA; --bg-elevated: #FFFFFF; --bg-subtle: #F7EFF6;
+  --bg-sidebar: #F6EEF9; --bg-sidebar-elev: #EFE4F5; --bg-sidebar-hover: #EBDDF3; --bg-sidebar-active: #E1CFF0;
+  --border: #EADFEA; --border-strong: #D8C7D9; --border-sidebar: #E6D8EE;
+  --text-primary: #3A2F45; --text-secondary: #6E6079; --text-tertiary: #9A8CA5;
+  --text-on-dark: #3A2F45; --text-on-dark-muted: #6E6079;
+  --sidebar-text: #5E4F6B; --sidebar-text-muted: #9A8CA5; --sidebar-text-active: #6B3FA0; --sidebar-section-color: #A596B3;
+  --accent: #A78BDB; --accent-hover: #8E6FC9; --accent-subtle: #F0E8FA; --accent-fg: #FFFFFF;
+  --cyan: #6CC4D6; --teal: #62C2A8; --amber: #E8A94F; --amber-subtle: #FDF1DC;
+  --success: #4FB38A; --success-subtle: #E4F6EE; --danger: #E57A8E; --danger-subtle: #FCE8EC;
+  --warning: #D49A3E; --warning-subtle: #FDF1DC; --violet: #A78BDB; --violet-subtle: #F0E8FA;
+  --radius-sm: 8px; --radius: 12px; --radius-lg: 16px; --radius-xl: 20px;
+}
+
+/* ===== ชุดธีม "สบายตา" 3 เฉด — ความอิ่มสีต่ำ สว่างปานกลาง; คอนทราสต์ข้อความหลัก ≈10:1, ส่วนอื่น ≥ 4.5:1 (WCAG AA) ===== */
+
+/* 7) เบจครีม */
+:root[data-theme="cream"] {
+  --bg: #F5F0E3; --bg-elevated: #FCFAF3; --bg-subtle: #EEE7D5;
+  --bg-sidebar: #EBE2CC; --bg-sidebar-elev: #E2D7BC; --bg-sidebar-hover: #E0D5B8; --bg-sidebar-active: #DCCFAE;
+  --border: #E6DEC8; --border-strong: #D2C7AA; --border-sidebar: #D9CFB4;
+  --text-primary: #3A3226; --text-secondary: #62574A; --text-tertiary: #6B5F50;
+  --text-on-dark: #3A3226; --text-on-dark-muted: #62574A;
+  --sidebar-text: #54483A; --sidebar-text-muted: #665A4A; --sidebar-text-active: #5A3F14; --sidebar-section-color: #665A4A;
+  --accent: #7D6236; --accent-hover: #6B522B; --accent-subtle: #F1E8D3; --accent-fg: #FFFFFF;
+  --cyan: #5E8C8A; --teal: #6B7F3A; --amber: #A87A2A; --amber-subtle: #F3EAD3;
+  --success: #4F7A3C; --success-subtle: #E6EED9; --danger: #B04A3F; --danger-subtle: #F5E2DE;
+  --warning: #8F5F12; --warning-subtle: #F3EAD3; --violet: #6E6A99; --violet-subtle: #E9E8F2;
+  --shadow-sm: 0 1px 2px rgba(58,50,38,0.06); --shadow: 0 2px 8px -1px rgba(58,50,38,0.10);
+}
+
+/* 8) ฟ้าเทา */
+:root[data-theme="bluegray"] {
+  --bg: #EEF1F4; --bg-elevated: #F9FAFB; --bg-subtle: #E4E9EE;
+  --bg-sidebar: #DAE2EA; --bg-sidebar-elev: #CFD9E3; --bg-sidebar-hover: #CED8E2; --bg-sidebar-active: #C5D3E0;
+  --border: #DCE3EA; --border-strong: #C3CED9; --border-sidebar: #C8D3DE;
+  --text-primary: #26343F; --text-secondary: #4F6070; --text-tertiary: #58687A;
+  --text-on-dark: #26343F; --text-on-dark-muted: #4F6070;
+  --sidebar-text: #38495A; --sidebar-text-muted: #4B5C6D; --sidebar-text-active: #1F4363; --sidebar-section-color: #4B5C6D;
+  --accent: #476A85; --accent-hover: #3A5A73; --accent-subtle: #E1E9F0; --accent-fg: #FFFFFF;
+  --cyan: #4F84A0; --teal: #4C8579; --amber: #A87A2A; --amber-subtle: #F3EAD3;
+  --success: #3F7A52; --success-subtle: #E0EEE3; --danger: #B04A3F; --danger-subtle: #F5E2DE;
+  --warning: #966218; --warning-subtle: #F3EAD3; --violet: #6E6A99; --violet-subtle: #E9E8F2;
+  --shadow-sm: 0 1px 2px rgba(38,52,63,0.06); --shadow: 0 2px 8px -1px rgba(38,52,63,0.10);
+}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {

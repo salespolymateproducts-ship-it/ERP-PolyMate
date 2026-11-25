@@ -67,9 +67,16 @@ function App() {
   useEffect(() => { document.documentElement.setAttribute("data-theme", theme); }, [theme]);
   useEffect(() => { document.documentElement.setAttribute("data-density", t.density); }, [t.density]);
   useEffect(() => {
-    document.documentElement.style.setProperty("--accent", t.accent);
-    document.documentElement.style.setProperty("--accent-hover", t.accent);
-  }, [t.accent]);
+    // สีหลักที่ผู้ใช้เลือกเองใช้ได้เฉพาะโหมดสว่าง/มืด; ธีมสำเร็จรูปมีสีหลักของตัวเอง
+    const s = document.documentElement.style;
+    if (theme === "light" || theme === "dark") {
+      s.setProperty("--accent", t.accent);
+      s.setProperty("--accent-hover", t.accent);
+    } else {
+      s.removeProperty("--accent");
+      s.removeProperty("--accent-hover");
+    }
+  }, [t.accent, theme]);
 
   if (booting) return <div style={{ position: "fixed", inset: 0, display: "grid", placeItems: "center", color: "#5B6478" }}>กำลังเชื่อมต่อเซิร์ฟเวอร์…</div>;
   if (!user) {

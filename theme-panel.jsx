@@ -10,7 +10,9 @@ function useThemeSettings(defaults) {
   const [settings, setSettings] = React.useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(THEME_STORAGE_KEY) || "null");
-      return saved && typeof saved === "object" ? { ...defaults, ...saved } : defaults;
+      const merged = saved && typeof saved === "object" ? { ...defaults, ...saved } : defaults;
+      const valid = ["light", "dark", "bluegray", "cream", "pastel"];
+      return valid.includes(merged.theme) ? merged : { ...merged, theme: defaults.theme };
     } catch (e) {
       return defaults;
     }
@@ -66,6 +68,39 @@ function ThemeSwatches({ label, value, colors, onChange }) {
   );
 }
 
+// ธีมสำเร็จรูป: swatch = [สีพื้นหลัง, สีเมนูข้าง, สีหลัก] ใช้โชว์ตัวอย่างบนปุ่ม
+const THEME_PRESETS = [
+  { value: "bluegray", label: "ฟ้า/เทา", swatch: ["#EEF1F4", "#DAE2EA", "#476A85"] },
+  { value: "cream", label: "เบจ/ครีม", swatch: ["#F5F0E3", "#EBE2CC", "#7D6236"] },
+  { value: "pastel", label: "พาสเทล", swatch: ["#FBF6FA", "#E1CFF0", "#A78BDB"] },
+];
+
+function ThemePresets({ value, onChange }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>ธีมสำเร็จรูป</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        {THEME_PRESETS.map((p) => {
+          const on = p.value === value;
+          return (
+            <button key={p.value} type="button" onClick={() => onChange(p.value)} aria-pressed={on}
+              style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", cursor: "pointer", fontSize: 12, fontFamily: "inherit",
+                borderRadius: 8, background: "var(--bg-subtle)", color: "var(--text-primary)", fontWeight: on ? 600 : 400,
+                border: on ? "2px solid var(--accent)" : "1px solid var(--border)",
+              }}>
+              <span style={{ display: "inline-flex", borderRadius: 4, overflow: "hidden", border: "1px solid var(--border-strong)", flexShrink: 0 }}>
+                {p.swatch.map((c) => <span key={c} style={{ width: 9, height: 18, background: c }}/>)}
+              </span>
+              {p.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ThemePanel({ settings, onChange }) {
   const [open, setOpen] = React.useState(false);
   return (
@@ -83,10 +118,13 @@ function ThemePanel({ settings, onChange }) {
           </div>
           <ThemeChoice label="โหมด" value={settings.theme} onChange={(v) => onChange("theme", v)}
             options={[{ value: "light", label: "สว่าง" }, { value: "dark", label: "มืด" }]}/>
+          <ThemePresets value={settings.theme} onChange={(v) => onChange("theme", v)}/>
           <ThemeChoice label="ความหนาแน่น" value={settings.density} onChange={(v) => onChange("density", v)}
             options={[{ value: "compact", label: "กะทัดรัด" }, { value: "default", label: "ปกติ" }, { value: "comfortable", label: "โปร่ง" }]}/>
-          <ThemeSwatches label="สีหลัก" value={settings.accent} onChange={(v) => onChange("accent", v)}
-            colors={["#2D6CDF", "#0F9F8F", "#7C3AED", "#D97706"]}/>
+          {(settings.theme === "light" || settings.theme === "dark") && (
+            <ThemeSwatches label="สีหลัก" value={settings.accent} onChange={(v) => onChange("accent", v)}
+              colors={["#2D6CDF", "#0F9F8F", "#7C3AED", "#D97706"]}/>
+          )}
         </div>
       )}
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
