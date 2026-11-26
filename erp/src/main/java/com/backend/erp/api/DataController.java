@@ -168,6 +168,11 @@ public class DataController {
 		return workflow.adjustProductCost(AuthInterceptor.user(req), id, Json.num(b.get("cost")), Json.s(b.get("reason")));
 	}
 
+	@PostMapping("/actions/products/{id}/change-type")
+	public Map<String, Object> changeProductType(@PathVariable String id, @RequestBody Map<String, Object> b, HttpServletRequest req) {
+		return workflow.changeProductType(AuthInterceptor.user(req), id, Json.s(b.get("jobType")), Boolean.TRUE.equals(b.get("buyable")), Json.s(b.get("reason")));
+	}
+
 	@PostMapping("/actions/machines/{id}/condition")
 	public Map<String, Object> machineCondition(@PathVariable String id, @RequestBody Map<String, Object> b, HttpServletRequest req) {
 		return machineService.setCondition(AuthInterceptor.user(req), id, Json.s(b.get("condition")), Json.s(b.get("reason")));

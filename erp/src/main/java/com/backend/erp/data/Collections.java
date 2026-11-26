@@ -23,7 +23,8 @@ public final class Collections {
 		def("employees", "พนักงาน", "admin", "accounting");
 		def("materials", "วัตถุดิบ", "admin", "procurement", "production", "accounting");
 		def("finished", "สินค้า", "admin", "procurement", "production", "accounting", "sales");
-		def("workOrders", "ใบสั่งผลิต", "admin", "production", "sales");
+		def("priceGroups", "กลุ่มราคา", "admin", "sales");
+		def("workOrders","ใบสั่งผลิต", "admin", "production", "sales");
 		def("qc", "QC", "admin", "production");
 		def("molds", "แม่พิมพ์", "admin", "production");
 		def("machines", "เครื่องจักร", "admin", "production");

@@ -51,6 +51,8 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
   const [editor, setEditor] = useState(null); // { id } | { type } (new)
   const [convert, setConvert] = useState(null); // { sourceId, targetType, approveSources }
   const [rvFor, setRvFor] = useState(null);      // เลขที่ใบเสร็จที่กำลังบันทึกรับเงิน (หน้ารับเงินใหม่ แทน "สร้างรับชำระ" แบบเดิม)
+  const [priceOpen, setPriceOpen] = useState(false);
+  const [groupOpen, setGroupOpen] = useState(false);
 
   const tabs = types.length > 1 ? [{ id: "ALL", label: "ทั้งหมด", count: all.length },
     ...types.map((t) => ({ id: t, label: DOC_LABEL[t].th, count: all.filter((d) => d.type === t).length }))] : null;
@@ -83,6 +85,10 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
       <PageHeader title={title} subtitle={subtitle}
         actions={<>
           <DataMenu/>
+          {types.includes("SO") && Store.canEditPrice() && <button className="btn btn-outline btn-sm" onClick={() => setPriceOpen(true)}><I.Edit size={14}/> ราคาสินค้า</button>}
+          {priceOpen && <ProductPriceModal onClose={() => setPriceOpen(false)}/>}
+          {types.includes("SO") && Store.canEditPrice() && <button className="btn btn-outline btn-sm" onClick={() => setGroupOpen(true)}><I.Edit size={14}/> กลุ่มราคา</button>}
+          {groupOpen && <PriceGroupModal onClose={() => setGroupOpen(false)}/>}
           <button className="btn btn-outline btn-sm" onClick={exportList} disabled={!list.length}><I.Download size={14}/> ส่งออก CSV</button>
           {canCreate && <button className="btn btn-primary btn-sm" onClick={() => setEditor({ type: types.includes(tab) && tab !== "PAY" && !isNoteType(tab) ? tab : types[0] })}><I.Plus size={14}/> สร้างเอกสารใหม่</button>}
         </>}/>
@@ -143,6 +149,155 @@ function DocWorkspace({ types, title, subtitle, showStats }) {
       {convert && <ConvertModal {...convert} onClose={() => setConvert(null)}
         onDone={(doc) => { setConvert(null); setOpenId(doc.id); }}/>}
     </>
+  );
+}
+
+// แก้ราคาขายปกติของสินค้า (ผู้ดูแลระบบ / ฝ่ายขาย) — มีผลกับเอกสารที่สร้างใหม่ เอกสารเดิมใช้ราคาที่บันทึกไว้
+function ProductPriceModal({ onClose }) {
+  useStore();
+  const [q, setQ] = useState("");
+  const [edits, setEdits] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const rows = Store.state.finished.filter((f) => f.active !== false && (f.code + " " + Store.productLabel(f)).toLowerCase().includes(q.trim().toLowerCase()));
+  const changed = Object.keys(edits).filter((id) => { const f = Store.state.finished.find((x) => x.id === id); return f && edits[id] !== "" && Number(edits[id]) !== (Number(f.price) || 0); });
+  const save = async () => {
+    setErr("");
+    if (changed.some((id) => !(Number(edits[id]) >= 0))) return setErr("ราคาขายต้องไม่ติดลบ");
+    setBusy(true);
+    let n = 0;
+    try {
+      for (const id of changed) {
+        const f = Store.state.finished.find((x) => x.id === id);
+        await Store.saveProduct({ ...f, price: Number(edits[id]) });
+        n++;
+      }
+      notify("บันทึกราคาสินค้า " + n + " รายการแล้ว", "success");
+      onClose();
+    } catch (e) { setErr((n ? "บันทึกแล้ว " + n + " รายการ · " : "") + (e && e.message ? e.message : String(e))); setBusy(false); }
+  };
+  return (
+    <ErpModal title="ราคาสินค้า" width={640} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button><button className="btn btn-primary btn-sm" disabled={busy || !changed.length} onClick={save}>บันทึก{changed.length ? ` (${changed.length})` : ""}</button></>}>
+      <input className="input" placeholder="ค้นหารหัส / ชื่อสินค้า…" value={q} onChange={(e) => setQ(e.target.value)}/>
+      <div style={{ maxHeight: 380, overflow: "auto", marginTop: 10 }}>
+        <table className="table" style={{ fontSize: 12.5 }}>
+          <thead><tr><th>สินค้า</th><th className="num">ราคาขาย / หน่วย</th><th className="num">ต่อลัง</th></tr></thead>
+          <tbody>{rows.map((f) => {
+            const v = edits[f.id] != null ? edits[f.id] : String(f.price == null ? "" : f.price);
+            return (
+              <tr key={f.id}>
+                <td><b className="mono">{f.code}</b><div>{Store.productLabel(f)}</div></td>
+                <td className="num"><input className="input input-sm num" type="number" min="0" step="0.01" aria-label={"ราคา " + f.code} style={{ width: 110, textAlign: "right" }} value={v} onChange={(e) => setEdits((s) => ({ ...s, [f.id]: e.target.value }))}/> / {f.unit || "PCS"}</td>
+                <td className="num">{f.packSize >= 2 ? <>{_fmt((Number(v) || 0) * f.packSize, 2)}<div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{_fmt(f.packSize)} {f.unit}</div></> : "—"}</td>
+              </tr>);
+          })}</tbody>
+        </table>
+        {!rows.length && <div style={{ padding: 20, textAlign: "center", color: "var(--text-tertiary)" }}>ไม่พบสินค้า</div>}
+      </div>
+      {err && <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+    </ErpModal>
+  );
+}
+
+// กลุ่มราคา (ผู้ดูแลระบบ / ฝ่ายขาย): สินค้าที่ขายเป็นลัง คละกันได้ · ขั้นจำนวนเป็นลังรวมของกลุ่ม · ราคาเป็นราคาต่อชิ้น
+function PriceGroupModal({ onClose }) {
+  useStore();
+  const [g, setG] = useState(null);           // กลุ่มที่กำลังแก้ (null = หน้ารายการ)
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const groups = Store.state.priceGroups;
+  const cartonProducts = Store.state.finished.filter((f) => f.active !== false && f.packSize >= 2);
+  const fgOf = (code) => Store.state.finished.find((f) => f.code === code);
+  const open = (x) => { setErr(""); setG(x
+    ? { ...x, tiers: x.tiers.map(String), items: x.items.map((i) => ({ code: i.code, prices: i.prices.map(String) })) }
+    : { id: "", name: "", active: true, tiers: [""], items: [] }); };
+  const addItem = (code) => { const f = fgOf(code); if (f) setG((s) => ({ ...s, items: [...s.items, { code, prices: s.tiers.map(() => String(f.price || "")) }] })); };
+  const addTier = () => setG((s) => ({ ...s, tiers: [...s.tiers, ""], items: s.items.map((i) => ({ ...i, prices: [...i.prices, ""] })) }));
+  const removeTier = (t) => setG((s) => ({ ...s, tiers: s.tiers.filter((_, j) => j !== t), items: s.items.map((i) => ({ ...i, prices: i.prices.filter((_, j) => j !== t) })) }));
+  const save = async () => {
+    setErr("");
+    if (!g.name.trim()) return setErr("กรุณาระบุชื่อกลุ่ม");
+    if (g.tiers.some((t) => !(Number.isInteger(Number(t)) && Number(t) >= 1))) return setErr("ขั้นจำนวนต้องเป็นจำนวนลังเต็มตั้งแต่ 1");
+    if (!g.items.length) return setErr("กรุณาเพิ่มสินค้าเข้ากลุ่ม");
+    if (g.items.some((i) => i.prices.some((p) => String(p).trim() === "" || !(Number(p) >= 0)))) return setErr("กรุณากรอกราคาให้ครบทุกขั้น (ไม่ติดลบ)");
+    // เรียงขั้นจากน้อยไปมากพร้อมราคาของแต่ละขั้น
+    const order = g.tiers.map((_, i) => i).sort((a, b) => Number(g.tiers[a]) - Number(g.tiers[b]));
+    const rec = { ...g, id: g.id || "PG-" + Date.now().toString(36).toUpperCase(), name: g.name.trim(),
+      tiers: order.map((i) => Number(g.tiers[i])),
+      items: g.items.map((it) => ({ code: it.code, prices: order.map((i) => Math.round(Number(it.prices[i]) * 100) / 100) })) };
+    setBusy(true);
+    try { await Store.savePriceGroup(rec, !g.id); notify("บันทึกกลุ่มราคา " + rec.name + " แล้ว", "success"); setG(null); }
+    catch (e) { setErr(e && e.message ? e.message : String(e)); }
+    setBusy(false);
+  };
+  const errBox = err && <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>;
+  if (!g) return (
+    <ErpModal title="กลุ่มราคา" width={640} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ปิด</button><button className="btn btn-primary btn-sm" onClick={() => open(null)}><I.Plus size={13}/> สร้างกลุ่มราคา</button></>}>
+      <table className="table" style={{ fontSize: 12.5 }}>
+        <thead><tr><th>ชื่อกลุ่ม</th><th>ขั้น (ลังรวม)</th><th>สินค้า</th><th></th></tr></thead>
+        <tbody>
+          {groups.map((x) => (
+            <tr key={x.id}>
+              <td><b>{x.name}</b>{x.active === false && <span className="badge badge-neutral" style={{ marginLeft: 6 }}>ปิดใช้งาน</span>}</td>
+              <td>{x.tiers.map((t) => t + "+").join(" · ")}</td>
+              <td className="mono" style={{ fontSize: 11.5 }}>{x.items.map((i) => i.code).join(", ")}</td>
+              <td><button className="btn btn-ghost btn-sm" onClick={() => open(x)}><I.Edit size={13}/> แก้ไข</button></td>
+            </tr>
+          ))}
+          {!groups.length && <EmptyRow cols={4} text="ยังไม่มีกลุ่มราคา"/>}
+        </tbody>
+      </table>
+    </ErpModal>
+  );
+  const taken = new Set(g.items.map((i) => i.code));
+  groups.filter((x) => x.id !== g.id && x.active !== false).forEach((x) => x.items.forEach((i) => taken.add(i.code)));
+  const choices = cartonProducts.filter((f) => !taken.has(f.code));
+  return (
+    <ErpModal title={g.id ? "แก้ไขกลุ่มราคา" : "สร้างกลุ่มราคา"} width={760} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={() => setG(null)}>กลับ</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={save}>บันทึกกลุ่มราคา</button></>}>
+      <label className="field-label">ชื่อกลุ่ม *</label>
+      <input className="input" aria-label="ชื่อกลุ่มราคา" placeholder="เช่น ใบพัดลม" value={g.name} onChange={(e) => setG({ ...g, name: e.target.value })}/>
+      <div style={{ overflow: "auto", marginTop: 12 }}>
+        <table className="table" style={{ fontSize: 12.5 }}>
+          <thead><tr><th>สินค้า (ราคาต่อชิ้น)</th>
+            {g.tiers.map((t, ti) => (
+              <th key={ti} className="num"><div style={{ display: "flex", alignItems: "center", gap: 4, justifyContent: "flex-end" }}>
+                ตั้งแต่ <input className="input input-sm num" type="number" min="1" step="1" aria-label={"ขั้นที่ " + (ti + 1) + " ลังขั้นต่ำ"} style={{ width: 64 }} value={t} onChange={(e) => setG({ ...g, tiers: g.tiers.map((x, j) => (j === ti ? e.target.value : x)) })}/> ลัง
+                {g.tiers.length > 1 && <button className="icon-btn" aria-label={"ลบขั้นที่ " + (ti + 1)} onClick={() => removeTier(ti)}><I.Trash size={12}/></button>}
+              </div></th>
+            ))}
+            <th><button className="btn btn-ghost btn-sm" onClick={addTier}><I.Plus size={12}/> ขั้น</button></th></tr></thead>
+          <tbody>
+            {g.items.map((it, ri) => {
+              const f = fgOf(it.code) || {};
+              return (
+                <tr key={it.code}>
+                  <td><b className="mono">{it.code}</b><div>{f.name}</div><div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>1 ลัง = {_fmt(f.packSize)} {f.unit} · ราคาปกติ {_fmt(f.price, 2)}</div></td>
+                  {it.prices.map((p, ti) => (
+                    <td key={ti} className="num"><input className="input input-sm num" type="number" min="0" step="0.01" aria-label={"ราคา " + it.code + " ขั้นที่ " + (ti + 1)} style={{ width: 90, textAlign: "right" }} value={p}
+                      onChange={(e) => setG({ ...g, items: g.items.map((x, j) => (j === ri ? { ...x, prices: x.prices.map((y, k) => (k === ti ? e.target.value : y)) } : x)) })}/>
+                      <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginTop: 3 }}>ลังละ {_fmt((Number(p) || 0) * (f.packSize || 0), 2)}</div></td>
+                  ))}
+                  <td><button className="icon-btn" aria-label={"นำ " + it.code + " ออกจากกลุ่ม"} onClick={() => setG({ ...g, items: g.items.filter((_, j) => j !== ri) })}><I.Trash size={13}/></button></td>
+                </tr>
+              );
+            })}
+            {!g.items.length && <EmptyRow cols={g.tiers.length + 2} text="ยังไม่มีสินค้าในกลุ่ม"/>}
+          </tbody>
+        </table>
+      </div>
+      <select className="select" aria-label="เพิ่มสินค้าเข้ากลุ่ม" value="" onChange={(e) => addItem(e.target.value)} style={{ marginTop: 10 }}>
+        <option value="">+ เพิ่มสินค้าเข้ากลุ่ม (เฉพาะสินค้าที่ตั้งจำนวนต่อลัง)</option>
+        {choices.map((f) => <option key={f.id} value={f.code}>{f.code} · {Store.productLabel(f)}</option>)}
+      </select>
+      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12.5, marginTop: 10 }}>
+        <input type="checkbox" checked={g.active !== false} onChange={(e) => setG({ ...g, active: e.target.checked })}/> ใช้งานอยู่
+      </label>
+      <div style={{ fontSize: 11.5, color: "var(--text-tertiary)", marginTop: 8 }}>จำนวนรวมต่ำกว่าขั้นแรก ใช้ราคาปกติของสินค้า · มีผลกับใบเสนอราคา/ใบสั่งขายฉบับร่างที่สร้างหรือบันทึกใหม่ เอกสารที่อนุมัติแล้วไม่เปลี่ยน</div>
+      {errBox}
+    </ErpModal>
   );
 }
 
@@ -589,7 +744,7 @@ function DocRelated({ doc, rel, onOpen }) {
           <table className="table" style={{ fontSize: 12.5 }}>
             <thead><tr><th>รายการ</th><th className="num">จำนวนในเอกสาร</th><th className="num">ออกเอกสารต่อแล้ว</th><th className="num">คงเหลือ</th></tr></thead>
             <tbody>{remain.map((l) => (
-              <tr key={l.idx}><td>{l.name}</td><td className="num">{_fmt(l.qty)} {l.unit}</td><td className="num">{_fmt(l.used)}</td>
+              <tr key={l.idx}><td>{l.name}</td><td className="num">{_fmt(l.qty)} {l.unit}{Workflow.packCount(l.qty, l.packSize) != null && ` (${_fmt(Workflow.packCount(l.qty, l.packSize))} ลัง)`}</td><td className="num">{_fmt(l.used)}</td>
                 <td className="num" style={{ fontWeight: 600, color: l.remaining > 0 ? "var(--amber)" : "var(--success)" }}>{_fmt(l.remaining)}</td></tr>
             ))}</tbody>
           </table>
@@ -720,7 +875,9 @@ function DocPaper({ doc }) {
               <tr key={i} style={{ borderBottom: "1px solid #E6E8EC" }}>
                 <td style={{ padding: 10, ...muted }}>{i + 1}</td>
                 <td style={{ padding: 10 }}>{!doc.hideCode && it.code && it.code !== "-" && <div className="mono" style={{ fontSize: 11, ...muted }}>{it.code}</div>}<div style={{ fontWeight: 500, whiteSpace: "pre-line" }}>{it.name}</div></td>
-                <td className="num" style={{ padding: 10, textAlign: "right" }}>{_fmt(it.qty)} <span style={{ fontSize: 11, ...muted }}>{it.unit}</span></td>
+                <td className="num" style={{ padding: 10, textAlign: "right" }}>{Workflow.packCount(it.qty, it.packSize) != null
+                  ? <>{_fmt(Workflow.packCount(it.qty, it.packSize))} <span style={{ fontSize: 11, ...muted }}>ลัง</span><div style={{ fontSize: 11, ...muted }}>({_fmt(it.qty)} {it.unit})</div></>
+                  : <>{_fmt(it.qty)} <span style={{ fontSize: 11, ...muted }}>{it.unit}</span></>}</td>
                 <td className="num" style={{ padding: 10, textAlign: "right" }}>{_fmt(it.price, 2)}</td>
                 <td className="num" style={{ padding: 10, textAlign: "right" }}>{it.disc ? it.disc + "%" : "—"}</td>
                 <td className="num" style={{ padding: 10, textAlign: "right", fontWeight: 500 }}>{_fmt(Workflow.lineAmount(it), 2)}</td>
@@ -815,7 +972,11 @@ function ConvertModal({ sourceId, targetType, approveSources, onClose, onDone })
   const rows = isPay ? [] : srcDocs.flatMap((d) => Workflow.remainingLines(d).filter((l) => l.remaining > 0).map((l) => ({ ...l, doc: d.id })));
   const getQ = (r) => { const v = qty[r.doc + "#" + r.idx]; return v == null ? r.remaining : v; };
   const bad = rows.some((r) => Number(getQ(r)) < 0 || Number(getQ(r)) > r.remaining + 0.0005);
-  const gross = rows.reduce((s, r) => s + Workflow.lineAmount({ ...r, qty: Number(getQ(r)) || 0 }), 0);
+  // ใบเสนอราคา → ใบสั่งขาย: สั่งน้อยกว่าที่เสนอ ราคาของกลุ่มราคาคิดใหม่ — แสดงราคาที่จะได้ก่อนกดสร้าง
+  const picked = rows.map((r) => ({ ...r, qty: Number(getQ(r)) || 0, src: { doc: r.doc, line: r.idx } }));
+  const priced = targetType === "SO" ? Workflow.applyTierPrices(Workflow.repriceFromQuote(picked.filter((l) => l.qty > 0))) : [];
+  const viewOf = (i) => priced.find((l) => l.doc === picked[i].doc && l.idx === picked[i].idx) || picked[i];
+  const gross = rows.reduce((s, r, i) => s + Workflow.lineAmount(viewOf(i)), 0);
   const rcA = isPay ? Workflow.rcAmounts(src) : null;
   const amt = amount == null ? (rcA ? rcA.remaining : 0) : amount;
 
@@ -878,18 +1039,25 @@ function ConvertModal({ sourceId, targetType, approveSources, onClose, onDone })
         <table className="table" style={{ fontSize: 12.5 }}>
           <thead><tr><th>จากเอกสาร</th><th>รายการ</th><th className="num">ราคา/หน่วย</th><th className="num">คงเหลือ</th><th className="num" style={{ width: 120 }}>จำนวนที่ออก</th><th className="num">จำนวนเงิน</th></tr></thead>
           <tbody>
-            {rows.map((r) => {
+            {rows.map((r, ri) => {
+              const v = viewOf(ri);
               const q = getQ(r); const over = Number(q) > r.remaining + 0.0005 || Number(q) < 0;
+              const pack = r.packSize >= 2 && Workflow.packCount(r.remaining, r.packSize) != null ? Number(r.packSize) : 0;
+              const partial = pack > 0 && Workflow.packCount(q, pack) == null;
               return (
                 <tr key={r.doc + r.idx}>
                   <td className="mono" style={{ fontSize: 11.5 }}>{r.doc}</td>
                   <td><div>{r.name}</div><div className="mono" style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{r.code}</div></td>
-                  <td className="num">{_fmt(r.price, 2)}{r.disc ? ` (-${r.disc}%)` : ""}</td>
-                  <td className="num">{_fmt(r.remaining)} {r.unit}</td>
-                  <td><input className="input input-sm num" type="number" min="0" max={r.remaining} step="any" aria-label={"จำนวน " + r.name}
-                    style={{ textAlign: "right", borderColor: over ? "var(--danger)" : undefined }} value={q}
-                    onChange={(e) => setQty((s) => ({ ...s, [r.doc + "#" + r.idx]: e.target.value === "" ? 0 : Number(e.target.value) }))}/></td>
-                  <td className="num">{_fmt(Workflow.lineAmount({ ...r, qty: Number(q) || 0 }), 2)}</td>
+                  <td className="num">{_fmt(v.price, 2)}{r.disc ? ` (-${r.disc}%)` : ""}
+                    {v.repriced && v.price !== r.price && <div style={{ fontSize: 11, color: "var(--amber)" }}>คิดใหม่ (เสนอ {_fmt(r.price, 2)})</div>}</td>
+                  <td className="num">{pack ? <>{_fmt(r.remaining / pack)} ลัง<div style={{ fontSize: 11, color: "var(--text-tertiary)" }}>{_fmt(r.remaining)} {r.unit}</div></> : <>{_fmt(r.remaining)} {r.unit}</>}</td>
+                  <td><div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <input className="input input-sm num" type="number" min="0" max={pack ? r.remaining / pack : r.remaining} step={pack ? 1 : "any"} aria-label={(pack ? "จำนวนลัง " : "จำนวน ") + r.name}
+                      style={{ textAlign: "right", borderColor: over || partial ? "var(--danger)" : undefined }} value={pack ? Number(q) / pack : q}
+                      onChange={(e) => setQty((s) => ({ ...s, [r.doc + "#" + r.idx]: e.target.value === "" ? 0 : Math.round(Number(e.target.value) * (pack || 1) * 1000) / 1000 }))}/>
+                    {pack > 0 && <span style={{ fontSize: 11.5 }}>ลัง</span>}</div>
+                    {pack > 0 && <div style={{ fontSize: 11, textAlign: "right", marginTop: 3, color: partial ? "var(--danger)" : "var(--text-tertiary)" }}>{partial ? "ต้องเต็มลัง" : `= ${_fmt(Number(q))} ${r.unit}`}</div>}</td>
+                  <td className="num">{_fmt(Workflow.lineAmount(v), 2)}</td>
                 </tr>
               );
             })}
@@ -970,7 +1138,7 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
   const isNew = !existing;
   const editingApproved = existing && !["draft", "pending"].includes(existing.status);
   const customers = Store.state.customers;
-  const products = [...Store.state.finished.map((f) => ({ code: f.code, name: Store.productLabel(f), unit: f.unit || "PCS", price: f.price })),
+  const products = [...Store.state.finished.filter((f) => f.active !== false).map((f) => ({ code: f.code, name: Store.productLabel(f), unit: f.unit || "PCS", price: f.price, packSize: f.packSize })),
     ...Store.state.materials.filter((m) => m.active !== false).map((m) => ({ code: m.code, name: m.name, unit: m.unit, price: 0 }))];
 
   const [f, setF] = useState(init);
@@ -978,7 +1146,11 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
   const set = (patch) => setF((x) => ({ ...x, ...patch }));
   const setLine = (i, patch) => setF((x) => ({ ...x, lines: x.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) }));
   const isPay = f.type === "PAY";
-  const c = Workflow.calc(f);
+  // กลุ่มราคา: แสดงราคาอัตโนมัติสดระหว่างกรอก (saveDraft คำนวณซ้ำตอนบันทึก)
+  const pricing = Workflow.PRICED_DOCS.includes(f.type) && (!existing || ["draft", "pending"].includes(existing.status));
+  const viewLines = pricing ? Workflow.applyTierPrices(Workflow.markAutoPrice(f.type === "SO" ? Workflow.repriceFromQuote(f.lines) : f.lines, existing && existing.lines)) : f.lines;
+  const canOverride = Workflow.canOverridePrice();
+  const c = Workflow.calc({ ...f, lines: viewLines });
   const createTypes = types.filter((t) => t !== "PAY" && !isNoteType(t) && Workflow.canEditType(t));
   const isNote = isNoteType(f.type);
   const preview = isNew ? Store.peekDocNo(Workflow.PREFIX[f.type], f.date).docNo : f.id;
@@ -986,7 +1158,11 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
   function onCode(i, code) {
     const p = products.find((x) => x.code.toLowerCase() === code.trim().toLowerCase());
     const l = f.lines[i];
-    setLine(i, p ? { code: p.code, name: l.name || p.name, unit: p.unit, price: Number(l.price) ? l.price : p.price } : { code });
+    const pack = p && p.packSize >= 2 ? Number(p.packSize) : undefined;
+    // สินค้าขายเป็นลัง: จำนวนเริ่มต้น (≤1) ปรับเป็น 1 ลัง · จำนวนที่กรอกไว้แล้วคงเดิม (ถ้าไม่เต็มลังระบบจะแจ้งตอนบันทึก)
+    const grouped = !!(p && pricing && Workflow.priceGroupOf(p.code));
+    const resetPrice = { priceMode: grouped ? "auto" : undefined, priceNote: undefined, autoPrice: undefined };
+    setLine(i, p ? { code: p.code, name: l.name || p.name, unit: p.unit, price: grouped || l.priceMode || !Number(l.price) ? p.price : l.price, packSize: pack, ...resetPrice, ...(pack && !isNote && !(Number(l.qty) > 1) ? { qty: pack } : {}) } : { code, packSize: undefined, ...resetPrice });
   }
   function save(andSubmit) {
     if (editingApproved && !editReason.trim()) { notify("กรุณาระบุเหตุผลการแก้ไขเอกสารที่อนุมัติแล้ว", "error"); return; }
@@ -1060,10 +1236,15 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
         <datalist id="erp-products">{products.map((p) => <option key={p.code} value={p.code}>{p.name}</option>)}</datalist>
         <div className="card" style={{ padding: 0, marginBottom: 14, overflow: "auto" }}>
           <table className="table" style={{ fontSize: 12.5 }}>
-            <thead><tr><th style={{ width: 130 }}>รหัส</th><th>รายการ</th><th className="num" style={{ width: 90 }}>จำนวน</th><th style={{ width: 70 }}>หน่วย</th>
+            <thead><tr><th style={{ width: 130 }}>รหัส</th><th>รายการ</th><th className="num" style={{ width: 110 }}>จำนวน</th><th style={{ width: 70 }}>หน่วย</th>
               <th className="num" style={{ width: 100 }}>ราคา/หน่วย</th><th className="num" style={{ width: 70 }}>ลด %</th><th className="num" style={{ width: 110 }}>จำนวนเงิน</th><th style={{ width: 36 }}></th></tr></thead>
             <tbody>{f.lines.map((l, i) => {
               const locked = !!l.src;
+              const pack = !isNote && l.packSize >= 2 ? Number(l.packSize) : 0;   // กรอกเป็นลัง (เก็บเป็นชิ้น)
+              const partial = pack > 0 && l.qty !== "" && Workflow.packCount(l.qty, pack) == null;
+              const v = viewLines[i] || l;                                       // ราคาหลังคำนวณตามกลุ่ม
+              const grouped = (!locked || !!v.repriced) && !!v.priceMode;
+              const note = grouped && v.priceNote;
               return (
                 <tr key={i}>
                   <td><input className="input input-sm" list="erp-products" aria-label="รหัสสินค้า" value={l.code === "-" ? "" : l.code} disabled={locked} onChange={(e) => onCode(i, e.target.value)} placeholder="—"/>
@@ -1071,11 +1252,22 @@ function DocEditor({ editor, types, onSaved, onCancel }) {
                   <td><textarea className="input input-sm" aria-label="ชื่อรายการ" value={l.name} disabled={locked} rows={Math.min(8, Math.max(1, String(l.name || "").split("\n").length))}
                     onChange={(e) => setLine(i, { name: e.target.value })} placeholder={"ชื่อสินค้า / รายละเอียด\n(กด Enter เพื่อขึ้นบรรทัดใหม่ เช่น วัสดุ / Cavity)"}
                     style={{ height: "auto", minHeight: 34, resize: "vertical", lineHeight: 1.5, paddingTop: 6, paddingBottom: 6, fontFamily: "inherit" }}/></td>
-                  <td><input className="input input-sm num" type="number" min="0" aria-label="จำนวน" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} style={{ textAlign: "right" }}/></td>
+                  <td>{pack ? (<>
+                    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <input className="input input-sm num" type="number" min="0" step="1" aria-label="จำนวนลัง" value={l.qty === "" ? "" : Number(l.qty) / pack}
+                        onChange={(e) => setLine(i, { qty: e.target.value === "" ? "" : Math.round(Number(e.target.value) * pack * 1000) / 1000 })} style={{ textAlign: "right", borderColor: partial ? "var(--danger)" : undefined }}/>
+                      <span style={{ fontSize: 11.5 }}>ลัง</span>
+                    </div>
+                    <div style={{ fontSize: 11, marginTop: 3, textAlign: "right", color: partial ? "var(--danger)" : "var(--text-tertiary)" }}>{partial ? "ต้องเต็มลัง" : `= ${_fmt(Number(l.qty) || 0)} ${l.unit}`}</div>
+                  </>) : <input className="input input-sm num" type="number" min="0" aria-label="จำนวน" value={l.qty} onChange={(e) => setLine(i, { qty: e.target.value })} style={{ textAlign: "right" }}/>}</td>
                   <td><input className="input input-sm" aria-label="หน่วย" value={l.unit} disabled={locked} onChange={(e) => setLine(i, { unit: e.target.value })}/></td>
-                  <td><input className="input input-sm num" type="number" min="0" aria-label="ราคา" value={l.price} disabled={locked} onChange={(e) => setLine(i, { price: e.target.value })} style={{ textAlign: "right" }}/></td>
+                  <td><input className="input input-sm num" type="number" min="0" aria-label="ราคา" value={v.price} disabled={locked || (grouped && !canOverride)} onChange={(e) => setLine(i, grouped ? { price: e.target.value, priceMode: "manual" } : { price: e.target.value })} style={{ textAlign: "right" }}/>
+                    {pack > 0 && <div style={{ fontSize: 11, marginTop: 3, textAlign: "right", color: "var(--text-tertiary)" }}>ลังละ {_fmt((Number(v.price) || 0) * pack, 2)}</div>}
+                    {note && v.priceMode === "auto" && <div style={{ fontSize: 11, marginTop: 2, textAlign: "right", color: "var(--accent)" }} title={`กลุ่ม ${note.group}`}>{note.min != null ? `ขั้น ${_fmt(note.min)}+ ลัง` : "ราคาปกติ"} · รวม {_fmt(note.total)} ลัง{v.repriced && " · คิดใหม่ (สั่งน้อยกว่าที่เสนอ)"}</div>}
+                    {grouped && v.priceMode === "manual" && <div style={{ fontSize: 11, marginTop: 2, textAlign: "right", color: "var(--amber)" }}>แก้ราคาเอง{v.autoPrice != null ? ` (อัตโนมัติ ${_fmt(v.autoPrice, 2)})` : ""}
+                      {canOverride && pricing && !locked && <div><a style={{ color: "var(--accent)", cursor: "pointer" }} onClick={() => setLine(i, { priceMode: "auto" })}>ใช้ราคาอัตโนมัติ</a></div>}</div>}</td>
                   <td><input className="input input-sm num" type="number" min="0" max="100" aria-label="ส่วนลด" value={l.disc || 0} disabled={locked} onChange={(e) => setLine(i, { disc: e.target.value })} style={{ textAlign: "right" }}/></td>
-                  <td className="num">{_fmt(Workflow.lineAmount(l), 2)}</td>
+                  <td className="num">{_fmt(Workflow.lineAmount(v), 2)}</td>
                   <td><button className="icon-btn" aria-label="ลบรายการ" onClick={() => setF((x) => ({ ...x, lines: x.lines.filter((_, j) => j !== i) }))} disabled={f.lines.length === 1}><I.Trash size={13}/></button></td>
                 </tr>
               );

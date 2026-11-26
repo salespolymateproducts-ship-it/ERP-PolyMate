@@ -135,6 +135,75 @@ public class WorkflowService {
 		return adjustCost(u, "finished", "สินค้า", id, newCost, reason);
 	}
 
+	// ---------- เปลี่ยนประเภทงานของสินค้า (admin เท่านั้น ต้องมีเหตุผล) ----------
+	private static final List<String> JOB_TYPES = List.of("oem", "own", "trade");
+
+	/**
+	 * เปลี่ยนประเภทงาน (oem / own / trade) และธง "สั่งซื้อได้" พร้อมกัน · สต๊อก ต้นทุนปัจจุบัน และเอกสารเดิมไม่เปลี่ยน
+	 * กัน: เปลี่ยนเป็นซื้อมาขายขณะมีใบสั่งผลิตค้างหรือ BOM ใช้งานอยู่ · เปลี่ยนเป็นสินค้าที่ซื้อไม่ได้ขณะมีใบสั่งซื้อค้าง
+	 */
+	@Transactional
+	public Map<String, Object> changeProductType(AuthUser u, String id, String jobType, boolean buyable, String reason) {
+		need(u, "admin");
+		if (!JOB_TYPES.contains(jobType)) throw ApiException.badRequest("ประเภทงานไม่ถูกต้อง");
+		if (reason == null || reason.isBlank()) throw ApiException.badRequest("ต้องระบุเหตุผลการเปลี่ยนประเภทงาน");
+		Map<String, Object> p = lock("finished", id, "ไม่พบสินค้า " + id);
+		String from = Json.s(p.get("jobType")), code = Json.s(p.get("code"));
+		if (jobType.equals(from)) throw ApiException.badRequest("สินค้านี้เป็นประเภทที่เลือกอยู่แล้ว");
+		boolean wasBuyable = Boolean.TRUE.equals(p.get("buyable")) || "trade".equals(from);
+		boolean willBuy = "trade".equals(jobType) || buyable;
+		if ("trade".equals(jobType)) {
+			blockIfAny("select id from erp_records where collection = 'workOrders' and data->>'productCode' = ? and coalesce(data->>'status', '') not in ('done', 'cancelled')",
+				code, "มีใบสั่งผลิตค้างอยู่ ปิดหรือยกเลิกก่อน");
+			blockIfAny("select id from erp_records where collection = 'boms' and data->>'productCode' = ? and data->>'status' = 'active'",
+				code, "มี BOM ใช้งานอยู่ เปลี่ยนเป็นเลิกใช้ก่อน");
+		}
+		if (!willBuy) {
+			blockIfAny("select id from erp_records where collection = 'purchaseOrders' and coalesce(data->>'status', '') not in ('received', 'cancelled') "
+				+ "and data->'lines' @> jsonb_build_array(jsonb_build_object('itemType', 'product', 'item', ?::text))", id, "มีใบสั่งซื้อค้างอยู่ รับของหรือยกเลิกก่อน");
+		}
+		p.put("jobType", jobType);
+		if (!"trade".equals(jobType) && buyable) p.put("buyable", true);
+		else p.remove("buyable");
+		double cost = Json.num(p.get("cost"));
+		if (wasBuyable != willBuy && cost > 0) {
+			List<Object> hist = p.get("costHistory") instanceof List<?> h ? new ArrayList<>(h) : new ArrayList<>();
+			Map<String, Object> he = new LinkedHashMap<>();
+			he.put("date", LocalDate.now(BKK).toString());
+			he.put("cost", cost);
+			he.put("prev", cost);
+			he.put("by", u.fullName());
+			he.put("ref", "TYPE");
+			he.put("note", willBuy ? "ต้นทุนยกมา (เปลี่ยนประเภทงาน)" : "ใช้เป็นต้นทุนมาตรฐาน (เปลี่ยนประเภทงาน)");
+			hist.add(he);
+			p.put("costHistory", hist);
+		}
+		List<Object> types = p.get("jobTypeHistory") instanceof List<?> h ? new ArrayList<>(h) : new ArrayList<>();
+		Map<String, Object> th = new LinkedHashMap<>();
+		th.put("date", nowStr().substring(0, 16));
+		th.put("by", u.fullName());
+		th.put("from", from);
+		th.put("fromBuyable", wasBuyable);
+		th.put("to", jobType);
+		th.put("buyable", willBuy);
+		th.put("cost", cost);
+		th.put("stock", Json.num(p.get("stock")));
+		th.put("reason", reason.trim());
+		types.add(th);
+		p.put("jobTypeHistory", types);
+		save("finished", p, u);
+		audit.log(u, "CHANGE_TYPE", "สินค้า", id, from + " → " + jobType + " · " + reason.trim());
+		Map<String, Object> out = new LinkedHashMap<>();
+		out.put("id", id);
+		out.put("jobType", jobType);
+		return out;
+	}
+
+	private void blockIfAny(String sql, String arg, String message) {
+		List<String> ids = jdbc.queryForList(sql + " order by id limit 5", String.class, arg);
+		if (!ids.isEmpty()) throw ApiException.conflict("TYPE_CHANGE_BLOCKED", "เปลี่ยนประเภทงานไม่ได้ เพราะ" + message + ": " + String.join(", ", ids));
+	}
+
 	private Map<String, Object> adjustCost(AuthUser u, String coll, String label, String id, double newCost, String reason) {
 		need(u, "admin");
 		if (reason == null || reason.isBlank()) throw ApiException.badRequest("ต้องระบุเหตุผลการปรับต้นทุน");

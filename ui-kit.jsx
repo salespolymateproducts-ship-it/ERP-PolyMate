@@ -260,6 +260,9 @@ function buildNotifications(role) {
   });
   // สินค้าผลิตเอง (เช่น OEM): ใบสั่งขายที่รอสินค้า แต่สต๊อกไม่พอ/ยังไม่มีใบสั่งผลิตรองรับ
   s.finished.filter((f) => !Store.isBuyable(f) && f.active !== false).forEach((f) => {
+    if (f.min > 0 && f.stock < f.min) {
+      out.push({ id: "lf" + f.id, kind: "warning", icon: "Boxes", title: `สินค้าผลิตเองต่ำกว่าจุดเตือน: ${f.code} เหลือ ${_fmt(f.stock)} ${f.unit || ""} (ขั้นต่ำ ${_fmt(f.min)})`, time: "สต๊อก", page: "inventory" });
+    }
     const pos = Store.productPosition(f);
     if (pos.short > 0.0005) {
       out.push({ id: "so" + f.id, kind: "alert", icon: "Factory", title: `ใบสั่งขายรอสินค้า ${f.code}: ขาดรวม ${_fmt(Math.ceil(pos.short))} ${f.unit || ""} (ต้องส่ง ${_fmt(pos.demand)} มี ${_fmt(pos.stock)}) — ${pos.docs.join(", ")} · ยังไม่มีใบสั่งผลิตรองรับ`, time: "ต้องเปิดใบสั่งผลิต", page: "sales", focus: { doc: pos.docs.find((x) => String(x).startsWith("SO")) || pos.docs[0] } });

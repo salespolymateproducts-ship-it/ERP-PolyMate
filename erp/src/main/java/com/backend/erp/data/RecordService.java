@@ -42,7 +42,10 @@ public class RecordService {
 	private final MachineService machines;
 	private final ReadPolicy readPolicy;
 
-	public RecordService(RecordRepository repo, AuditService audit, CounterService counters, Json json, JdbcTemplate jdbc, BomService boms, MachineService machines, ReadPolicy readPolicy) {
+	private final PriceRules priceRules;
+
+	public RecordService(RecordRepository repo, AuditService audit, CounterService counters, Json json, JdbcTemplate jdbc, BomService boms, MachineService machines, ReadPolicy readPolicy, PriceRules priceRules) {
+		this.priceRules = priceRules;
 		this.readPolicy = readPolicy;
 		this.boms = boms;
 		this.machines = machines;
@@ -136,6 +139,17 @@ public class RecordService {
 		m.put("costHistory", hist);
 	}
 
+	/** สินค้าเดิมที่เพิ่งเปิดเป็นสินค้าซื้อได้: ต่อท้ายต้นทุนยกมาในประวัติเดิมของเซิร์ฟเวอร์ (ไม่เขียนทับประวัติต้นทุนผลิต/ต้นทุนเก่า) */
+	@SuppressWarnings("unchecked")
+	private static void startManagedCost(AuthUser u, Map<String, Object> cur, Map<String, Object> next) {
+		initMaterialCost(u, next);
+		if (cur.get("costHistory") instanceof List<?> old) {
+			List<Object> hist = new ArrayList<>(old);
+			hist.addAll((List<Object>) next.get("costHistory"));
+			next.put("costHistory", hist);
+		}
+	}
+
 	private static ApiException onlyStockAllowed(AuthUser u) {
 		return ApiException.forbidden("บทบาท " + u.role() + " แก้ไขได้เฉพาะยอดคงเหลือ (stock) ของวัตถุดิบ — ข้อมูลทะเบียนวัตถุดิบแก้ได้เฉพาะผู้ดูแลระบบและฝ่ายจัดซื้อ");
 	}
@@ -208,6 +222,65 @@ public class RecordService {
 				throw ApiException.badRequest(("min".equals(k) ? "จุดสั่งซื้อ (Min)" : "ระยะเวลาสั่งของ (วัน)") + " ต้องเป็นตัวเลขไม่ติดลบ");
 			}
 		}
+	}
+
+	// ---------- กติกาของทะเบียนสินค้า: ราคา / จำนวนต่อลัง / รหัส-หน่วย / การลบ ----------
+	/**
+	 * ตรวจเฉพาะค่าที่เปลี่ยนจริง (cur = null คือสร้างใหม่) เพื่อไม่ให้ข้อมูลเดิมขวางการอัปเดตสต๊อก
+	 * การสร้างสินค้าใหม่ตั้งราคาตั้งต้นได้ทุก role ที่เขียนสินค้าได้ ส่วนการเปลี่ยนราคาภายหลังจำกัดตาม PRICE_ROLES
+	 */
+	private void validateProductMaster(AuthUser u, Map<String, Object> cur, Map<String, Object> next) {
+		Object price = next.get("price");
+		if (cur == null || !same(cur.get("price"), price)) {
+			if (price != null && !(price instanceof Number n && n.doubleValue() >= 0 && !Double.isInfinite(n.doubleValue()))) {
+				throw ApiException.badRequest("ราคาขายต้องเป็นตัวเลขไม่ติดลบ");
+			}
+			if (cur != null && !PriceRules.PRICE_ROLES.contains(u.role())) {
+				throw ApiException.forbidden("แก้ราคาขายได้เฉพาะผู้ดูแลระบบและฝ่ายขาย");
+			}
+		}
+		Object pack = next.get("packSize");
+		if (pack == null || (pack instanceof String s && s.isBlank())) next.remove("packSize");
+		else if ((cur == null || !same(cur.get("packSize"), pack))
+			&& !(pack instanceof Number n && n.doubleValue() >= 2 && n.doubleValue() <= 1_000_000 && n.doubleValue() == Math.rint(n.doubleValue()))) {
+			throw ApiException.badRequest("จำนวนต่อลังต้องเป็นจำนวนเต็มตั้งแต่ 2 ขึ้นไป (ไม่ขายเป็นลังให้เว้นว่าง)");
+		}
+		if (cur == null) { next.remove("jobTypeHistory"); return; }
+		// ประเภทงานและประวัติ เปลี่ยนได้ทาง action change-type เท่านั้น (มีตัวกัน + เหตุผล)
+		if ((!Json.s(cur.get("jobType")).isBlank() && !same(cur.get("jobType"), next.get("jobType"))) || !same(cur.get("jobTypeHistory"), next.get("jobTypeHistory"))) {
+			throw ApiException.conflict("TYPE_MANAGED", "เปลี่ยนประเภทงานได้ที่ปุ่ม เปลี่ยนประเภทงาน (ผู้ดูแลระบบ พร้อมเหตุผล)");
+		}
+		boolean codeChanged = !normKey(cur.get("code")).equals(normKey(next.get("code")));
+		boolean unitChanged = !unitOf(cur).equals(unitOf(next));
+		if (!codeChanged && !unitChanged) return;
+		String used = productUsage(cur);
+		if (used != null) {
+			throw ApiException.conflict("PRODUCT_LOCKED", "แก้" + (codeChanged ? "รหัส" : "หน่วยนับ") + "ของสินค้าไม่ได้ เพราะ" + used);
+		}
+	}
+
+	private static String unitOf(Map<String, Object> f) {
+		String s = Json.s(f.get("unit")).trim();
+		return s.isEmpty() ? "PCS" : s;
+	}
+
+	/** เหตุผลที่สินค้าถือว่าถูกใช้งานแล้ว (null = ยังไม่ถูกใช้) */
+	private String productUsage(Map<String, Object> f) {
+		if (Math.abs(Json.num(f.get("stock"))) > 1e-9) return "ยังมีสต๊อกคงเหลือ";
+		String code = Json.s(f.get("code")), id = Json.s(f.get("id"));
+		if (!code.isBlank()) {
+			if (exists("collection = 'docs' and data->'lines' @> jsonb_build_array(jsonb_build_object('code', ?::text))", code)) return "มีเอกสารขายอ้างถึง";
+			if (exists("collection in ('boms','workOrders') and data->>'productCode' = ?", code)) return "มี BOM หรือใบสั่งผลิตอ้างถึง";
+			if (exists("collection = 'stockMovements' and data->>'item' = ?", code)) return "มีประวัติความเคลื่อนไหวสต๊อก";
+			if (exists("collection = 'priceGroups' and data->'items' @> jsonb_build_array(jsonb_build_object('code', ?::text))", code)) return "อยู่ในกลุ่มราคา";
+			if (exists("collection = 'finished' and id <> ? and data->>'baseCode' = ?", id, code)) return "มีสินค้าสีอื่นผูกกับรหัสนี้";
+		}
+		if (exists("collection = 'purchaseOrders' and data->'lines' @> jsonb_build_array(jsonb_build_object('itemType', 'product', 'item', ?::text))", id)) return "มีใบสั่งซื้ออ้างถึง";
+		return null;
+	}
+
+	private boolean exists(String where, Object... args) {
+		return Boolean.TRUE.equals(jdbc.queryForObject("select exists(select 1 from erp_records where " + where + ")", Boolean.class, args));
 	}
 
 	// ---------- กติกาของใบสั่งซื้อ (PO) ----------
@@ -358,9 +431,12 @@ public class RecordService {
 		if (isPO(coll)) validatePOCreate(body);
 		if ("finished".equals(coll)) {
 			validateProductExtras(body);
+			validateProductMaster(u, null, body);
 			if (isBuyable(body)) initMaterialCost(u, body); // ต้นทุนยกมา; หลังจากนี้ต้นทุนเกิดจากการรับ PO
 		}
 		if ("boms".equals(coll)) boms.prepare(u, id, body, null);
+		if ("priceGroups".equals(coll)) priceRules.validateGroup(id, body);
+		if ("docs".equals(coll)) priceRules.checkDocPricing(u, null, body);
 		if ("workOrders".equals(coll)) { boms.attachToNewWorkOrder(body); machines.assertUsable(body.get("machine")); }
 		if ("machines".equals(coll)) machines.prepareCreate(u, id, body);
 		try {
@@ -378,6 +454,8 @@ public class RecordService {
 		requireWrite(u, d);
 		Integer expected = versionOf(body);
 		body.put("id", id);
+		if ("priceGroups".equals(coll)) priceRules.validateGroup(id, body);
+		if ("docs".equals(coll)) priceRules.checkDocPricing(u, repo.getForUpdate(coll, id).map(json::map).orElse(null), body);
 		if (isSupplier(coll)) {
 			Optional<String> curS = repo.getForUpdate(coll, id);
 			if (curS.isPresent()) {
@@ -441,8 +519,9 @@ public class RecordService {
 				if ("materials".equals(coll)) assertMaterialCostUntouched(cur, body);
 				if ("finished".equals(coll)) {
 					if (isBuyable(cur)) assertMaterialCostUntouched(cur, body);
-					else if (isBuyable(body)) initMaterialCost(u, body);
+					else if (isBuyable(body)) startManagedCost(u, cur, body);
 					validateProductExtras(body);
+					validateProductMaster(u, cur, body);
 				}
 				if ("materials".equals(coll) && !isMaterialMaster(u)) {
 					Set<String> keys = new HashSet<>(cur.keySet());
@@ -497,9 +576,12 @@ public class RecordService {
 		if (isPO(coll)) validatePOUpdate(u, before, rec);
 		if ("finished".equals(coll)) {
 			if (isBuyable(before)) assertMaterialCostUntouched(before, rec);
-			else if (isBuyable(rec)) initMaterialCost(u, rec);
+			else if (isBuyable(rec)) startManagedCost(u, before, rec);
 			validateProductExtras(rec);
+			validateProductMaster(u, before, rec);
 		}
+		if ("priceGroups".equals(coll)) priceRules.validateGroup(id, rec);
+		if ("docs".equals(coll)) priceRules.checkDocPricing(u, before, rec);
 		if ("boms".equals(coll)) boms.prepare(u, id, rec, before);
 		if ("workOrders".equals(coll)) {
 			boms.keepWorkOrderBom(before, rec);
@@ -539,6 +621,10 @@ public class RecordService {
 		Map<String, Object> rec = json.map(cur.get());
 		if (isPO(coll) && Set.of("approved", "received").contains(String.valueOf(rec.get("status")))) {
 			throw ApiException.conflict("DELETE_NOT_ALLOWED", "ลบใบสั่งซื้อที่อนุมัติหรือรับของแล้วไม่ได้ — ใช้การยกเลิกแทน");
+		}
+		if ("finished".equals(coll)) {
+			String used = productUsage(rec);
+			if (used != null) throw ApiException.conflict("DELETE_NOT_ALLOWED", "ลบสินค้าไม่ได้ เพราะ" + used + " — กรุณาปิดใช้งานแทน");
 		}
 		repo.delete(coll, id);
 		if (rec.get("counterKey") instanceof String ck && rec.get("seq") instanceof Number sq) {

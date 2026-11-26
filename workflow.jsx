@@ -50,6 +50,81 @@ const Workflow = (function () {
 
   // ---------------- การคำนวณยอด ----------------
   function lineAmount(l) { return r2((Number(l.qty) || 0) * (Number(l.price) || 0) * (1 - (Number(l.disc) || 0) / 100)); }
+  // ---------------- ขายเป็นลัง ----------------
+  // qty ของรายการเก็บเป็นหน่วยย่อย (ชิ้น/ใบ) เสมอ · packSize = จำนวนต่อลังที่บันทึกติดรายการไว้ (แก้ทะเบียนสินค้าภายหลังไม่กระทบเอกสารเดิม)
+  function packCount(qty, packSize) {
+    const p = Number(packSize), q = Number(qty);
+    if (!(p >= 2) || !Number.isFinite(q)) return null;
+    const n = Math.round(q / p);
+    return Math.abs(n * p - q) < EPS ? n : null;      // null = ไม่ได้ขายเป็นลัง หรือไม่เต็มลัง
+  }
+  // ---------------- กลุ่มราคา (ขั้นราคาตามจำนวนลังรวมของสินค้าในกลุ่ม) ----------------
+  // ใช้กับใบเสนอราคา/ใบสั่งขายฉบับร่าง-รออนุมัติ · รายการที่สืบทอดจากเอกสารต้นทาง (src) คงราคาเดิม · วิธีคิดต้องตรงกับ PriceRules ฝั่งเซิร์ฟเวอร์
+  const PRICED_DOCS = ["QT", "SO"];
+  const canOverridePrice = () => { const u = S.user(); return !!u && ["admin", "sales"].includes(u.role); };
+  const priceGroupOf = (code) => (S.state.priceGroups || []).find((g) => g.active !== false && (g.items || []).some((i) => i.code === code)) || null;
+  // รายการใหม่ของสินค้าในกลุ่ม → ราคาอัตโนมัติ · รายการเดิมที่ไม่เคยใช้กลุ่มราคา (กรอกราคาเอง) คงไว้ตามเดิม
+  function markAutoPrice(lines, oldLines) {
+    return (lines || []).map((l) => (l.src || l.priceMode || !priceGroupOf(l.code) || (oldLines || []).some((o) => o.code === l.code && !o.priceMode) ? l : { ...l, priceMode: "auto" }));
+  }
+  // รายการที่ราคากลุ่มคิดในเอกสารนี้: รายการใหม่ หรือรายการจากใบเสนอราคาที่ต้องคิดราคาใหม่
+  const priceCounted = (l) => !l.src || !!l.repriced;
+  // ใบสั่งขายที่สั่ง (ลังรวมของกลุ่ม) น้อยกว่าที่เสนอ → รายการของกลุ่มนั้นคิดราคาใหม่ตามขั้นของจำนวนที่สั่งจริง · สั่งครบตามที่เสนอ → ใช้ราคาที่เสนอ
+  // ใบเสนอราคาที่ตั้งแผนเรียกเก็บแบ่งงวดไว้ คงราคาเดิม (ยอดงวดผูกกับยอดใบเสนอราคา)
+  function repriceFromQuote(lines) {
+    const info = (lines || []).map((l) => {
+      const q = l.src && get(l.src.doc);
+      if (!q || q.type !== "QT" || (q.plan || []).length) return null;
+      const sl = (q.lines || [])[l.src.line], g = sl && sl.priceMode && priceGroupOf(l.code);
+      return g ? { q, sl, g } : null;
+    });
+    const ordered = new Map(), quoted = new Map(), seen = new Set();
+    info.forEach((x, i) => {
+      if (!x) return;
+      ordered.set(x.g.id, (ordered.get(x.g.id) || 0) + (packCount(lines[i].qty, lines[i].packSize) || 0));
+      const key = x.g.id + "|" + x.q.id;
+      if (seen.has(key)) return;
+      seen.add(key);
+      (x.q.lines || []).forEach((s) => {
+        const sg = s.priceMode && priceGroupOf(s.code);
+        if (sg && sg.id === x.g.id) quoted.set(x.g.id, (quoted.get(x.g.id) || 0) + (packCount(s.qty, s.packSize) || 0));
+      });
+    });
+    return (lines || []).map((l, i) => {
+      const x = info[i];
+      if (!x) return l;
+      if ((ordered.get(x.g.id) || 0) < (quoted.get(x.g.id) || 0)) return Object.assign({}, l, { repriced: true, priceMode: l.priceMode || x.sl.priceMode });
+      if (!l.repriced) return l;
+      const back = Object.assign({}, l, { price: x.sl.price });                 // กลับมาครบตามที่เสนอ → คืนราคาที่เสนอ
+      PRICE_FIELDS.forEach((k) => { if (x.sl[k] != null) back[k] = x.sl[k]; else delete back[k]; });
+      return back;
+    });
+  }
+  function applyTierPrices(lines) {
+    const totals = new Map();
+    (lines || []).forEach((l) => {
+      const g = priceCounted(l) && priceGroupOf(l.code), n = packCount(l.qty, l.packSize);
+      if (g && n != null) totals.set(g.id, (totals.get(g.id) || 0) + n);
+    });
+    return (lines || []).map((l) => {
+      if (!priceCounted(l) || !l.priceMode) return l;
+      const fg = S.state.finished.find((f) => f.code === l.code);
+      const normal = r2(Number(fg && fg.price) || 0);
+      const g = priceGroupOf(l.code);
+      if (!g) {                                             // กลุ่มถูกปิด/สินค้าถูกนำออก → กลับเป็นราคาปกติ (ราคาที่กำหนดเองคงไว้)
+        // ห้ามใช้ object rest ({ ...rest }) ในไฟล์นี้: Babel ในเบราว์เซอร์สร้างตัวแปรช่วยระดับ global ชนกับ icons.jsx ทำให้ทั้งไฟล์ไม่ถูกโหลด
+        const rest = Object.assign({}, l);
+        delete rest.priceMode; delete rest.priceNote; delete rest.autoPrice;
+        return l.priceMode === "auto" ? Object.assign(rest, { price: normal }) : rest;
+      }
+      const total = totals.get(g.id) || 0;
+      let tier = -1;
+      if (packCount(l.qty, l.packSize) != null) g.tiers.forEach((min, i) => { if (total >= min) tier = i; });
+      const auto = tier >= 0 ? r2(Number(g.items.find((i) => i.code === l.code).prices[tier]) || 0) : normal;
+      const priceNote = { group: g.name, total, min: tier >= 0 ? g.tiers[tier] : null };
+      return l.priceMode === "manual" ? { ...l, autoPrice: auto, priceNote } : { ...l, price: auto, priceNote };
+    });
+  }
   function calc(d) {
     if (d.type === "PAY") {
       const a = r2(d.amount || 0);
@@ -403,7 +478,7 @@ const Workflow = (function () {
         if (!(amt > 0)) fail("กรุณาระบุจำนวนเงิน (ก่อน VAT) มากกว่า 0");
         lines = [{ code: "-", name: String(opts.label || "").trim() || (type === "CN" ? "ลดราคา" : "เพิ่มราคา") + " (อ้างอิง " + inv.id + ")", qty: 1, unit: "รายการ", price: amt, disc: 0 }];
       } else {
-        lines = (inv.lines || []).map((l) => ({ code: l.code, name: l.name, qty: l.qty, unit: l.unit, price: l.price, disc: l.disc }));   // ไม่ใส่ src → ไม่กินจำนวนคงเหลือของใบกำกับ
+        lines = (inv.lines || []).map((l) => ({ code: l.code, name: l.name, qty: l.qty, unit: l.unit, price: l.price, disc: l.disc, packSize: l.packSize }));   // ไม่ใส่ src → ไม่กินจำนวนคงเหลือของใบกำกับ
       }
       return saveDraft({ type, customer: inv.customer, date: opts.date || S.today(), sourceIds: [inv.id], refNo: inv.refNo || "", note: opts.note || "",
         vatOn: !!inv.vatOn, whtRate: inv.whtRate || 0, billDisc: 0, hideCode: !!inv.hideCode, lines, reason, _fromNote: "ออกจากใบกำกับ " + inv.id + " — " + reason });
@@ -437,6 +512,8 @@ const Workflow = (function () {
       if (!(Number(l.qty) > 0)) fail(`${n}: จำนวนต้องมากกว่า 0`);
       if (Number(l.price) < 0) fail(`${n}: ราคาต้องไม่ติดลบ`);
       if (Number(l.disc) < 0 || Number(l.disc) > 100) fail(`${n}: ส่วนลดต้องอยู่ระหว่าง 0–100%`);
+      // สินค้าที่ขายเป็นลัง: ต้องเต็มลัง (ใบลดหนี้/เพิ่มหนี้ระบุเป็นชิ้นได้ เช่น รับคืนของชำรุดบางชิ้น)
+      if (!isNote(doc) && l.packSize >= 2 && packCount(l.qty, l.packSize) == null) fail(`${n}: ขายเป็นลังเต็มเท่านั้น (1 ลัง = ${l.packSize} ${l.unit || "ชิ้น"})`);
     });
     const c = calc(doc);
     if (Number(doc.billDisc) > c.gross + 0.005) fail("ส่วนลดท้ายบิลมากกว่ายอดรวม");
@@ -475,11 +552,14 @@ const Workflow = (function () {
     const c = customerOf(code);
     return c ? { name: c.name, nameEn: c.nameEn, address: c.address, taxId: c.taxId, contact: c.contact, phone: c.phone, credit: c.credit } : null;
   }
+  const PRICE_FIELDS = ["priceMode", "priceNote", "autoPrice", "priceBy", "priceAt", "repriced"];
   function normalizeLines(lines) {
     return (lines || []).map((l) => {
       const o = { code: String(l.code || "").trim() || "-", name: String(l.name || "").trim(), qty: r3(Number(l.qty) || 0),
         unit: l.unit || "ชิ้น", price: r2(Number(l.price) || 0), disc: r2(Number(l.disc) || 0) };
       if (l.src) o.src = { doc: l.src.doc, line: l.src.line };
+      if (Number(l.packSize) >= 2) o.packSize = Number(l.packSize);
+      PRICE_FIELDS.forEach((k) => { if (l[k] != null) o[k] = l[k]; });
       return o;
     });
   }
@@ -520,6 +600,24 @@ const Workflow = (function () {
       if (doc.type === "PAY") Object.assign(fields, { amount: r2(form.amount), method: form.method || "โอนเงิน", bankRef: form.bankRef || "", vatOn: false, whtRate: 0, lines: [] });
       else fields.lines = normalizeLines(form.lines);
       const candidate = { ...doc, ...fields };
+      // สินค้าที่ปิดใช้งาน: เพิ่มเป็นรายการใหม่ไม่ได้ (รายการที่สืบทอดจากเอกสารต้นทาง / มีอยู่ในเอกสารแล้ว / ใบลดหนี้-เพิ่มหนี้ ยังทำต่อได้)
+      if (!isNote({ type: doc.type })) (fields.lines || []).forEach((l, i) => {
+        if (l.src || (doc.lines || []).some((x) => x.code === l.code)) return;
+        const fg = S.state.finished.find((x) => x.code === l.code);
+        if (fg && fg.active === false) fail(`รายการที่ ${i + 1}: สินค้า ${l.code} ปิดใช้งานแล้ว`);
+        if (fg && fg.packSize >= 2 && !l.packSize) l.packSize = Number(fg.packSize);   // รายการใหม่ของสินค้าที่ขายเป็นลัง
+      });
+      if (PRICED_DOCS.includes(doc.type)) {
+        if (isNew || ["draft", "pending"].includes(prevStatus)) fields.lines = applyTierPrices(markAutoPrice(doc.type === "SO" ? repriceFromQuote(fields.lines) : fields.lines, doc.lines));
+        // ราคาที่กำหนดทับราคากลุ่ม: เฉพาะผู้ดูแลระบบ/ฝ่ายขาย และบันทึกผู้แก้-เวลา
+        fields.lines = fields.lines.map((l, i) => {
+          if (l.priceMode !== "manual" || l.src) return l;
+          const prev = (doc.lines || []).find((o) => o.code === l.code && o.priceMode === "manual" && o.price === l.price);
+          if (prev) return { ...l, priceBy: prev.priceBy, priceAt: prev.priceAt };
+          if (!canOverridePrice()) fail(`รายการที่ ${i + 1}: แก้ราคาเองได้เฉพาะผู้ดูแลระบบและฝ่ายขาย`);
+          return { ...l, priceBy: S.userName(), priceAt: S.now() };
+        });
+      }
       validate(candidate, isNew ? null : doc.id);
       Object.assign(doc, fields);
       if (doc.type !== "PAY" || isNew) doc.customerSnap = snapshotCustomer(doc.customer);
@@ -676,7 +774,7 @@ const Workflow = (function () {
             const q = r3(pick(l.idx));
             if (q <= 0) return;
             if (q > l.remaining + EPS) fail(`${s.id} "${l.name}": จำนวน ${q} เกินคงเหลือ ${l.remaining}`);
-            lines.push({ code: l.code, name: l.name, qty: q, unit: l.unit, price: l.price, disc: l.disc || 0, src: { doc: s.id, line: l.idx } });
+            lines.push({ code: l.code, name: l.name, qty: q, unit: l.unit, price: l.price, disc: l.disc || 0, packSize: l.packSize, ...Object.fromEntries(PRICE_FIELDS.map((k) => [k, l[k]])), src: { doc: s.id, line: l.idx } });
             pickedGross += lineAmount({ ...l, qty: q });
           });
           if (s.billDisc && s.gross) billDisc += s.billDisc * (pickedGross / s.gross); // เฉลี่ยส่วนลดท้ายบิลตามสัดส่วน
@@ -817,7 +915,7 @@ const Workflow = (function () {
   return {
     PREFIX, NEXT, TYPES, VAT_RATE, STATUS_LABEL,
     calc, lineAmount, get, children, parents, related, remainingLines, remainingValue, rcAmounts, paymentInfo, noteAdj, isNote, issueNote, NOTE_REASONS, woUsed, setWhtCert, whtCertStatus, WHT_CERT_DAYS,
-    statusInfo, can, canApproveType, canEditType, nextTypes, openSources, blank, addDays,
+    packCount, PRICED_DOCS, canOverridePrice, priceGroupOf, markAutoPrice, applyTierPrices, repriceFromQuote, statusInfo, can, canApproveType, canEditType, nextTypes, openSources, blank, addDays,
     saveDraft, submit, approve, reject, cancel, remove, convert, setShipStatus, createWorkOrders,
     isLive, isActive, label,
     billingRoot, planInfo, setBillingPlan, issueInstallment, instInvoices, isInstInv, installmentLock, MAX_INST,

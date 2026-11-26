@@ -148,7 +148,62 @@ function StockAdjustModal({ onClose }) {
     </ErpModal>
   );
 }
-// แก้ไขสินค้า: ราคาขาย / ต้นทุนมาตรฐาน (สินค้าผลิตเอง) / ผู้ขายประจำ-จุดสั่งซื้อ-ระยะเวลาสั่งของ (สินค้าที่ซื้อได้)
+// หน่วยนับของสินค้า: เลือกจากรายการแนะนำ หรือพิมพ์หน่วยใหม่ได้
+const PRODUCT_UNITS = ["PCS", "ใบ", "ชิ้น", "SET", "BOX", "ลัง", "KG", "PACK", "ROLL"];
+function ProductUnitInput({ value, onChange, disabled }) {
+  const units = [...new Set([...PRODUCT_UNITS, ...Store.state.finished.map((f) => f.unit).filter(Boolean)])];
+  return (<>
+    <input className="input" list="fg-units" value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} onFocus={(e) => e.target.select()}/>
+    <datalist id="fg-units">{units.map((u) => <option key={u} value={u}/>)}</datalist>
+  </>);
+}
+const packSizeError = (v) => (String(v).trim() !== "" && !(Number.isInteger(Number(v)) && Number(v) >= 2) ? "จำนวนต่อลังต้องเป็นจำนวนเต็มตั้งแต่ 2 ขึ้นไป (ไม่ขายเป็นลังให้เว้นว่าง)" : "");
+const hintStyle = { fontSize: 11, color: "var(--text-tertiary)", marginTop: 4 };
+
+// เปลี่ยนประเภทงาน (ผู้ดูแลระบบ): มีตัวกันเอกสารค้าง · ต้องระบุเหตุผล · สต๊อก/ต้นทุน/เอกสารเดิมไม่เปลี่ยน
+const jobShort = (k) => (JOB_TYPES[k] ? JOB_TYPES[k].short : k || "—");
+function ChangeTypeModal({ f, onClose, onDone }) {
+  useStore();
+  const [jobType, setJobType] = useState(Object.keys(JOB_TYPES).find((k) => k !== f.jobType));
+  const [buyable, setBuyable] = useState(f.jobType === "trade");   // เดิมซื้อมาขาย → ค่าเริ่มต้นยังสั่งซื้อได้ในช่วงเปลี่ยนผ่าน
+  const [reason, setReason] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const blockers = Store.typeChangeBlockers(f, jobType, buyable);
+  const wasBuy = Store.isBuyable(f), willBuy = jobType === "trade" || buyable;
+  const save = async () => {
+    if (!reason.trim()) return setErr("กรุณาระบุเหตุผล");
+    setErr(""); setBusy(true);
+    try { await Store.changeProductType(f.id, jobType, jobType !== "trade" && buyable, reason.trim()); onDone("เปลี่ยนประเภทงาน " + f.code + " เป็น " + jobShort(jobType) + " แล้ว"); }
+    catch (e) { setErr(e && e.message ? e.message : String(e)); setBusy(false); }
+  };
+  return (
+    <ErpModal title={"เปลี่ยนประเภทงาน " + f.code} width={520} onClose={onClose}
+      footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={busy || blockers.length > 0} onClick={save}>ยืนยันการเปลี่ยน</button></>}>
+      <div style={{ fontSize: 12.5, marginBottom: 10 }}>ปัจจุบัน: <b>{jobShort(f.jobType)}</b>{f.buyable ? " (สั่งซื้อได้)" : ""} · คงเหลือ {_fmt(f.stock)} {f.unit} · ต้นทุน {_fmt(f.cost || 0, 2)}</div>
+      <label className="field-label">เปลี่ยนเป็น</label>
+      <select className="select" aria-label="ประเภทงานใหม่" value={jobType} onChange={(e) => setJobType(e.target.value)}>
+        {Object.keys(JOB_TYPES).filter((k) => k !== f.jobType).map((k) => <option key={k} value={k}>{JOB_TYPES[k].short} — {JOB_TYPES[k].label}</option>)}
+      </select>
+      {jobType !== "trade" && (
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12.5, marginTop: 10 }}>
+          <input type="checkbox" checked={buyable} onChange={(e) => setBuyable(e.target.checked)}/> ยังสั่งซื้อได้ (ซื้อสำเร็จรูป / จ้างผู้อื่นผลิต)
+        </label>
+      )}
+      <label className="field-label" style={{ marginTop: 10 }}>เหตุผล *</label>
+      <input className="input" aria-label="เหตุผลการเปลี่ยนประเภท" value={reason} onChange={(e) => setReason(e.target.value)}/>
+      <div style={{ ...hintStyle, marginTop: 10, lineHeight: 1.6 }}>
+        สต๊อกและเอกสารเดิมไม่เปลี่ยน
+        {wasBuy !== willBuy && (willBuy ? " · ต้นทุนปัจจุบันเป็นต้นทุนยกมา จากนั้นคิดจากการรับใบสั่งซื้อ" : " · ต้นทุนปัจจุบันเป็นต้นทุนมาตรฐาน แก้ได้ในหน้าแก้ไขสินค้า")}
+        {f.jobType === "trade" && " · ก่อนผลิตเอง ให้ตั้ง BOM และแม่พิมพ์/เครื่องจักร"}
+        <br/>ข้อมูลที่แก้ค้างในหน้าแก้ไขสินค้าจะไม่ถูกบันทึก
+      </div>
+      {(blockers.length > 0 || err) && <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{blockers.map((b) => <div key={b}>{b}</div>)}{err}</div>}
+    </ErpModal>
+  );
+}
+
+// แก้ไขสินค้า: รหัส-หน่วย (เฉพาะสินค้าที่ยังไม่ถูกใช้) / จำนวนต่อลัง / ราคาขาย / ต้นทุนมาตรฐาน (สินค้าผลิตเอง) / จุดสั่งซื้อ / เปิด-ปิดใช้งาน
 // สินค้าซื้อมาขายไป (หรือเปิดธง สั่งซื้อได้) ต้นทุนคำนวณจากการรับ PO — แก้ตรงไม่ได้ (admin ปรับพร้อมเหตุผล)
 function ProductEditModal({ f, onClose, onDone }) {
   const managed0 = Store.isBuyable(f);
@@ -166,6 +221,13 @@ function ProductEditModal({ f, onClose, onDone }) {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [adj, setAdj] = useState(false);
+  const [code, setCode] = useState(f.code || "");
+  const [unit, setUnit] = useState(f.unit || "PCS");
+  const [packSize, setPackSize] = useState(f.packSize == null ? "" : String(f.packSize));
+  const [active, setActive] = useState(f.active !== false);
+  const locked = Store.productUsage(f);          // มีค่า = สินค้าถูกใช้แล้ว แก้รหัส/หน่วยไม่ได้ (เซิร์ฟเวอร์ตรวจซ้ำ)
+  const canPrice = Store.canEditPrice();
+  const [typeOpen, setTypeOpen] = useState(false);
   const managed = f.jobType === "trade" || buyable;
   const ps = managed ? productPurchaseStats(f) : null;
   const num = (v) => (String(v).trim() === "" ? null : Number(v));
@@ -174,18 +236,31 @@ function ProductEditModal({ f, onClose, onDone }) {
     if (!(Number(price) >= 0)) return setErr("ราคาขายต้องไม่ติดลบ");
     if (!managed && !(Number(cost) >= 0)) return setErr("ต้นทุนต้องไม่ติดลบ");
     if (!pname.trim()) return setErr("ต้องระบุชื่อสินค้า");
-    const body = { ...f, name: pname.trim(), customer: customer || "—", color: color.trim(), weight: String(weight).trim() === "" ? null : Number(weight), price: Number(price), buyable: f.jobType === "trade" ? undefined : buyable };
+    const newCode = code.trim().toUpperCase();
+    if (!newCode) return setErr("ต้องระบุรหัสสินค้า");
+    if (!unit.trim()) return setErr("ต้องระบุหน่วยนับ");
+    if (packSizeError(packSize)) return setErr(packSizeError(packSize));
+    const body = { ...f, name: pname.trim(), customer: customer || "—", color: color.trim(), weight: String(weight).trim() === "" ? null : Number(weight), price: Number(price), buyable: f.jobType === "trade" ? undefined : buyable,
+      packSize: num(packSize) == null ? undefined : num(packSize), active };
+    if (!locked) {
+      body.unit = unit.trim();
+      if (newCode !== String(f.code || "").toUpperCase()) { body.code = newCode; if (f.baseCode === f.code) body.baseCode = newCode; }
+    }
     if (!managed0 && !managed) body.cost = Number(cost);
     if (managed && !managed0) body.cost = Number(cost) || 0; // เพิ่งเปิดธงซื้อได้: ค่านี้เป็นต้นทุนยกมา
     body.supplier = supplier || undefined; body.min = num(min); body.leadDays = num(leadDays);
     setBusy(true);
-    try { await Store.saveProduct(body); onDone("บันทึกสินค้า " + f.code + " แล้ว"); }
+    try { await Store.saveProduct(body); onDone("บันทึกสินค้า " + (body.code || f.code) + " แล้ว"); }
     catch (e) { setErr(e && e.message ? e.message : String(e)); setBusy(false); }
   };
   return (
     <ErpModal title={"แก้ไขสินค้า " + f.code} width={640} onClose={onClose}
       footer={<><button className="btn btn-outline btn-sm" onClick={onClose}>ยกเลิก</button><button className="btn btn-primary btn-sm" disabled={busy} onClick={save}>บันทึก</button></>}>
       <div className="grid-2" style={{ gap: 10 }}>
+        <div style={{ gridColumn: "1 / -1", display: "flex", alignItems: "center", gap: 10, fontSize: 12.5 }}>
+          <span>ประเภทงาน:</span><JobBadge type={f.jobType}/>
+          {isAdmin && <button type="button" className="btn btn-outline btn-sm" onClick={() => setTypeOpen(true)}>เปลี่ยนประเภทงาน</button>}
+        </div>
         <div style={{ gridColumn: "1 / -1" }}><label className="field-label">ชื่อสินค้า</label><input className="input" value={pname} onChange={(e) => setPname(e.target.value)}/></div>
         <div><label className="field-label">ลูกค้า (รหัส)</label>
           <select className="select" value={customer} onChange={(e) => setCustomer(e.target.value)}>
@@ -194,7 +269,12 @@ function ProductEditModal({ f, onClose, onDone }) {
           </select></div>
         <div><label className="field-label">สี</label><input className="input" value={color} onChange={(e) => setColor(e.target.value)}/></div>
         <div><label className="field-label">น้ำหนัก (g)</label><input className="input num" type="number" min="0" step="any" value={weight} onChange={(e) => setWeight(e.target.value)}/></div>
-        <div><label className="field-label">ราคาขาย / หน่วย (ค่าเริ่มต้นในเอกสารขาย)</label><input className="input num" type="number" min="0" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)}/></div>
+        <div><label className="field-label">รหัสสินค้า (SKU)</label><input className="input" style={{ fontFamily: "var(--font-mono)" }} value={code} disabled={!!locked} onChange={(e) => setCode(e.target.value)}/>
+          {locked && <div style={hintStyle}>แก้รหัสและหน่วยนับไม่ได้ เพราะ{locked}</div>}</div>
+        <div><label className="field-label">หน่วยนับ</label><ProductUnitInput value={unit} onChange={setUnit} disabled={!!locked}/></div>
+        <div><label className="field-label">จำนวนต่อลัง ({unit})</label><input className="input num" type="number" min="2" step="1" placeholder="เว้นว่าง = ไม่ขายเป็นลัง" value={packSize} onChange={(e) => setPackSize(e.target.value)}/></div>
+        <div><label className="field-label">ราคาขาย / {unit} (ค่าเริ่มต้นในเอกสารขาย)</label><input className="input num" type="number" min="0" step="0.01" value={price} disabled={!canPrice} onChange={(e) => setPrice(e.target.value)}/>
+          {!canPrice ? <div style={hintStyle}>แก้ราคาได้เฉพาะผู้ดูแลระบบและฝ่ายขาย</div> : !packSizeError(packSize) && Number(packSize) >= 2 && Number(price) >= 0 && <div style={hintStyle}>ลังละ {_fmt(Number(price) * Number(packSize), 2)} บาท</div>}</div>
         {!managed ? (
           <div><label className="field-label">ต้นทุนมาตรฐาน / หน่วย</label><input className="input num" type="number" min="0" step="0.01" value={cost} onChange={(e) => setCost(e.target.value)}/></div>
         ) : managed0 ? (
@@ -213,17 +293,20 @@ function ProductEditModal({ f, onClose, onDone }) {
             <input type="checkbox" checked={buyable} onChange={(e) => setBuyable(e.target.checked)}/> สั่งซื้อได้ (ซื้อสำเร็จรูป / จ้างผู้อื่นผลิต) — ต้นทุนจะคำนวณจากการรับ PO
           </label>
         )}
-        {managed && (<>
+        {managed && (
           <div><label className="field-label">ผู้ขายประจำ</label>
             <select className="select" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
               <option value="">— ไม่ระบุ —</option>
               {SUPPLIERS.filter((x) => x.status !== "inactive").map((x) => <option key={x.id} value={x.code}>{x.name}</option>)}
             </select></div>
-          <div className="grid-2" style={{ gap: 10 }}>
-            <div><label className="field-label">จุดสั่งซื้อ (Min)</label><input className="input num" type="number" min="0" step="any" value={min} onChange={(e) => setMin(e.target.value)}/></div>
-            <div><label className="field-label">สั่งของใช้เวลา (วัน)</label><input className="input num" type="number" min="0" step="1" value={leadDays} onChange={(e) => setLeadDays(e.target.value)}/></div>
-          </div>
-        </>)}
+        )}
+        <div className="grid-2" style={{ gap: 10 }}>
+          <div><label className="field-label">{managed ? "จุดสั่งซื้อ (Min)" : "จุดเตือนสต๊อกต่ำ (Min)"}</label><input className="input num" type="number" min="0" step="any" value={min} onChange={(e) => setMin(e.target.value)}/></div>
+          <div><label className="field-label">{managed ? "สั่งของใช้เวลา (วัน)" : "ผลิตใช้เวลา (วัน)"}</label><input className="input num" type="number" min="0" step="1" value={leadDays} onChange={(e) => setLeadDays(e.target.value)}/></div>
+        </div>
+        <label style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "center", fontSize: 12.5 }}>
+          <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)}/> ใช้งานอยู่ (ปิดใช้งาน = ไม่ขึ้นให้เลือกในเอกสารใหม่ สต๊อกและประวัติยังอยู่)
+        </label>
       </div>
       {managed0 && ps && (
         <div style={{ marginTop: 14, background: "var(--bg-subtle)", borderRadius: 10, padding: 12 }}>
@@ -252,7 +335,17 @@ function ProductEditModal({ f, onClose, onDone }) {
           </table>
         </div>
       )}
+      {(f.jobTypeHistory || []).length > 0 && (
+        <div style={{ marginTop: 12, background: "var(--bg-subtle)", borderRadius: 10, padding: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>ประวัติการเปลี่ยนประเภทงาน</div>
+          <table className="table" style={{ fontSize: 12 }}>
+            <thead><tr><th>วันที่</th><th>เดิม → ใหม่</th><th>โดย</th><th>เหตุผล</th></tr></thead>
+            <tbody>{[...f.jobTypeHistory].reverse().map((h, i) => <tr key={i}><td>{h.date}</td><td>{jobShort(h.from)} → <b>{jobShort(h.to)}</b>{h.buyable && h.to !== "trade" ? " (สั่งซื้อได้)" : ""}</td><td>{h.by}</td><td>{h.reason}</td></tr>)}</tbody>
+          </table>
+        </div>
+      )}
       {err && <div style={{ marginTop: 10, padding: "9px 12px", borderRadius: 8, background: "var(--danger-subtle, #fee2e2)", color: "var(--danger)", fontSize: 12.5 }}>{err}</div>}
+      {typeOpen && <ChangeTypeModal f={f} onClose={() => setTypeOpen(false)} onDone={(m) => { setTypeOpen(false); onDone(m); }}/>}
       {adj && <AdjustCostModal rec={f} kind="product" onClose={() => setAdj(false)} onDone={(m) => { setAdj(false); onDone(m); }}/>}
     </ErpModal>
   );
@@ -817,7 +910,7 @@ function FinishedTable({ onAdd }) {
   // ค้นหา (รหัส/ชื่อ/ลูกค้า/สี/ผู้ขาย) · ประเภทงาน · ระดับสต๊อก · เรียง · แบ่งหน้า
   const [fgJob, setFgJob] = useState("ALL");
   const [fgLevel, setFgLevel] = useState("ALL");
-  const fgLevelOf = (f) => (f.stock <= 0 ? "out" : (Store.isBuyable(f) && f.min > 0 && f.stock < f.min) ? "low" : "ok");
+  const fgLevelOf = (f) => (f.stock <= 0 ? "out" : (f.min > 0 && f.stock < f.min) ? "low" : "ok");
   const marginOf = (f) => (f.price && f.cost > 0 ? ((f.price - f.cost) / f.price) * 100 : 0);
   const view = useListView(FINISHED, {
     text: (f) => [f.code, f.baseCode, f.name, f.customer, custName(f.customer), f.color, f.supplier, (JOB_TYPES[f.jobType] || {}).short].join(" "),
@@ -861,14 +954,15 @@ function FinishedTable({ onAdd }) {
             const margin = f.price && f.cost > 0 ? ((f.price - f.cost) / f.price) * 100 : 0;
             const cn = custName(f.customer);
             const buy = Store.isBuyable(f);
-            const low = buy && f.min > 0 && f.stock < f.min;
+            const low = f.min > 0 && f.stock < f.min;
             const supName = buy && f.supplier ? ((SUPPLIERS.find((x) => x.code === f.supplier) || {}).name || f.supplier) : null;
             const fam = Store.productFamily(f);
             return (
               <tr key={f.id}>
                 <td className="mono"><b>{f.code}</b></td>
                 <td>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{f.name}</div>
+                  <div style={{ fontSize: 13, fontWeight: 500 }}>{f.name}{f.active === false && <span className="badge badge-neutral" style={{ marginLeft: 6 }}>ปิดใช้งาน</span>}</div>
+                  {f.packSize >= 2 && <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>1 ลัง = {_fmt(f.packSize)} {f.unit}</div>}
                   {f.color && <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 2 }}>สี: {f.color}</div>}
                   {fam.length > 1 && (
                     <div style={{ fontSize: 10.5, color: "var(--text-tertiary)", marginTop: 2 }}>
@@ -886,7 +980,7 @@ function FinishedTable({ onAdd }) {
                   <b>{_fmt(f.stock)}</b> <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{f.unit}</span>
                   {f.stock === 0 && <span className="badge badge-danger" style={{ marginLeft: 6 }}>หมด</span>}
                   {f.stock > 0 && low && <span className="badge badge-warning" style={{ marginLeft: 6 }}>ต่ำกว่า Min</span>}
-                  {buy && f.min > 0 && <div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>Min {_fmt(f.min)}</div>}
+                  {f.min > 0 && <div style={{ fontSize: 10.5, color: "var(--text-tertiary)" }}>Min {_fmt(f.min)}</div>}
                 </td>
                 <td className="num">{buy && !(f.cost > 0) ? <span style={{ color: "var(--text-tertiary)", fontSize: 11 }}>ยังไม่มีต้นทุน</span> : baht(f.cost, 2)}</td>
                 <td className="num">{baht(f.price, 2)}</td>
@@ -936,7 +1030,8 @@ function AddColorModal({ f, onClose, onDone }) {
       weight: f.weight == null ? null : f.weight, unit: f.unit || "PCS", stock: 0,
       cost: managed ? 0 : (f.cost || 0), price: f.price || 0,
       ...(f.buyable ? { buyable: true } : {}),
-      ...(managed ? { supplier: f.supplier || undefined, min: f.min, leadDays: f.leadDays } : {}),
+      ...(managed ? { supplier: f.supplier || undefined } : {}),
+      packSize: f.packSize, min: f.min, leadDays: f.leadDays,
     };
     try { Store.add("finished", rec, rec.code); } catch (e) { return setErr(e && e.message ? e.message : String(e)); }
     // ถ้าสินค้าต้นแบบยังไม่มี baseCode ไม่ต้องแก้ — ใช้รหัสของตัวเองเป็นกุญแจกลุ่มอยู่แล้ว
@@ -1011,7 +1106,7 @@ function AddProductForm({ onSubmit, onCancel }) {
   const [form, setForm] = useState({
     jobType: "oem", code: "", name: "", customer: "", color: "",
     weight: "", unit: "PCS", cost: "", price: "", stock: "",
-    buyable: false, supplier: "", min: "", leadDays: "",
+    buyable: false, supplier: "", min: "", leadDays: "", packSize: "",
   });
   // สินค้าซื้อมาขายไป / สั่งซื้อได้: ต้นทุนมาจากการรับ PO — ตอนสร้างกรอกเฉพาะต้นทุนยกมา (เมื่อมีสต็อกตั้งต้น)
   const managed = form.jobType === "trade" || form.buyable;
@@ -1021,7 +1116,7 @@ function AddProductForm({ onSubmit, onCancel }) {
   const price = parseFloat(form.price) || 0;
   const margin = price ? ((price - cost) / price) * 100 : 0;
   const stock0 = parseInt(form.stock, 10) || 0;
-  const valid = form.code.trim() && form.name.trim() && price > 0 && (!managed || stock0 <= 0 || cost > 0);
+  const valid = form.code.trim() && form.name.trim() && form.unit.trim() && price > 0 && !packSizeError(form.packSize) && (!managed || stock0 <= 0 || cost > 0);
 
   const submit = (e) => {
     e.preventDefault();
@@ -1035,11 +1130,14 @@ function AddProductForm({ onSubmit, onCancel }) {
       jobType: form.jobType,
       color: form.color.trim(),
       weight: form.weight === "" ? null : parseFloat(form.weight),
-      unit: form.unit,
+      unit: form.unit.trim(),
+      ...(form.packSize.trim() === "" ? {} : { packSize: Number(form.packSize) }),
+      ...(form.min === "" ? {} : { min: Number(form.min) }),
+      ...(form.leadDays === "" ? {} : { leadDays: Number(form.leadDays) }),
       stock: parseInt(form.stock, 10) || 0,
       cost, price,
       ...(form.jobType !== "trade" && form.buyable ? { buyable: true } : {}),
-      ...(managed ? { supplier: form.supplier || undefined, min: form.min === "" ? undefined : Number(form.min), leadDays: form.leadDays === "" ? undefined : Number(form.leadDays) } : {}),
+      ...(managed ? { supplier: form.supplier || undefined } : {}),
     });
   };
 
@@ -1071,9 +1169,12 @@ function AddProductForm({ onSubmit, onCancel }) {
         </div>
         <div>
           <label className="field-label">หน่วยนับ</label>
-          <select className="select" value={form.unit} onChange={(e) => set("unit", e.target.value)}>
-            {["PCS", "SET", "BOX", "KG", "PACK", "ROLL"].map((u) => <option key={u} value={u}>{u}</option>)}
-          </select>
+          <ProductUnitInput value={form.unit} onChange={(v) => set("unit", v)}/>
+        </div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label className="field-label">จำนวนต่อลัง ({form.unit})</label>
+          <input type="number" min="2" step="1" className="input" placeholder="เว้นว่าง = ไม่ขายเป็นลัง" value={form.packSize} onChange={(e) => set("packSize", e.target.value)}/>
+          {packSizeError(form.packSize) && <div style={{ ...hintStyle, color: "var(--danger)" }}>{packSizeError(form.packSize)}</div>}
         </div>
         <div style={{ gridColumn: "1 / -1" }}>
           <label className="field-label">ชื่อสินค้า *</label>
@@ -1112,7 +1213,7 @@ function AddProductForm({ onSubmit, onCancel }) {
             <input type="checkbox" checked={form.buyable} onChange={(e) => set("buyable", e.target.checked)}/> สั่งซื้อได้ (ซื้อสำเร็จรูป / จ้างผู้อื่นผลิต)
           </label>
         )}
-        {managed && (<>
+        {managed && (
           <div style={{ gridColumn: "1 / -1" }}>
             <label className="field-label">ผู้ขายประจำ</label>
             <select className="select" value={form.supplier} onChange={(e) => set("supplier", e.target.value)}>
@@ -1120,9 +1221,9 @@ function AddProductForm({ onSubmit, onCancel }) {
               {SUPPLIERS.filter((x) => x.status !== "inactive").map((x) => <option key={x.id} value={x.code}>{x.name}</option>)}
             </select>
           </div>
-          <div><label className="field-label">จุดสั่งซื้อ (Min)</label><input type="number" min="0" step="any" className="input" placeholder="0" value={form.min} onChange={(e) => set("min", e.target.value)}/></div>
-          <div><label className="field-label">สั่งของใช้เวลา (วัน)</label><input type="number" min="0" step="1" className="input" placeholder="0" value={form.leadDays} onChange={(e) => set("leadDays", e.target.value)}/></div>
-        </>)}
+        )}
+        <div><label className="field-label">{managed ? "จุดสั่งซื้อ (Min)" : "จุดเตือนสต๊อกต่ำ (Min)"}</label><input type="number" min="0" step="any" className="input" placeholder="0" value={form.min} onChange={(e) => set("min", e.target.value)}/></div>
+        <div><label className="field-label">{managed ? "สั่งของใช้เวลา (วัน)" : "ผลิตใช้เวลา (วัน)"}</label><input type="number" min="0" step="1" className="input" placeholder="0" value={form.leadDays} onChange={(e) => set("leadDays", e.target.value)}/></div>
       </div>
 
       {price > 0 && (

@@ -29,6 +29,7 @@ const Store = (function () {
     employees: EMPLOYEES,
     materials: MATERIALS,
     finished: FINISHED,
+    priceGroups: [],   // กลุ่มราคา: { id, name, active, tiers: [ลังขั้นต่ำ], items: [{ code, prices: [ราคาต่อชิ้นของแต่ละขั้น] }] }
     boms: BOMS,
     qc: QC_INSPECTIONS,
     molds: MOLDS,
@@ -43,7 +44,7 @@ const Store = (function () {
     whtInvoices: [],   // ใบกำกับที่ภาษีถูกหักถูกบันทึกผ่านใบรับเงินแล้ว
   };
   const ARRAY_KEYS = ["docs", "customers", "suppliers", "workOrders", "purchaseOrders", "expenses", "employees",
-    "materials", "finished", "boms", "qc", "molds", "machines", "stockMovements", "auditLogs", "users"];
+    "materials", "finished", "priceGroups", "boms", "qc", "molds", "machines", "stockMovements", "auditLogs", "users"];
 
   let version = 0;
   let txDepth = 0;
@@ -591,6 +592,36 @@ const Store = (function () {
   // ชื่อสำหรับเลือกในเอกสาร/ใบสั่งผลิต: สินค้าที่มีหลายสีจะต่อท้ายด้วยสี เพื่อแยกแต่ละสีออกจากกัน
   const productLabel = (f) => (f ? f.name + (f.color && productFamily(f).length > 1 ? " (" + f.color + ")" : "") : "");
   const saveProduct = (rec) => serverCall("PUT", "/finished/" + encodeURIComponent(rec.id), rec);
+  const changeProductType = (id, jobType, buyable, reason) => serverCall("POST", "/actions/products/" + encodeURIComponent(id) + "/change-type", { jobType, buyable, reason });
+  // สิ่งที่ขวางการเปลี่ยนประเภทงาน (กติกาเดียวกับเซิร์ฟเวอร์ ใช้แจ้งบนหน้าจอก่อนกดบันทึก)
+  function typeChangeBlockers(f, jobType, buyable) {
+    const out = [];
+    if (jobType === "trade") {
+      const wos = state.workOrders.filter((w) => w.productCode === f.code && !["done", "cancelled"].includes(w.status));
+      const bs = state.boms.filter((b) => b.productCode === f.code && b.status === "active");
+      if (wos.length) out.push("มีใบสั่งผลิตค้างอยู่ ปิดหรือยกเลิกก่อน: " + wos.map((w) => w.id).join(", "));
+      if (bs.length) out.push("มี BOM ใช้งานอยู่ เปลี่ยนเป็นเลิกใช้ก่อน: " + bs.map((b) => b.id).join(", "));
+    }
+    if (jobType !== "trade" && !buyable) {
+      const pos = state.purchaseOrders.filter((p) => !["received", "cancelled"].includes(p.status) && (p.lines || []).some((l) => l.itemType === "product" && l.item === f.id));
+      if (pos.length) out.push("มีใบสั่งซื้อค้างอยู่ รับของหรือยกเลิกก่อน: " + pos.map((p) => p.id).join(", "));
+    }
+    return out;
+  }
+  const canEditPrice =() => !!currentUser && ["admin", "sales"].includes(currentUser.role);
+  const savePriceGroup = (rec, isNew) => isNew ? serverCall("POST", "/priceGroups", rec) : serverCall("PUT", "/priceGroups/" + encodeURIComponent(rec.id), rec);
+  // เหตุผลที่สินค้าถือว่าถูกใช้แล้ว (null = ยังไม่ถูกใช้) — กติกาเดียวกับเซิร์ฟเวอร์ ใช้ปิดช่องรหัส/หน่วยบนหน้าจอ
+  function productUsage(f) {
+    if (Math.abs(Number(f.stock) || 0) > 1e-9) return "ยังมีสต๊อกคงเหลือ";
+    const inLines = (d) => (d.lines || []).some((l) => l.code === f.code);
+    if (state.docs.some(inLines)) return "มีเอกสารขายอ้างถึง";
+    if (state.boms.some((b) => b.productCode === f.code) || state.workOrders.some((w) => w.productCode === f.code)) return "มี BOM หรือใบสั่งผลิตอ้างถึง";
+    if (state.stockMovements.some((m) => m.item === f.code)) return "มีประวัติความเคลื่อนไหวสต๊อก";
+    if (state.finished.some((x) => x.id !== f.id && x.baseCode === f.code)) return "มีสินค้าสีอื่นผูกกับรหัสนี้";
+    if (state.priceGroups.some((g) => (g.items || []).some((i) => i.code === f.code))) return "อยู่ในกลุ่มราคา";
+    if (state.purchaseOrders.some((p) => (p.lines || []).some((l) => l.itemType === "product" && l.item === f.id))) return "มีใบสั่งซื้ออ้างถึง";
+    return null;
+  }
   const savePO = (rec) => serverCall("POST", "/purchaseOrders", rec);
   const adjustProductCost = (id, cost, reason) => serverCall("POST", "/actions/products/" + encodeURIComponent(id) + "/adjust-cost", { cost, reason });
   // ที่สั่งซื้อไว้แล้วแต่ยังไม่ได้รับ (PO รออนุมัติ/อนุมัติแล้ว) ของสินค้า (itemType product)
@@ -779,7 +810,7 @@ const Store = (function () {
     tx, fail, ERPError, log, now, today,
     find, add, update, remove,
     adjustStock, findStockItem, receivePO, adjustMaterialCost, produceWO, adjustWoBom, woMaterial, bomResolve, bomSnapshot, bomsFor, bomDefaultFor, woBom, bomCost, woShortage, reservedByOthers, saveBom,
-    isBuyable, productFamilyKey, productFamily, productLabel, productInProduction, finApi, sigApi, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
+    changeProductType, typeChangeBlockers, canEditPrice, savePriceGroup, productUsage, isBuyable, productFamilyKey, productFamily, productLabel, productInProduction, finApi, sigApi, saveProduct, savePO, adjustProductCost, productOnOrder, productDemand, productDemandDocs, productPosition,
     MACHINE_COND, machineCond, machineUsable, machinePM, machineFit, saveMachine, setMachineCondition, logMachineMaintenance,
     peekDocNo, nextDocNo, canDelete,
     setUser, user, userName, login, logout, restore, restoreSession, createUser, setPassword, changeOwnPassword, ready,
